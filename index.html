@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pallet Safety Checklist</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Pallet Safety Checklist</h1>
+      <p>Quick mobile form for daily inspections</p>
+    </header>
+
+    <main class="card">
+      <form id="checklistForm">
+        <div class="grid">
+          <div class="field">
+            <label for="date">Date</label>
+            <input id="date" name="date" type="date" required />
+          </div>
+          <div class="field">
+            <label for="inspector">Inspector Name</label>
+            <input id="inspector" name="inspector" type="text" placeholder="e.g., Henry" required />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="area">Area / Zone Checked</label>
+          <input id="area" name="area" type="text" placeholder="Aisle 12, Dock Door 4" required />
+        </div>
+
+        <section class="section">
+          <h2>Checklist</h2>
+          <div class="checks">
+            <label class="check"><input type="checkbox" name="checks" value="No broken boards or cracked wood" /> No broken boards or cracked wood</label>
+            <label class="check"><input type="checkbox" name="checks" value="No exposed nails or sharp edges" /> No exposed nails or sharp edges</label>
+            <label class="check"><input type="checkbox" name="checks" value="Pallets are not leaning or unstable" /> Pallets are not leaning or unstable</label>
+            <label class="check"><input type="checkbox" name="checks" value="No overstacked pallets (safe height maintained)" /> No overstacked pallets (safe height maintained)</label>
+            <label class="check"><input type="checkbox" name="checks" value="Loads are properly wrapped and secured" /> Loads are properly wrapped and secured</label>
+            <label class="check"><input type="checkbox" name="checks" value="No crushed or structurally weak pallets" /> No crushed or structurally weak pallets</label>
+            <label class="check"><input type="checkbox" name="checks" value="Pallets stored flat and evenly" /> Pallets stored flat and evenly</label>
+            <label class="check"><input type="checkbox" name="checks" value="No pallets blocking walkways or emergency exits" /> No pallets blocking walkways or emergency exits</label>
+            <label class="check"><input type="checkbox" name="checks" value="No pallets creating trip hazards" /> No pallets creating trip hazards</label>
+            <label class="check"><input type="checkbox" name="checks" value="No water-damaged or moldy pallets" /> No water-damaged or moldy pallets</label>
+          </div>
+        </section>
+
+        <div class="field">
+          <label for="issues">Issues Found</label>
+          <textarea id="issues" name="issues" rows="4" placeholder="Describe issue, location, and severity"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="actions">Actions Taken</label>
+          <textarea id="actions" name="actions" rows="4" placeholder="Example: removed pallet, re-stacked, notified lead"></textarea>
+        </div>
+
+        <div class="grid">
+          <div class="field">
+            <label for="followup">Follow-Up Required?</label>
+            <select id="followup" name="followup">
+              <option>No</option>
+              <option>Yes</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="status">Overall Area Status</label>
+            <select id="status" name="status" required>
+              <option>Safe</option>
+              <option>Needs Attention</option>
+              <option>Unsafe - Immediate Action Required</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="photos">Photo Note</label>
+          <input id="photos" name="photos" type="text" placeholder="Attach photos in email if needed" />
+        </div>
+
+        <div class="actions">
+          <button type="button" id="emailBtn" class="primary">Send Email</button>
+          <button type="button" id="copyBtn" class="secondary">Copy Summary</button>
+          <button type="button" id="clearBtn" class="ghost">Clear</button>
+        </div>
+
+        <p class="hint">Tip: On iPhone/Android, “Send Email” opens your mail app with the report pre-filled.</p>
+      </form>
+    </main>
+
+    <footer>
+      <small>Warehouse Safety • Mobile Form</small>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

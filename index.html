@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TempTrack Pro | QR TimeClock Portal</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">TT</div>
+        <div>
+          <h1>TempTrack Pro</h1>
+          <p>QR TimeClock + Agency Portal</p>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <label for="roleSelect">Login Type</label>
+        <select id="roleSelect">
+          <option value="super_admin">Super Admin</option>
+          <option value="agency_admin">Agency Admin</option>
+          <option value="client_manager">Client Manager</option>
+          <option value="worker">Worker</option>
+        </select>
+      </div>
+
+      <div class="sidebar-section" id="agencyBox">
+        <label for="agencySelect">Agency</label>
+        <select id="agencySelect"></select>
+      </div>
+
+      <div class="sidebar-section" id="clientBox">
+        <label for="clientSelect">Client</label>
+        <select id="clientSelect"></select>
+      </div>
+
+      <div class="sidebar-section" id="workerBox">
+        <label for="workerSelect">Worker</label>
+        <select id="workerSelect"></select>
+      </div>
+
+      <nav id="nav" class="nav"></nav>
+
+      <div class="sidebar-footer">
+        <button class="ghost-btn full" id="resetDemoBtn">Reset Demo Data</button>
+        <p>Static demo · GitHub Pages ready</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="activeContextLabel">TA-1001 · Elite Staffing Group</p>
+          <h2 id="pageTitle">Command Center</h2>
+        </div>
+        <div class="top-actions">
+          <button class="secondary-btn" id="exportBtn">Export Payroll CSV</button>
+          <button class="primary-btn" data-view="timeclock">Worker Punch</button>
+        </div>
+      </header>
+
+      <section id="view"></section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

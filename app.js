@@ -1354,3 +1354,48 @@ function toast(message) {
   clearTimeout(window.toastTimer);
   window.toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
 }
+// ===== MOBILE SIDEBAR MENU =====
+
+const mobileMenuBtn = document.getElementById("mobileMenuBtn");
+const mobileOverlay = document.getElementById("mobileOverlay");
+const sidebar = document.getElementById("sidebar");
+
+function openMobileMenu() {
+  sidebar.classList.add("open");
+  mobileOverlay.classList.add("show");
+  mobileMenuBtn.textContent = "×";
+}
+
+function closeMobileMenu() {
+  sidebar.classList.remove("open");
+  mobileOverlay.classList.remove("show");
+  mobileMenuBtn.textContent = "☰";
+}
+
+function toggleMobileMenu() {
+  if (sidebar.classList.contains("open")) {
+    closeMobileMenu();
+  } else {
+    openMobileMenu();
+  }
+}
+
+if (mobileMenuBtn && mobileOverlay && sidebar) {
+  mobileMenuBtn.addEventListener("click", toggleMobileMenu);
+  mobileOverlay.addEventListener("click", closeMobileMenu);
+
+  document.addEventListener("click", function (e) {
+    const clickedNavItem = e.target.closest("#nav button, #nav a, [data-view]");
+    const isMobile = window.innerWidth <= 700;
+
+    if (clickedNavItem && isMobile) {
+      closeMobileMenu();
+    }
+  });
+
+  window.addEventListener("resize", function () {
+    if (window.innerWidth > 700) {
+      closeMobileMenu();
+    }
+  });
+}

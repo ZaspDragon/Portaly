@@ -1,54 +1,60 @@
-# Portaly — TempTrack Pro
+# TempTrack Pro — QR TimeClock & Agency Portal
 
-A multi-role QR TimeClock and staffing agency portal — built with vanilla HTML, CSS, and JavaScript. Deployable on GitHub Pages with zero build step.
+> Multi-tenant staffing portal with QR timeclock, role-based access, timesheet approval workflows, payroll margin tracking, and CSV export. Built for temp agencies.
 
-## Live Demo
-
-[https://zaspdragon.github.io/Portaly/](https://zaspdragon.github.io/Portaly/)
+[![Live Demo](https://img.shields.io/badge/demo-GitHub%20Pages-blue)](https://zaspdragon.github.io/Portaly/)
 
 ## Features
 
-### Role-Based Access
-- **Super Admin** — Manage agencies, tenants, plans, and override approvals
-- **Agency Admin** — Manage workers, assignments, clients, sites, timesheets, and payroll export
-- **Client Manager** — Approve or dispute worker timesheets for assigned locations
-- **Worker** — Clock in/out, start/end lunch, and view weekly hours
+| Module | What it does |
+|---|---|
+| **Multi-Role Access** | Super Admin, Agency Admin, Client Manager, Worker — each sees only what they should |
+| **Multi-Tenant Agencies** | Each agency gets a unique number; all data stays scoped to that agency |
+| **QR Timeclock** | Workers punch Clock In / Start Lunch / End Lunch / Clock Out from any device |
+| **Workers & Assignments** | Add workers, assign them to clients and sites with pay rate, bill rate, and shift times |
+| **Timesheet Approval** | Client Manager approves → Agency Admin finalizes. Workers view only. Full audit trail |
+| **Dispute Workflow** | Client or super admin can dispute timesheets with reasons; status resets for review |
+| **Payroll & Margin Report** | KPI cards for total hours, worker pay, client billing, and gross margin |
+| **CSV Export** | One-click payroll CSV export with pay/bill/margin per worker |
+| **Job Sites & QR Links** | Create sites, generate QR timeclock URLs scoped to agency + site |
+| **Mobile Responsive** | Hamburger sidebar on phones, full touch support, scrollable tables |
 
-### Core Modules
-- **Multi-Tenant Agencies** — Each agency gets a unique number (TA-1001, TA-1002, etc.) with isolated data
-- **Client & Site Management** — Add clients, create job sites with site codes
-- **Worker Management** — Auto-generated worker IDs inheriting agency number (TA-1001-W0001)
-- **Assignments** — Link workers to clients, sites, shifts, pay rates, and bill rates with margin tracking
-- **QR Timeclock** — Clock In / Start Lunch / End Lunch / Clock Out with live punch feed
-- **Timesheet Approval** — Multi-stage workflow: Pending → Client Approved → Final Approved (or Disputed)
-- **Audit Trail** — Full history of approval/dispute actions with actor, role, and timestamp
-- **Payroll & Margin Report** — Hours, pay estimates, billing estimates, and gross margin by worker
-- **CSV Export** — Download payroll data as CSV for external processing
-- **QR Site Links** — URL parameters (`?agency=TA-1001&site=CHD-OH-001`) route workers directly to their site timeclock
+## Demo Roles
 
-### Demo Sign-In
-Each role has a pre-filled demo login card with credentials. Click *Reset Demo Data* to restore seed data.
+| Role | Email | Password |
+|---|---|---|
+| Super Admin | `admin@temptrackpro.com` | `admin123` |
+| Agency Admin | `agency@temptrackpro.com` | `agency123` |
+| Client Manager | `client@temptrackpro.com` | `client123` |
+| Worker | `worker@temptrackpro.com` | `worker123` |
 
-### Mobile Responsive
-- Slide-out sidebar with hamburger menu on mobile
-- Touch-friendly punch buttons and navigation
-- Responsive tables with horizontal scroll
+## Tech Stack
 
-## Files
+- **Zero dependencies** — pure HTML, CSS, and vanilla JavaScript
+- **Google Fonts** — Inter typeface for clean typography
+- **localStorage** — all data persists in the browser; "Reset Demo Data" restores defaults
+- **GitHub Pages** — static deploy, no server required
 
-- `index.html` — App shell with sidebar, role selectors, and view container
-- `app.js` — Full application logic, state management, CRUD, and localStorage persistence
-- `style.css` — Responsive styling with sidebar layout, mobile breakpoints, and timeclock UI
+## Getting Started
 
-## How to Deploy
+```bash
+git clone https://github.com/ZaspDragon/Portaly.git
+cd Portaly
+# Open index.html in any browser — no build step needed
+```
 
-1. Create a new GitHub repository
-2. Upload all files to the root
-3. In repo Settings → Pages, deploy from `main` branch root
-4. Visit `https://<username>.github.io/<repo-name>/`
+Or visit the live demo at [zaspdragon.github.io/Portaly](https://zaspdragon.github.io/Portaly/).
 
-## Usage Notes
+## File Structure
 
-- Browser location/HTTPS is required for GPS features (GitHub Pages provides HTTPS)
-- After first deploy, click **Reset Demo Data** once to initialize seed data
-- Demo credentials are pre-filled on each sign-in card
+```
+Portaly/
+├── index.html     # App shell — sidebar, role/agency/client selectors, view container, toast
+├── style.css      # Design system — variables, layout, cards, KPIs, timeclock, badges, mobile, print
+├── app.js         # Application logic — state, multi-role rendering, CRUD, approval workflow, CSV export
+└── README.md
+```
+
+## License
+
+MIT

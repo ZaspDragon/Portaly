@@ -1,23 +1,29 @@
-# TempTrack Pro — QR TimeClock & Agency Portal
+# Portaly — QR TimeClock & Agency Portal
 
-> Multi-tenant staffing portal with QR timeclock, role-based access, timesheet approval workflows, payroll margin tracking, and CSV export. Built for temp agencies.
+Portaly is a multi-role staffing agency portal that combines QR timeclock capture, client approvals, worker management, assignment tracking, payroll export, and gross-margin visibility in one static app.
 
-[![Live Demo](https://img.shields.io/badge/demo-GitHub%20Pages-blue)](https://zaspdragon.github.io/Portaly/)
+It is built with plain HTML, CSS, and JavaScript so it can deploy straight to GitHub Pages with no build step.
 
-## Features
+[Live Demo](https://zaspdragon.github.io/Portaly/)
+
+## Product positioning
+
+Portaly is designed to feel like a sellable agency operating system, not just a demo page.
+
+## Core capabilities
 
 | Module | What it does |
 |---|---|
-| **Multi-Role Access** | Super Admin, Agency Admin, Client Manager, Worker — each sees only what they should |
-| **Multi-Tenant Agencies** | Each agency gets a unique number; all data stays scoped to that agency |
-| **QR Timeclock** | Workers punch Clock In / Start Lunch / End Lunch / Clock Out from any device |
-| **Workers & Assignments** | Add workers, assign them to clients and sites with pay rate, bill rate, and shift times |
-| **Timesheet Approval** | Client Manager approves → Agency Admin finalizes. Workers view only. Full audit trail |
-| **Dispute Workflow** | Client or super admin can dispute timesheets with reasons; status resets for review |
-| **Payroll & Margin Report** | KPI cards for total hours, worker pay, client billing, and gross margin |
-| **CSV Export** | One-click payroll CSV export with pay/bill/margin per worker |
-| **Job Sites & QR Links** | Create sites, generate QR timeclock URLs scoped to agency + site |
-| **Mobile Responsive** | Hamburger sidebar on phones, full touch support, scrollable tables |
+| Multi-Role Access | Super Admin, Agency Admin, Client Manager, Worker — each sees only what they should |
+| Multi-Tenant Agencies | Each agency gets a unique number; all data stays scoped to that agency |
+| QR Timeclock | Workers punch Clock In / Start Lunch / End Lunch / Clock Out from any device |
+| Workers & Assignments | Add workers, assign them to clients and sites with pay rate, bill rate, and shift times |
+| Timesheet Approval | Client Manager approves, then Agency Admin finalizes |
+| Dispute Workflow | Client or admin can dispute timesheets with reasons |
+| Payroll & Margin Report | KPI cards for hours, worker pay, client billing, and gross margin |
+| CSV Export | One-click payroll CSV export with pay, bill, and margin per worker |
+| Job Sites & QR Links | Create sites and generate QR timeclock URLs scoped to agency and site |
+| Mobile Responsive | Works on phones, tablets, and desktop |
 
 ## Demo Roles
 
@@ -30,31 +36,15 @@
 
 ## Tech Stack
 
-- **Zero dependencies** — pure HTML, CSS, and vanilla JavaScript
-- **Google Fonts** — Inter typeface for clean typography
-- **localStorage** — all data persists in the browser; "Reset Demo Data" restores defaults
-- **GitHub Pages** — static deploy, no server required
+- `index.html` — app shell and layout
+- `style.css` — visual system and responsive UI
+- `app.js` — state, demo data, CRUD logic, approval workflow, and CSV export
+- `localStorage` — browser-based demo persistence
+- GitHub Pages — static hosting
 
 ## Getting Started
 
 ```bash
 git clone https://github.com/ZaspDragon/Portaly.git
 cd Portaly
-# Open index.html in any browser — no build step needed
-```
-
-Or visit the live demo at [zaspdragon.github.io/Portaly](https://zaspdragon.github.io/Portaly/).
-
-## File Structure
-
-```
-Portaly/
-├── index.html     # App shell — sidebar, role/agency/client selectors, view container, toast
-├── style.css      # Design system — variables, layout, cards, KPIs, timeclock, badges, mobile, print
-├── app.js         # Application logic — state, multi-role rendering, CRUD, approval workflow, CSV export
-└── README.md
-```
-
-## License
-
-MIT
+# Open index.html in any browser

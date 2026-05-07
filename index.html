@@ -3,83 +3,38 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TempTrack Pro — QR TimeClock &amp; Agency Portal</title>
-  <meta name="description" content="Multi-tenant staffing portal with QR timeclock, role-based access, timesheet approval workflows, payroll margins, and CSV export. Built for temp agencies." />
-  <meta property="og:title" content="TempTrack Pro — QR TimeClock &amp; Agency Portal" />
-  <meta property="og:description" content="Staffing agencies manage workers, clients, job sites, timesheets, approvals, and payroll — all from one portal." />
+
+  <title>Portaly — QR TimeClock & Agency Portal</title>
+
+  <meta
+    name="description"
+    content="Multi-tenant staffing portal with QR timeclock, role-based access, timesheet approval workflows, payroll margins, and CSV export."
+  />
+
+  <meta
+    property="og:title"
+    content="Portaly — QR TimeClock & Agency Portal"
+  />
+
+  <meta
+    property="og:description"
+    content="Staffing agencies manage workers, clients, job sites, timesheets, approvals, and payroll from one portal."
+  />
+
   <meta property="og:type" content="website" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230f172a'/><text x='50' y='68' font-size='42' font-weight='900' text-anchor='middle' fill='white'>TT</text></svg>" />
+
+  <link
+    rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230f172a'/><text x='50' y='68' font-size='42' font-weight='900' text-anchor='middle' fill='white'>P</text></svg>"
+  />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+    rel="stylesheet"
+  />
+
   <link rel="stylesheet" href="style.css" />
 </head>
-<body>
-  <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
-  <div class="mobile-overlay" id="mobileOverlay"></div>
-
-  <div class="app-shell">
-    <aside class="sidebar" id="sidebar">
-      <div class="brand">
-        <div class="brand-mark">TT</div>
-        <div>
-          <h1>TempTrack Pro</h1>
-          <p>QR TimeClock + Agency Portal</p>
-        </div>
-      </div>
-
-      <div class="sidebar-section">
-        <label for="roleSelect">Demo Role Switch</label>
-        <select id="roleSelect">
-          <option value="super_admin">Super Admin</option>
-          <option value="agency_admin">Agency Admin</option>
-          <option value="client_manager">Client Manager</option>
-          <option value="worker">Worker</option>
-        </select>
-      </div>
-
-      <div class="sidebar-section">
-        <label for="agencySelect">Agency</label>
-        <select id="agencySelect"></select>
-      </div>
-
-      <div class="sidebar-section" id="clientBox">
-        <label for="clientSelect">Client</label>
-        <select id="clientSelect"></select>
-      </div>
-
-      <div class="sidebar-section" id="workerBox">
-        <label for="workerSelect">Worker</label>
-        <select id="workerSelect"></select>
-      </div>
-
-      <nav id="nav" class="nav"></nav>
-
-      <div class="sidebar-footer">
-        <button class="ghost-btn full" id="signOutBtn">Sign Out</button>
-        <button class="ghost-btn full" id="resetDemoBtn">Reset Demo Data</button>
-        <p>TempTrack Pro v1.0 · Static Deploy</p>
-      </div>
-    </aside>
-
-    <main class="main">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow" id="activeContextLabel">Secure Portal Access</p>
-          <h2 id="pageTitle">Login Options</h2>
-        </div>
-
-        <div class="top-actions">
-          <button class="secondary-btn" id="exportBtn">Export Payroll CSV</button>
-          <button class="primary-btn" data-view="timeclock">Worker Punch</button>
-        </div>
-      </header>
-
-      <section id="view"></section>
-    </main>
-  </div>
-
-  <div class="toast" id="toast"></div>
-  <script src="app.js"></script>
-</body>
-</html>

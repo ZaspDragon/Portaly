@@ -212,38 +212,38 @@ function assignmentForWorker(workerId) {
 
 const navByRole = {
   super_admin: [
-    ["login_portal", "Login Options"],
-    ["dashboard", "Command Center"],
+    ["login_portal", "Access Hub"],
+    ["dashboard", "Platform Overview"],
     ["agencies", "Agencies"],
     ["clients", "Clients"],
     ["sites", "Job Sites / QR"],
     ["workers", "Workers"],
     ["assignments", "Assignments"],
     ["timesheets", "Timesheets"],
-    ["reports", "Payroll & Margin"],
-    ["timeclock", "QR Timeclock"]
+    ["reports", "Revenue & Margin"],
+    ["timeclock", "Worker Punch"]
   ],
   agency_admin: [
-    ["login_portal", "Login Options"],
-    ["dashboard", "Agency Dashboard"],
+    ["login_portal", "Access Hub"],
+    ["dashboard", "Ops Overview"],
     ["clients", "Clients"],
     ["sites", "Job Sites / QR"],
     ["workers", "Workers"],
     ["assignments", "Assignments"],
     ["timesheets", "Timesheets"],
-    ["reports", "Payroll & Margin"],
-    ["timeclock", "QR Timeclock"]
+    ["reports", "Revenue & Margin"],
+    ["timeclock", "Worker Punch"]
   ],
   client_manager: [
-    ["login_portal", "Login Options"],
-    ["dashboard", "Client Dashboard"],
-    ["workers", "Assigned Workers"],
+    ["login_portal", "Access Hub"],
+    ["dashboard", "Client Live Board"],
+    ["workers", "Assigned Crew"],
     ["timesheets", "Approve Timesheets"],
-    ["timeclock", "Site Timeclock"]
+    ["timeclock", "Site Punch"]
   ],
   worker: [
-    ["login_portal", "Login Options"],
-    ["timeclock", "Clock In / Out"],
+    ["login_portal", "Access Hub"],
+    ["timeclock", "My Punch"],
     ["timesheets", "My Weekly Hours"]
   ]
 };
@@ -441,40 +441,70 @@ function render() {
 
 function loginPortalView() {
   return `
-    <div class="login-hero card">
-      <div>
-        <p class="eyebrow">Secure Portal Access</p>
-        <h3>Sign in to the correct portal</h3>
-        <p class="muted">Each login type opens a different experience. Workers only punch and view hours. Clients approve/dispute. Agencies manage payroll. Super Admin manages agencies.</p>
+    <div class="login-hero hero-panel card">
+      <div class="hero-copy">
+        <p class="eyebrow">Agency operating system</p>
+        <h3>One portal for workers, clients, agency teams, and platform owners.</h3>
+        <p class="muted">Portaly packages QR timeclock capture, client approvals, payroll handoff, and spread visibility into a static product demo that already feels agency-ready.</p>
+        <div class="hero-badges">
+          <span class="badge blue">QR worker punch</span>
+          <span class="badge green">Client signoff</span>
+          <span class="badge yellow">Margin visibility</span>
+        </div>
       </div>
-      <div class="login-mini-clock" id="miniClock">--:--:--</div>
+      <div class="hero-stat-grid">
+        <div class="hero-stat">
+          <span>Deployment</span>
+          <strong>GitHub Pages</strong>
+          <p>No build step, fast demo handoff, easy agency review.</p>
+        </div>
+        <div class="hero-stat">
+          <span>Roles</span>
+          <strong>4 portal views</strong>
+          <p>Workers, clients, agency ops, and platform owners all have a clean lane.</p>
+        </div>
+        <div class="login-mini-clock" id="miniClock">--:--:--</div>
+      </div>
     </div>
 
     <div class="signin-grid">
-      ${signinCard("worker", "Worker Sign In", "Punch in/out and view your weekly hours.", "worker@demo.com", "worker123", "Worker Punch", "timeclock")}
-      ${signinCard("client_manager", "Client Manager Sign In", "Approve or dispute temp worker hours.", "client@demo.com", "client123", "Client Portal", "timesheets")}
-      ${signinCard("agency_admin", "Agency Admin Sign In", "Manage workers, assignments, payroll, and final approval.", "agency@demo.com", "agency123", "Agency Portal", "dashboard")}
-      ${signinCard("super_admin", "Super Admin Sign In", "Manage agencies, plans, tenants, and demo accounts.", "admin@demo.com", "admin123", "Admin Portal", "agencies")}
+      ${signinCard("worker", "Worker Access", "Punch in, punch out, and review your weekly hours without extra clutter.", "worker@demo.com", "worker123", "Open worker portal", "timeclock")}
+      ${signinCard("client_manager", "Client Approver Access", "Review labor hours, approve clean time, and flag disputes quickly.", "client@demo.com", "client123", "Open client portal", "timesheets")}
+      ${signinCard("agency_admin", "Agency Ops Access", "Manage clients, workers, assignments, payroll export, and final approval.", "agency@demo.com", "agency123", "Open agency portal", "dashboard")}
+      ${signinCard("super_admin", "Platform Owner Access", "Oversee agencies, plans, tenants, and the full demo experience.", "admin@demo.com", "admin123", "Open platform portal", "agencies")}
     </div>
   `;
 }
 
 function signinCard(role, title, description, email, password, button, targetView) {
+  const roleLabel = {
+    worker: "Worker",
+    client_manager: "Client approval",
+    agency_admin: "Agency ops",
+    super_admin: "Platform owner"
+  }[role] || "Access";
+
   return `
     <form class="signin-card card" data-login-form="${role}" data-login-target="${targetView}">
       <div class="signin-top">
         <div class="portal-icon">${title.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
         <div>
+          <span class="badge blue">${roleLabel}</span>
           <h3>${title}</h3>
           <p class="muted">${description}</p>
         </div>
       </div>
 
-      <label>Email</label>
-      <input name="email" type="email" value="${email}" autocomplete="username" required />
-
-      <label>Password</label>
-      <input name="password" type="password" value="${password}" autocomplete="current-password" required />
+      <div class="form-grid">
+        <div>
+          <label>Email</label>
+          <input name="email" type="email" value="${email}" autocomplete="username" required />
+        </div>
+        <div>
+          <label>Password</label>
+          <input name="password" type="password" value="${password}" autocomplete="current-password" required />
+        </div>
+      </div>
 
       <div class="demo-credentials">
         <span>Demo credentials</span>
@@ -528,46 +558,89 @@ function dashboardStats() {
 
 function dashboardView() {
   const s = dashboardStats();
+  const activeAssignments = rowsFor("assignments").filter(a => a.active).length;
+  const openApprovals = rowsFor("timesheets").filter(t => t.status !== "Final Approved").length;
+  const marginEstimate = rowsFor("timesheets").reduce((sum, t) => {
+    const assignment = assignmentForWorker(t.workerId) || { payRate: 0, billRate: 0 };
+    const hours = Number(t.regularHours) + Number(t.overtimeHours);
+    return sum + hours * (Number(assignment.billRate) - Number(assignment.payRate));
+  }, 0);
 
   return `
+    <div class="hero-panel card">
+      <div class="hero-copy">
+        <p class="eyebrow">Agency command center</p>
+        <h3>Run labor ops, client approvals, and payroll handoff from one clean control surface.</h3>
+        <p class="muted">Portaly now presents like a finished staffing product: clearer live operations framing, a tighter QRTimeclock-style visual system, and demo copy that speaks directly to agencies.</p>
+        <div class="hero-badges">
+          <span class="badge blue">${agency().name}</span>
+          <span class="badge green">${rowsFor("clients").length} client accounts</span>
+          <span class="badge yellow">${rowsFor("sites").length} active sites</span>
+        </div>
+      </div>
+      <div class="hero-stat-grid">
+        <div class="hero-stat">
+          <span>Present now</span>
+          <strong>${s.present}</strong>
+          <p>${Math.max(rowsFor("workers").length - s.present, 0)} workers still need a punch.</p>
+        </div>
+        <div class="hero-stat">
+          <span>Open approvals</span>
+          <strong>${openApprovals}</strong>
+          <p>Timesheets waiting on client or agency signoff.</p>
+        </div>
+        <div class="hero-stat">
+          <span>Weekly spread</span>
+          <strong>$${marginEstimate.toFixed(2)}</strong>
+          <p>Estimated gross margin across the current weekly timecards.</p>
+        </div>
+      </div>
+    </div>
+
     <div class="grid kpi-grid">
       ${kpi("Present Today", s.present, "Clocked in", "green")}
       ${kpi("Late Punches", s.late, "Needs review", s.late ? "yellow" : "green")}
-      ${kpi("No-Show Risk", s.missing, "Not clocked", s.missing ? "red" : "green")}
+      ${kpi("Active Assignments", activeAssignments, "Spread tracked", "blue")}
       ${kpi("Weekly Hours", s.totalHours.toFixed(2), "Regular + OT", "blue")}
     </div>
 
-    <div class="grid two-col" style="margin-top:14px;">
+    <div class="grid two-col" style="margin-top:18px;">
       <div class="card">
-        <h3>Live Attendance</h3>
+        <div class="section-head">
+          <h3>Live attendance feed</h3>
+          <p class="muted">A clean last-punch view for agency ops and client teams watching attendance in real time.</p>
+        </div>
         ${punchTable(rowsFor("punches").slice(-8).reverse())}
       </div>
 
       <div class="card">
-        <h3>Portal Controls</h3>
+        <div class="section-head">
+          <h3>Why agencies buy this</h3>
+          <p class="muted">The product story is clear: faster punch capture, cleaner approvals, and payroll visibility without a custom rollout.</p>
+        </div>
         <div class="list">
           <div class="list-item">
             <div>
-              <div class="strong">Role Sign-In</div>
-              <div class="muted small">Each portal has a separate sign-in card.</div>
+              <div class="strong">Role-based portal flow</div>
+              <div class="muted small">Workers punch, clients approve, and agency teams finalize without role confusion.</div>
             </div>
-            <span class="badge green">Active</span>
+            <span class="badge blue">Core</span>
           </div>
 
           <div class="list-item">
             <div>
-              <div class="strong">Approval Lockdown</div>
-              <div class="muted small">Workers cannot approve their own time.</div>
+              <div class="strong">Assignment + spread logic</div>
+              <div class="muted small">Each assignment carries pay, bill, and margin logic so export conversations are easier.</div>
             </div>
-            <span class="badge green">Active</span>
+            <span class="badge green">Revenue</span>
           </div>
 
           <div class="list-item">
             <div>
-              <div class="strong">QR Timeclock</div>
-              <div class="muted small">Workers can punch from the timeclock screen.</div>
+              <div class="strong">Client-ready approvals</div>
+              <div class="muted small">Client signoff and dispute handling are visible instead of buried in email chains.</div>
             </div>
-            <span class="badge green">Active</span>
+            <span class="badge yellow">Ops</span>
           </div>
         </div>
       </div>
@@ -887,6 +960,26 @@ function reportsView() {
   }), { hours: 0, pay: 0, bill: 0, margin: 0 });
 
   return `
+    <div class="hero-panel card">
+      <div class="hero-copy">
+        <p class="eyebrow">Revenue intelligence</p>
+        <h3>Know payroll cost, client billing, and gross spread before export leaves the portal.</h3>
+        <p class="muted">This page now reads like an agency product module instead of a utility screen, which makes the value easier to demo to staffing owners.</p>
+      </div>
+      <div class="hero-stat-grid">
+        <div class="hero-stat">
+          <span>Estimated payroll</span>
+          <strong>$${totals.pay.toFixed(2)}</strong>
+          <p>Modeled from the active assignments tied to the current weekly timecards.</p>
+        </div>
+        <div class="hero-stat">
+          <span>Estimated billing</span>
+          <strong>$${totals.bill.toFixed(2)}</strong>
+          <p>Client invoice view before export leaves the platform.</p>
+        </div>
+      </div>
+    </div>
+
     <div class="grid kpi-grid">
       ${kpi("Total Hours", totals.hours.toFixed(2), "Payroll hours", "blue")}
       ${kpi("Worker Pay", "$" + totals.pay.toFixed(2), "Estimated payroll", "yellow")}
@@ -894,8 +987,11 @@ function reportsView() {
       ${kpi("Gross Margin", "$" + totals.margin.toFixed(2), "Agency profit", "green")}
     </div>
 
-    <div class="card" style="margin-top:14px;">
-      <h3>Payroll & Margin Report</h3>
+    <div class="card" style="margin-top:18px;">
+      <div class="section-head">
+        <h3>Payroll and margin detail</h3>
+        <p class="muted">Use this export-friendly table to explain worker cost, bill rate, and spread per account.</p>
+      </div>
       ${rows.length ? `
         <div class="table-wrap">
           <table>
@@ -959,18 +1055,18 @@ function timeclockView() {
       </section>
 
       <section class="card">
-        <h3>Manager Sign In / Live View</h3>
-        <p class="muted">Managers and admins review live punches, weekly signoff, corrections, users, and exports.</p>
+        <h3>Manager live preview</h3>
+        <p class="muted">Use the same visual language as QRTimeclock: live punches, weekly signoff, worker edits, and export access in one place.</p>
 
         <div class="tc-tabs">
-          <button class="tc-tab" data-view="dashboard">Live</button>
-          <button class="tc-tab" data-view="timesheets">Weekly Signoff</button>
-          <button class="tc-tab" data-view="timesheets">Edit Punches</button>
-          <button class="tc-tab" data-view="workers">Users</button>
-          <button class="tc-tab" data-view="reports">Agency Export</button>
+          <button class="tc-tab" data-view="dashboard">Live board</button>
+          <button class="tc-tab" data-view="timesheets">Weekly signoff</button>
+          <button class="tc-tab" data-view="timesheets">Approval queue</button>
+          <button class="tc-tab" data-view="workers">Worker roster</button>
+          <button class="tc-tab" data-view="reports">Export view</button>
         </div>
 
-        <h3 style="margin-top:18px;">Live punch feed</h3>
+        <h3 style="margin-top:18px;">Latest punch activity</h3>
         ${punchTable(rowsFor("punches").slice(-8).reverse())}
       </section>
     </div>

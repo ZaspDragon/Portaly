@@ -393,6 +393,10 @@ p {
   padding: 22px;
 }
 
+.card:hover {
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.42);
+}
+
 .hero-panel {
   display: grid;
   grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
@@ -809,6 +813,30 @@ code {
   display: none;
 }
 
+#view {
+  animation: viewFadeIn 0.25s ease;
+}
+
+@keyframes viewFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.kpi-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.kpi-card:hover {
+  transform: translateY(-2px);
+}
+
 @media (max-width: 1240px) {
   .grid.kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -918,5 +946,38 @@ code {
   td {
     padding: 10px 12px;
     font-size: 0.88rem;
+  }
+}
+
+@media print {
+  .sidebar,
+  .topbar,
+  .mobile-menu-btn,
+  .mobile-overlay,
+  .toast,
+  button,
+  .top-actions,
+  .ghost-btn,
+  .tc-punch-grid {
+    display: none !important;
+  }
+
+  body {
+    background: white;
+    color: black;
+  }
+
+  .app-shell {
+    display: block;
+  }
+
+  .main {
+    padding: 0;
+  }
+
+  .card {
+    box-shadow: none;
+    border: 1px solid #ddd;
+    break-inside: avoid;
   }
 }

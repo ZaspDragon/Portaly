@@ -105,16 +105,16 @@
 
   const NAV_ITEMS = [
     { id: "dashboard", label: "Dashboard", badge: "DB", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "workers", label: "Workers", badge: "WK", roles: ["agencyOwner", "agencyAdmin"] },
-    { id: "clients", label: "Clients", badge: "CL", roles: ["agencyOwner", "agencyAdmin"] },
-    { id: "sites", label: "Sites", badge: "ST", roles: ["agencyOwner", "agencyAdmin"] },
-    { id: "assignments", label: "Assignments", badge: "AS", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "workers", label: "Workers", badge: "WK", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
+    { id: "clients", label: "Clients", badge: "CL", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
+    { id: "sites", label: "Sites", badge: "ST", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
+    { id: "assignments", label: "Assignments", badge: "AS", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "live-punches", label: "Live Punches", badge: "LP", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "approvals", label: "Approvals", badge: "AP", roles: ["platformOwner", "agencyOwner", "agencyAdmin", "clientManager"] },
     { id: "payroll", label: "Payroll", badge: "PY", roles: ["agencyOwner", "agencyAdmin"] },
     { id: "margin", label: "Margin", badge: "MR", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "exceptions", label: "Problems to Fix", badge: "PF", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "qr-codes", label: "QR Codes", badge: "QR", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "qr-codes", label: "QR Codes", badge: "QR", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "users", label: "Users", badge: "US", roles: ["platformOwner", "agencyOwner"] },
     { id: "billing", label: "Billing", badge: "BL", roles: ["platformOwner", "agencyOwner"] },
     { id: "settings", label: "Settings", badge: "SE", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] }
@@ -183,7 +183,13 @@
     getRecord,
     updateRecord,
     deleteRecord,
-    createAuditLog
+    createAuditLog,
+    loadAppData,
+    refreshCurrentView,
+    openModal,
+    closeModal,
+    confirmAction,
+    showToast
   };
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -667,6 +673,17 @@
     state.session.subscriptionStatus = subscription?.status || (agency ? agency.subscriptionStatus : null);
   }
 
+  async function loadAppData() {
+    await refreshSessionData();
+    return getScopedData();
+  }
+
+  async function refreshCurrentView() {
+    await refreshSessionData();
+    normalizeFilters();
+    renderApp();
+  }
+
   function emptyStore() {
     return COLLECTIONS.reduce((accumulator, collection) => {
       accumulator[collection] = [];
@@ -884,6 +901,21 @@
       if (workerUser) {
         return workerUser;
       }
+      const worker = (state.demoStore.workers || []).find(item => item.id === workerId);
+      const baseUser = users.find(user => user.role === "worker");
+      if (worker && baseUser) {
+        return {
+          ...baseUser,
+          id: `${baseUser.id}_${workerId}`,
+          agencyId: worker.agencyId,
+          workerId,
+          firstName: worker.firstName,
+          lastName: worker.lastName,
+          email: worker.loginEmail || worker.email || baseUser.email,
+          assignedClientIds: worker.assignedClientId ? [worker.assignedClientId] : [],
+          assignedSiteIds: worker.assignedSiteId ? [worker.assignedSiteId] : []
+        };
+      }
     }
     if (userId) {
       const byId = users.find(user => user.id === userId);
@@ -902,6 +934,130 @@
     }
     state.session = buildSessionFromUser(user, "demo");
     persistSession();
+  }
+
+  function canManageWorkers() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
+  function canManageClients() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
+  function canManageSites() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
+  function canManageAssignments() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
+  function canManagePunches() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
+  function canApproveRecord(record) {
+    if (["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role)) {
+      return true;
+    }
+    if (state.session.role !== "clientManager" || !record) {
+      return false;
+    }
+    return recordMatchesAssignmentScope(record.clientId, record.siteId);
+  }
+
+  function canEditTimesheets(record) {
+    return canApproveRecord(record);
+  }
+
+  function canViewMargin() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
+  function canManageUsers() {
+    return ["platformOwner", "agencyOwner"].includes(state.session.role);
+  }
+
+  function canManageBilling() {
+    return ["platformOwner", "agencyOwner"].includes(state.session.role);
+  }
+
+  function canManageSettings() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
+  function canPermanentlyDeleteRecords() {
+    return ["platformOwner", "agencyOwner"].includes(state.session.role);
+  }
+
+  function canDeleteAssignment() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
+  function canDeactivateEntity(entityType) {
+    switch (entityType) {
+      case "workers":
+      case "clients":
+      case "sites":
+        return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+      case "users":
+        return ["platformOwner", "agencyOwner"].includes(state.session.role);
+      default:
+        return false;
+    }
+  }
+
+  function recordMatchesAssignmentScope(clientId, siteId) {
+    if (state.session.role !== "clientManager") {
+      return false;
+    }
+    const clientIds = state.session.assignedClientIds || [];
+    const siteIds = state.session.assignedSiteIds || [];
+    return clientIds.includes(clientId) || siteIds.includes(siteId);
+  }
+
+  function showToast(message, type = "success") {
+    pushToast(message, type);
+  }
+
+  function openModal(title, html, onSave, options = {}) {
+    state.modal = {
+      type: options.type || "custom-form",
+      title,
+      html,
+      saveLabel: options.saveLabel || "Save",
+      cancelLabel: options.cancelLabel || "Cancel",
+      formName: options.formName || "custom-modal-save",
+      onSave: typeof onSave === "function" ? onSave : null,
+      size: options.size || "",
+      message: options.message || "",
+      readOnly: !!options.readOnly
+    };
+    renderApp();
+  }
+
+  function closeModal() {
+    state.modal = null;
+    renderApp();
+  }
+
+  function confirmAction(message, onConfirm, options = {}) {
+    state.modal = {
+      type: "confirm",
+      title: options.title || "Confirm",
+      message,
+      confirmLabel: options.confirmLabel || "Confirm",
+      cancelLabel: options.cancelLabel || "Cancel",
+      confirmTone: options.confirmTone || "button-primary",
+      onConfirm
+    };
+    renderApp();
+  }
+
+  function requirePermission(condition, message) {
+    if (!condition) {
+      throw new Error(message || "You do not have permission to do that.");
+    }
   }
 
   async function handleAction(trigger) {
@@ -930,16 +1086,23 @@
           pushToast(`Opened ${ROLE_META[state.session.role].label} demo.`, "success");
           break;
         case "reset-demo":
-          if (window.confirm("Reset the demo back to the original sample data?")) {
+          confirmAction("Reset the demo back to the original sample data?", async () => {
             resetDemoStore();
             if (state.session.mode === "demo") {
-              await refreshSessionData();
+              await refreshCurrentView();
+            } else {
+              renderApp();
             }
+            closeModal();
             pushToast("Demo data reset in this browser.", "success");
-            renderApp();
-          }
+          }, {
+            title: "Reset Demo Data",
+            confirmLabel: "Reset Demo",
+            confirmTone: "button-danger"
+          });
           break;
         case "open-worker-form":
+          requirePermission(canManageWorkers(), "Only agency owners, admins, or platform owners can edit workers.");
           state.modal = { type: "worker-form", workerId: trigger.dataset.workerId || "" };
           renderApp();
           break;
@@ -951,17 +1114,69 @@
           state.modal = { type: "worker-history", workerId: trigger.dataset.workerId || "" };
           renderApp();
           break;
+        case "deactivate-worker":
+          await deactivateWorker(trigger.dataset.workerId || "");
+          break;
+        case "delete-worker":
+          await requestWorkerDelete(trigger.dataset.workerId || "");
+          break;
         case "open-client-form":
+          requirePermission(canManageClients(), "Only agency owners, admins, or platform owners can edit clients.");
           state.modal = { type: "client-form", clientId: trigger.dataset.clientId || "" };
           renderApp();
           break;
+        case "view-client-sites":
+          openClientSitesModal(trigger.dataset.clientId || "");
+          break;
+        case "deactivate-client":
+          await deactivateClient(trigger.dataset.clientId || "");
+          break;
+        case "delete-client":
+          await requestClientDelete(trigger.dataset.clientId || "");
+          break;
         case "open-site-form":
+          requirePermission(canManageSites(), "Only agency owners, admins, or platform owners can edit sites.");
           state.modal = { type: "site-form", siteId: trigger.dataset.siteId || "" };
           renderApp();
+          break;
+        case "open-site-qr":
+          openQrModal({ qrType: "site", siteId: trigger.dataset.siteId || "" });
+          break;
+        case "deactivate-site":
+          await deactivateSite(trigger.dataset.siteId || "");
+          break;
+        case "delete-site":
+          await requestSiteDelete(trigger.dataset.siteId || "");
+          break;
+        case "open-assignment-form":
+          requirePermission(canManageAssignments(), "Only agency owners, admins, or platform owners can edit assignments.");
+          openAssignmentModal(trigger.dataset.assignmentId || "");
+          break;
+        case "end-assignment":
+          await endAssignment(trigger.dataset.assignmentId || "");
+          break;
+        case "delete-assignment":
+          await requestAssignmentDelete(trigger.dataset.assignmentId || "");
+          break;
+        case "open-punch-form":
+          requirePermission(canManagePunches(), "Only agency owners, admins, or platform owners can edit punches.");
+          openPunchModal(trigger.dataset.punchId || "");
+          break;
+        case "fix-missing-clock-out":
+          await fixMissingClockOut(trigger.dataset.workerId || "");
+          break;
+        case "open-punch-note":
+          openPunchNoteModal(trigger.dataset.punchId || "");
           break;
         case "open-payroll-edit":
           state.modal = { type: "payroll-edit", timesheetId: trigger.dataset.timesheetId || "" };
           renderApp();
+          break;
+        case "open-approval-edit":
+          openApprovalEditModal(trigger.dataset.timesheetId || "");
+          break;
+        case "view-approval":
+          openApprovalDetailModal(trigger.dataset.timesheetId || "");
           break;
         case "open-reject-modal":
           state.modal = {
@@ -972,14 +1187,50 @@
           renderApp();
           break;
         case "close-modal":
-          state.modal = null;
-          renderApp();
+          closeModal();
+          break;
+        case "confirm-modal":
+          if (state.modal?.type === "confirm" && typeof state.modal.onConfirm === "function") {
+            await state.modal.onConfirm();
+          }
           break;
         case "approve-timesheet":
           await approveTimesheet(trigger.dataset.timesheetId || "", "");
           break;
         case "reject-timesheet":
           await rejectTimesheet(trigger.dataset.timesheetId || "", trigger.dataset.note || "");
+          break;
+        case "export-payroll-row":
+          await copyTimesheetCsv(trigger.dataset.timesheetId || "");
+          break;
+        case "view-timesheet-history":
+          openAuditHistoryModal("timesheets", trigger.dataset.timesheetId || "", "Timesheet History");
+          break;
+        case "open-margin-edit":
+          openMarginEditModal(trigger.dataset.assignmentId || "", trigger.dataset.timesheetId || "");
+          break;
+        case "view-margin-breakdown":
+          openMarginBreakdownModal(trigger.dataset.assignmentId || "", trigger.dataset.timesheetId || "");
+          break;
+        case "open-qr-form":
+          openQrModal({
+            qrType: trigger.dataset.qrType || "",
+            workerId: trigger.dataset.workerId || "",
+            siteId: trigger.dataset.siteId || ""
+          });
+          break;
+        case "deactivate-qr-link":
+          await deactivateQrLink(trigger.dataset.qrType || "", trigger.dataset.recordId || "");
+          break;
+        case "open-user-form":
+          requirePermission(canManageUsers(), "Only platform owners and agency owners can manage users.");
+          openUserModal(trigger.dataset.userId || "");
+          break;
+        case "deactivate-user":
+          await deactivateUser(trigger.dataset.userId || "");
+          break;
+        case "reset-password-user":
+          await sendUserResetPassword(trigger.dataset.userId || "");
           break;
         case "punch-action":
           await capturePunch(trigger.dataset.punch || "");
@@ -999,6 +1250,15 @@
           break;
         case "start-checkout":
           await startBillingCheckout(trigger.dataset.plan || state.selectedPlan);
+          break;
+        case "upgrade-plan":
+          await handlePlanPreview(trigger.dataset.plan || "");
+          break;
+        case "downgrade-plan":
+          await handlePlanPreview(trigger.dataset.plan || "");
+          break;
+        case "cancel-subscription":
+          handleBillingPlaceholder("Stripe backend is not connected yet.");
           break;
         case "manage-billing":
           await openBillingPortal();
@@ -1044,14 +1304,34 @@
         case "site-save":
           await saveSiteForm(values);
           break;
+        case "assignment-save":
+          await saveAssignmentForm(values);
+          break;
+        case "punch-save":
+          await savePunchForm(values);
+          break;
         case "payroll-save":
           await savePayrollForm(values);
+          break;
+        case "approval-hours-save":
+          await saveApprovalHoursForm(values);
+          break;
+        case "qr-save":
+          await saveQrForm(values);
+          break;
+        case "user-save":
+          await saveUserForm(values);
           break;
         case "settings-save":
           await saveSettingsForm(values);
           break;
         case "reject-note":
           await submitRejectNote(values);
+          break;
+        case "custom-modal-save":
+          if (state.modal?.type === "custom-form" && typeof state.modal.onSave === "function") {
+            await state.modal.onSave(values);
+          }
           break;
         default:
           break;
@@ -1268,13 +1548,14 @@
   }
 
   async function saveWorkerForm(values) {
+    requirePermission(canManageWorkers(), "Only agency owners, admins, or platform owners can edit workers.");
     const workerId = values.id || createId("worker");
     const existing = findRecord("workers", workerId);
     const willBeActive = values.status !== "inactive";
     enforcePlanLimit("worker", willBeActive, existing);
 
     const worker = {
-      agencyId: state.session.agencyId,
+      agencyId: values.agencyId || state.session.agencyId,
       firstName: values.firstName || "",
       lastName: values.lastName || "",
       phone: values.phone || "",
@@ -1283,16 +1564,20 @@
       status: values.status || "active",
       assignedClientId: values.assignedClientId || "",
       assignedSiteId: values.assignedSiteId || "",
-      userId: existing?.userId || ""
+      userId: existing?.userId || values.userId || "",
+      loginEmail: values.loginEmail || values.email || "",
+      notes: values.notes || ""
     };
 
     await saveData("workers", workerId, worker);
     await syncTimesheetPayRates(workerId, worker.payRate);
+    if (worker.userId) {
+      await syncLinkedUserFromWorker(worker.userId, worker);
+    }
     await appendAuditLog("worker_saved", "workers", workerId, existing, worker);
-    await refreshSessionData();
     state.modal = null;
-    pushToast(existing ? "Worker updated." : "Worker added.", "success");
-    renderApp();
+    await refreshCurrentView();
+    pushToast(existing ? "Worker updated successfully." : "Worker added successfully.", "success");
   }
 
   async function syncTimesheetPayRates(workerId, payRate) {
@@ -1301,44 +1586,124 @@
   }
 
   async function saveClientForm(values) {
+    requirePermission(canManageClients(), "Only agency owners, admins, or platform owners can edit clients.");
     const clientId = values.id || createId("client");
     const existing = findRecord("clients", clientId);
     const client = {
-      agencyId: state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
       name: values.name || "",
       contactName: values.contactName || "",
       contactEmail: values.contactEmail || "",
       phone: values.phone || "",
-      status: values.status || "active"
+      status: values.status || "active",
+      billingContact: values.billingContact || "",
+      notes: values.notes || ""
     };
     await saveData("clients", clientId, client);
     await appendAuditLog("client_saved", "clients", clientId, existing, client);
-    await refreshSessionData();
     state.modal = null;
-    pushToast(existing ? "Client updated." : "Client added.", "success");
-    renderApp();
+    await refreshCurrentView();
+    pushToast(existing ? "Client updated successfully." : "Client added successfully.", "success");
   }
 
   async function saveSiteForm(values) {
+    requirePermission(canManageSites(), "Only agency owners, admins, or platform owners can edit sites.");
     const siteId = values.id || createId("site");
     const existing = findRecord("sites", siteId);
     const willBeActive = values.status !== "inactive";
     enforcePlanLimit("site", willBeActive, existing);
 
     const site = {
-      agencyId: state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
       clientId: values.clientId || "",
       name: values.name || "",
       address: values.address || "",
-      qrCodeUrl: values.qrCodeUrl || "",
+      city: values.city || "",
+      state: values.state || "",
+      zip: values.zip || "",
+      siteContact: values.siteContact || "",
+      sitePhone: values.sitePhone || "",
+      qrCodeUrl: values.qrCodeUrl || existing?.qrCodeUrl || buildSiteLink(siteId),
+      qrEnabled: values.qrEnabled ? values.qrEnabled === "true" || values.qrEnabled === "on" : existing?.qrEnabled !== false,
+      qrExpiresAt: values.qrExpiresAt || existing?.qrExpiresAt || "",
+      qrNotes: values.qrNotes || existing?.qrNotes || "",
+      notes: values.notes || "",
       status: values.status || "active"
     };
     await saveData("sites", siteId, site);
     await appendAuditLog("site_saved", "sites", siteId, existing, site);
-    await refreshSessionData();
     state.modal = null;
-    pushToast(existing ? "Site updated." : "Site added.", "success");
-    renderApp();
+    await refreshCurrentView();
+    pushToast(existing ? "Site updated successfully." : "Site added successfully.", "success");
+  }
+
+  async function saveAssignmentForm(values) {
+    requirePermission(canManageAssignments(), "Only agency owners, admins, or platform owners can edit assignments.");
+    const assignmentId = values.id || createId("assignment");
+    const existing = findRecord("assignments", assignmentId);
+    const assignment = {
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      workerId: values.workerId || "",
+      clientId: values.clientId || "",
+      siteId: values.siteId || "",
+      startDate: values.startDate ? new Date(values.startDate).toISOString() : existing?.startDate || new Date().toISOString(),
+      endDate: values.endDate ? new Date(values.endDate).toISOString() : "",
+      payRate: Number(values.payRate || 0),
+      billRate: Number(values.billRate || 0),
+      status: values.status || "active",
+      shiftSchedule: values.shiftSchedule || "",
+      notes: values.notes || ""
+    };
+    await saveData("assignments", assignmentId, assignment);
+    await syncWorkerFromAssignment(assignment);
+    await syncTimesheetsFromAssignment(assignmentId, assignment);
+    await appendAuditLog(existing ? "assignment_updated" : "assignment_created", "assignments", assignmentId, existing, assignment);
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast(existing ? "Assignment updated successfully." : "Assignment added successfully.", "success");
+  }
+
+  async function savePunchForm(values) {
+    requirePermission(canManagePunches(), "Only agency owners, admins, or platform owners can edit punches.");
+    const punchId = values.id || createId("punch");
+    const existing = findRecord("punches", punchId);
+    const editReason = values.editReason || values.reason || "";
+    if (existing && !editReason) {
+      throw new Error("Manual punch edits require a reason.");
+    }
+
+    const worker = getWorker(values.workerId || existing?.workerId || "");
+    if (!worker) {
+      throw new Error("Choose a worker before saving the punch.");
+    }
+
+    const assignment = getAssignmentsForWorker(worker.id).find(item => item.siteId === (values.siteId || worker.assignedSiteId)) || getAssignmentsForWorker(worker.id)[0];
+    const punchDate = values.punchDate || formatDateInput(existing?.timestamp || state.now);
+    const punchTime = values.punchTime || formatTimeInput(existing?.timestamp || state.now);
+    const timestamp = new Date(`${punchDate}T${punchTime}:00`).toISOString();
+    const punch = {
+      agencyId: worker.agencyId || existing?.agencyId || state.session.agencyId,
+      workerId: worker.id,
+      workerName: fullName(worker),
+      assignmentId: assignment?.id || existing?.assignmentId || "",
+      clientId: values.clientId || worker.assignedClientId || assignment?.clientId || "",
+      clientName: getClientName(values.clientId || worker.assignedClientId || assignment?.clientId || ""),
+      siteId: values.siteId || worker.assignedSiteId || assignment?.siteId || "",
+      siteName: getSiteName(values.siteId || worker.assignedSiteId || assignment?.siteId || ""),
+      action: values.action || existing?.action || "clockIn",
+      timestamp,
+      source: existing?.source || (state.session.mode === "cloud" ? "cloud" : "demo"),
+      createdBy: existing?.createdBy || state.session.userId || "manual-admin",
+      edited: !!existing || !!editReason,
+      notes: values.notes || "",
+      editReason
+    };
+
+    await saveData("punches", punchId, punch);
+    await appendAuditLog(existing ? "punch_edited" : "manual_punch_added", "punches", punchId, existing, punch);
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast(existing ? "Punch updated successfully." : "Manual punch added successfully.", "success");
   }
 
   async function savePayrollForm(values) {
@@ -1352,19 +1717,145 @@
       regularHours: Number(values.regularHours || 0),
       overtimeHours: Number(values.overtimeHours || 0),
       payRate: Number(values.payRate || 0),
+      workerId: values.workerId || existing.workerId,
+      clientId: values.clientId || existing.clientId,
+      siteId: values.siteId || existing.siteId,
       status: values.status || existing.status,
-      adminNotes: values.adminNotes || ""
+      adminNotes: values.adminNotes || "",
+      clientNotes: values.clientNotes || existing.clientNotes || ""
     };
 
     await updateData("timesheets", existing.id, updated);
+    const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === existing.id);
+    if (approvalRecord) {
+      await updateData("approvals", approvalRecord.id, {
+        workerId: updated.workerId,
+        clientId: updated.clientId,
+        siteId: updated.siteId
+      });
+    }
     await appendAuditLog("timesheet_edited", "timesheets", existing.id, existing, updated);
-    await refreshSessionData();
     state.modal = null;
+    await refreshCurrentView();
     pushToast("Payroll row updated.", "success");
-    renderApp();
+  }
+
+  async function saveApprovalHoursForm(values) {
+    const timesheet = findRecord("timesheets", values.id);
+    if (!timesheet) {
+      throw new Error("That timesheet could not be found.");
+    }
+    requirePermission(canEditTimesheets(timesheet), "You do not have permission to edit these hours.");
+
+    const updated = {
+      approvedHours: Number(values.approvedHours || 0),
+      regularHours: Number(values.regularHours || 0),
+      overtimeHours: Number(values.overtimeHours || 0),
+      status: values.status || timesheet.status,
+      adminNotes: values.adminNotes || timesheet.adminNotes || "",
+      clientNotes: values.clientNotes || timesheet.clientNotes || ""
+    };
+
+    await updateData("timesheets", timesheet.id, updated);
+    const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === timesheet.id);
+    if (approvalRecord) {
+      await updateData("approvals", approvalRecord.id, {
+        note: values.clientNotes || values.adminNotes || approvalRecord.note || ""
+      });
+    }
+    await appendAuditLog("timesheet_hours_edited", "timesheets", timesheet.id, timesheet, updated);
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast("Timesheet hours updated.", "success");
+  }
+
+  async function saveQrForm(values) {
+    requirePermission(canManageSites() || canManageWorkers(), "Only agency owners, admins, or platform owners can change QR links.");
+    const qrType = values.qrTypeSelect || values.qrType || "worker";
+    if (qrType === "worker") {
+      const worker = findRecord("workers", values.workerId);
+      if (!worker) {
+        throw new Error("Choose a worker before saving the QR link.");
+      }
+      const next = {
+        assignedClientId: values.clientId || worker.assignedClientId || "",
+        assignedSiteId: values.siteId || worker.assignedSiteId || "",
+        qrCodeUrl: buildWorkerLink(worker.id),
+        qrEnabled: true,
+        qrExpiresAt: values.qrExpiresAt ? new Date(values.qrExpiresAt).toISOString() : "",
+        qrNotes: values.qrNotes || ""
+      };
+      await updateData("workers", worker.id, next);
+      await appendAuditLog("worker_qr_saved", "workers", worker.id, worker, { ...worker, ...next });
+      state.modal = null;
+      await refreshCurrentView();
+      pushToast("Worker QR link saved.", "success");
+      return;
+    }
+
+    const site = findRecord("sites", values.siteId);
+    if (!site) {
+      throw new Error("Choose a site before saving the QR link.");
+    }
+    const next = {
+      clientId: values.clientId || site.clientId || "",
+      qrCodeUrl: buildSiteLink(site.id),
+      qrEnabled: true,
+      qrExpiresAt: values.qrExpiresAt ? new Date(values.qrExpiresAt).toISOString() : "",
+      qrNotes: values.qrNotes || ""
+    };
+    await updateData("sites", site.id, next);
+    await appendAuditLog("site_qr_saved", "sites", site.id, site, { ...site, ...next });
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast("Site QR link saved.", "success");
+  }
+
+  async function saveUserForm(values) {
+    requirePermission(canManageUsers(), "Only platform owners and agency owners can manage users.");
+    const existing = values.id ? findRecord("users", values.id) : null;
+    let userId = values.id || createId("user");
+    let inviteMessage = "";
+
+    if (!existing && state.session.mode === "cloud") {
+      const created = await createCloudInviteProfile(values.email || "", values);
+      userId = created.userId;
+      inviteMessage = created.notice;
+    }
+
+    const user = {
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      role: values.role || "agencyAdmin",
+      firstName: values.firstName || "",
+      lastName: values.lastName || "",
+      email: values.email || "",
+      phone: values.phone || "",
+      status: values.status || (existing?.status || "active"),
+      assignedClientIds: values.assignedClientId ? [values.assignedClientId] : [],
+      assignedSiteIds: values.assignedSiteId ? [values.assignedSiteId] : [],
+      workerId: values.workerId || ""
+    };
+
+    await saveData("users", userId, user);
+    if (user.workerId) {
+      const linkedWorker = findRecord("workers", user.workerId);
+      if (linkedWorker) {
+        await updateData("workers", linkedWorker.id, {
+          userId,
+          loginEmail: user.email || linkedWorker.loginEmail || linkedWorker.email || "",
+          assignedClientId: user.assignedClientIds[0] || linkedWorker.assignedClientId || "",
+          assignedSiteId: user.assignedSiteIds[0] || linkedWorker.assignedSiteId || ""
+        });
+      }
+    }
+    await appendAuditLog(existing ? "user_updated" : "user_created", "users", userId, existing, user);
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast(existing ? "User updated successfully." : inviteMessage || "User invited successfully.", "success");
   }
 
   async function saveSettingsForm(values) {
+    requirePermission(canManageSettings(), "Only platform owners, agency owners, or agency admins can edit settings.");
     const settingsRecord = getCurrentSettings();
     const agency = getCurrentAgency();
     const nextSettings = buildAgencySettings({
@@ -1374,7 +1865,9 @@
       supportEmail: values.supportEmail || DEFAULT_SUPPORT_EMAIL,
       supportPhone: values.supportPhone || DEFAULT_SUPPORT_PHONE,
       payrollContact: values.payrollContact || values.supportEmail || DEFAULT_SUPPORT_EMAIL,
-      defaultPayPeriod: values.defaultPayPeriod || "Weekly"
+      defaultPayPeriod: values.defaultPayPeriod || "Weekly",
+      timezone: values.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York",
+      weekStartDay: values.weekStartDay || "Monday"
     });
 
     if (agency) {
@@ -1388,16 +1881,15 @@
       await updateData("settings", settingsRecord.id, nextSettings);
     } else {
       await saveData("settings", createId("setting"), {
-        agencyId: state.session.agencyId,
+        agencyId: agency?.id || state.session.agencyId,
         ...nextSettings
       });
     }
 
     await appendAuditLog("settings_saved", "settings", settingsRecord?.id || "new", settingsRecord, nextSettings);
-    await refreshSessionData();
+    await refreshCurrentView();
     applyTheme(nextSettings.primaryColor);
     pushToast("Settings saved.", "success");
-    renderApp();
   }
 
   async function submitRejectNote(values) {
@@ -1414,13 +1906,15 @@
     if (!timesheet) {
       throw new Error("That timesheet could not be found.");
     }
+    requirePermission(canApproveRecord(timesheet), "You do not have permission to approve this timesheet.");
 
     const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === timesheetId);
     const updated = {
       status: "approved",
       approvedAt: new Date().toISOString(),
       approvedBy: state.session.userId,
-      adminNotes: note || timesheet.adminNotes || ""
+      adminNotes: note || timesheet.adminNotes || "",
+      clientNotes: note || timesheet.clientNotes || ""
     };
 
     await updateData("timesheets", timesheetId, updated);
@@ -1433,10 +1927,9 @@
       });
     }
     await appendAuditLog("timesheet_approved", "timesheets", timesheetId, timesheet, updated);
-    await refreshSessionData();
     state.modal = null;
+    await refreshCurrentView();
     pushToast("Timesheet approved.", "success");
-    renderApp();
   }
 
   async function rejectTimesheet(timesheetId, note) {
@@ -1448,13 +1941,15 @@
     if (!timesheet) {
       throw new Error("That timesheet could not be found.");
     }
+    requirePermission(canApproveRecord(timesheet), "You do not have permission to reject this timesheet.");
 
     const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === timesheetId);
     const updated = {
       status: "rejected",
       approvedAt: new Date().toISOString(),
       approvedBy: state.session.userId,
-      adminNotes: note
+      adminNotes: note,
+      clientNotes: note
     };
 
     await updateData("timesheets", timesheetId, updated);
@@ -1467,10 +1962,9 @@
       });
     }
     await appendAuditLog("timesheet_rejected", "timesheets", timesheetId, timesheet, updated);
-    await refreshSessionData();
     state.modal = null;
+    await refreshCurrentView();
     pushToast("Timesheet rejected with note.", "warning");
-    renderApp();
   }
 
   async function capturePunch(action) {
@@ -1524,6 +2018,838 @@
     renderApp();
   }
 
+  async function syncLinkedUserFromWorker(userId, worker) {
+    const linkedUser = findRecord("users", userId);
+    if (!linkedUser) {
+      return;
+    }
+    await updateData("users", userId, {
+      firstName: worker.firstName,
+      lastName: worker.lastName,
+      email: worker.loginEmail || worker.email || linkedUser.email || "",
+      phone: worker.phone || linkedUser.phone || "",
+      workerId: worker.id,
+      assignedClientIds: worker.assignedClientId ? [worker.assignedClientId] : [],
+      assignedSiteIds: worker.assignedSiteId ? [worker.assignedSiteId] : []
+    });
+  }
+
+  async function syncWorkerFromAssignment(assignment) {
+    const worker = findRecord("workers", assignment.workerId);
+    if (!worker) {
+      return;
+    }
+    const updatedWorker = {
+      assignedClientId: assignment.clientId,
+      assignedSiteId: assignment.siteId,
+      payRate: Number(assignment.payRate || worker.payRate || 0)
+    };
+    await updateData("workers", worker.id, updatedWorker);
+    if (worker.userId) {
+      await syncLinkedUserFromWorker(worker.userId, { ...worker, ...updatedWorker });
+    }
+  }
+
+  async function syncTimesheetsFromAssignment(assignmentId, assignment) {
+    const related = getScopedData().timesheets.filter(timesheet => timesheet.assignmentId === assignmentId);
+    await Promise.all(related.map(timesheet => updateData("timesheets", timesheet.id, {
+      clientId: assignment.clientId,
+      siteId: assignment.siteId,
+      payRate: Number(assignment.payRate || 0)
+    })));
+  }
+
+  async function deactivateWorker(workerId) {
+    requirePermission(canDeactivateEntity("workers"), "You do not have permission to deactivate workers.");
+    const worker = findRecord("workers", workerId);
+    if (!worker) {
+      throw new Error("That worker could not be found.");
+    }
+    const updated = { status: "inactive" };
+    await updateData("workers", workerId, updated);
+    if (worker.userId) {
+      await updateData("users", worker.userId, { status: "inactive" });
+    }
+    await appendAuditLog("worker_deactivated", "workers", workerId, worker, { ...worker, ...updated });
+    await refreshCurrentView();
+    pushToast("Worker deactivated successfully.", "warning");
+  }
+
+  async function requestWorkerDelete(workerId) {
+    requirePermission(canPermanentlyDeleteRecords(), "Only platform owners and agency owners can permanently delete workers.");
+    const worker = findRecord("workers", workerId);
+    if (!worker) {
+      throw new Error("That worker could not be found.");
+    }
+    confirmAction(`Permanently delete ${fullName(worker)}? This removes the worker record but keeps punch and payroll history.`, async () => {
+      await deleteData("workers", workerId);
+      await appendAuditLog("worker_deleted", "workers", workerId, worker, null);
+      closeModal();
+      await refreshCurrentView();
+      pushToast("Worker deleted successfully.", "success");
+    }, {
+      title: "Delete Worker",
+      confirmLabel: "Delete Worker",
+      confirmTone: "button-danger"
+    });
+  }
+
+  async function deactivateClient(clientId) {
+    requirePermission(canDeactivateEntity("clients"), "You do not have permission to deactivate clients.");
+    const client = findRecord("clients", clientId);
+    if (!client) {
+      throw new Error("That client could not be found.");
+    }
+    await updateData("clients", clientId, { status: "inactive" });
+    await appendAuditLog("client_deactivated", "clients", clientId, client, { ...client, status: "inactive" });
+    await refreshCurrentView();
+    pushToast("Client deactivated successfully.", "warning");
+  }
+
+  async function requestClientDelete(clientId) {
+    requirePermission(canPermanentlyDeleteRecords(), "Only platform owners and agency owners can permanently delete clients.");
+    const client = findRecord("clients", clientId);
+    if (!client) {
+      throw new Error("That client could not be found.");
+    }
+    confirmAction(`Delete ${client.name}? Sites, assignments, and historical rows will keep their old IDs but may no longer show this client name.`, async () => {
+      await deleteData("clients", clientId);
+      await appendAuditLog("client_deleted", "clients", clientId, client, null);
+      closeModal();
+      await refreshCurrentView();
+      pushToast("Client deleted successfully.", "success");
+    }, {
+      title: "Delete Client",
+      confirmLabel: "Delete Client",
+      confirmTone: "button-danger"
+    });
+  }
+
+  async function deactivateSite(siteId) {
+    requirePermission(canDeactivateEntity("sites"), "You do not have permission to deactivate sites.");
+    const site = findRecord("sites", siteId);
+    if (!site) {
+      throw new Error("That site could not be found.");
+    }
+    await updateData("sites", siteId, { status: "inactive" });
+    await appendAuditLog("site_deactivated", "sites", siteId, site, { ...site, status: "inactive" });
+    await refreshCurrentView();
+    pushToast("Site deactivated successfully.", "warning");
+  }
+
+  async function requestSiteDelete(siteId) {
+    requirePermission(canPermanentlyDeleteRecords(), "Only platform owners and agency owners can permanently delete sites.");
+    const site = findRecord("sites", siteId);
+    if (!site) {
+      throw new Error("That site could not be found.");
+    }
+    confirmAction(`Delete ${site.name}? Worker punch history and approvals will remain for audit purposes.`, async () => {
+      await deleteData("sites", siteId);
+      await appendAuditLog("site_deleted", "sites", siteId, site, null);
+      closeModal();
+      await refreshCurrentView();
+      pushToast("Site deleted successfully.", "success");
+    }, {
+      title: "Delete Site",
+      confirmLabel: "Delete Site",
+      confirmTone: "button-danger"
+    });
+  }
+
+  async function endAssignment(assignmentId) {
+    requirePermission(canManageAssignments(), "You do not have permission to end assignments.");
+    const assignment = findRecord("assignments", assignmentId);
+    if (!assignment) {
+      throw new Error("That assignment could not be found.");
+    }
+    const updated = {
+      status: "ended",
+      endDate: new Date().toISOString()
+    };
+    await updateData("assignments", assignmentId, updated);
+    await appendAuditLog("assignment_ended", "assignments", assignmentId, assignment, { ...assignment, ...updated });
+    await refreshCurrentView();
+    pushToast("Assignment ended successfully.", "warning");
+  }
+
+  async function requestAssignmentDelete(assignmentId) {
+    requirePermission(canDeleteAssignment(), "You do not have permission to delete assignments.");
+    const assignment = findRecord("assignments", assignmentId);
+    if (!assignment) {
+      throw new Error("That assignment could not be found.");
+    }
+    confirmAction(`Delete the assignment for ${getWorkerName(assignment.workerId)}? Margin rows will recalculate automatically.`, async () => {
+      await deleteData("assignments", assignmentId);
+      await appendAuditLog("assignment_deleted", "assignments", assignmentId, assignment, null);
+      closeModal();
+      await refreshCurrentView();
+      pushToast("Assignment deleted successfully.", "success");
+    }, {
+      title: "Delete Assignment",
+      confirmLabel: "Delete Assignment",
+      confirmTone: "button-danger"
+    });
+  }
+
+  async function fixMissingClockOut(workerId) {
+    requirePermission(canManagePunches(), "You do not have permission to fix punch issues.");
+    const worker = getWorker(workerId);
+    if (!worker) {
+      throw new Error("That worker could not be found.");
+    }
+    const assignment = getAssignmentsForWorker(worker.id)[0];
+    const timestamp = new Date().toISOString();
+    const punch = {
+      agencyId: worker.agencyId || state.session.agencyId,
+      workerId: worker.id,
+      workerName: fullName(worker),
+      assignmentId: assignment?.id || "",
+      clientId: worker.assignedClientId || assignment?.clientId || "",
+      clientName: getClientName(worker.assignedClientId || assignment?.clientId || ""),
+      siteId: worker.assignedSiteId || assignment?.siteId || "",
+      siteName: getSiteName(worker.assignedSiteId || assignment?.siteId || ""),
+      action: "clockOut",
+      timestamp,
+      source: "manual-fix",
+      createdBy: state.session.userId || "manual-admin",
+      edited: true,
+      notes: "Missing clock out fixed manually by admin.",
+      editReason: "Missing clock out fixed manually."
+    };
+    await saveData("punches", createId("punch"), punch);
+    await appendAuditLog("missing_clock_out_fixed", "punches", punch.id || "new", null, punch);
+    await refreshCurrentView();
+    pushToast("Missing clock out fixed.", "success");
+  }
+
+  function openClientSitesModal(clientId) {
+    const client = findRecord("clients", clientId);
+    const sites = getScopedData().sites.filter(site => site.clientId === clientId);
+    if (!client) {
+      return;
+    }
+    openModal(`${client.name} Sites`, `
+      ${sites.length ? `
+        <ul class="history-list">
+          ${sites.map(site => `
+            <li class="history-item">
+              <div>
+                <strong>${escapeHtml(site.name)}</strong>
+                <p class="inline-note">${escapeHtml(buildSiteAddress(site))}</p>
+              </div>
+              ${renderInlineStatus(site.status)}
+            </li>
+          `).join("")}
+        </ul>
+      ` : renderEmptyState("No sites for this client", "Add a site to start placing workers and client approvals.") }
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
+    });
+  }
+
+  function openAssignmentModal(assignmentId) {
+    const assignment = assignmentId ? findRecord("assignments", assignmentId) : null;
+    const scoped = getScopedData();
+    openModal(assignment ? "Edit Assignment" : "Add Assignment", `
+      <input name="id" type="hidden" value="${escapeAttribute(assignment?.id || "")}" />
+      ${state.session.role === "platformOwner" ? `
+        <div class="field-group">
+          <label for="assignment-agency">Agency</label>
+          <select id="assignment-agency" name="agencyId">
+            ${renderSelectOptions(state.cache.agencies, assignment?.agencyId || "", "Select agency")}
+          </select>
+        </div>
+      ` : ""}
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="assignment-worker">Worker</label>
+          <select id="assignment-worker" name="workerId">
+            ${renderSelectOptions(scoped.workers, assignment?.workerId, "Select worker")}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="assignment-client">Client</label>
+          <select id="assignment-client" name="clientId">
+            ${renderSelectOptions(scoped.clients, assignment?.clientId, "Select client")}
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="assignment-site">Site</label>
+          <select id="assignment-site" name="siteId">
+            ${renderSelectOptions(scoped.sites, assignment?.siteId, "Select site")}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="assignment-status">Status</label>
+          <select id="assignment-status" name="status">
+            ${renderStaticOptions(["active", "ended", "pending"], assignment?.status || "active")}
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="assignment-start-date">Start date</label>
+          <input id="assignment-start-date" name="startDate" type="date" value="${escapeAttribute(formatDateInput(assignment?.startDate || state.now))}" />
+        </div>
+        <div class="field-group">
+          <label for="assignment-end-date">End date</label>
+          <input id="assignment-end-date" name="endDate" type="date" value="${escapeAttribute(formatDateInput(assignment?.endDate || ""))}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="assignment-pay-rate">Pay rate</label>
+          <input id="assignment-pay-rate" name="payRate" type="number" step="0.01" value="${escapeAttribute(String(assignment?.payRate || 0))}" />
+        </div>
+        <div class="field-group">
+          <label for="assignment-bill-rate">Bill rate</label>
+          <input id="assignment-bill-rate" name="billRate" type="number" step="0.01" value="${escapeAttribute(String(assignment?.billRate || 0))}" />
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="assignment-shift-schedule">Shift schedule</label>
+        <input id="assignment-shift-schedule" name="shiftSchedule" type="text" value="${escapeAttribute(assignment?.shiftSchedule || "")}" placeholder="Example: Mon-Fri 7:00 AM - 3:30 PM" />
+      </div>
+      <div class="field-group">
+        <label for="assignment-notes">Notes</label>
+        <textarea id="assignment-notes" name="notes">${escapeHtml(assignment?.notes || "")}</textarea>
+      </div>
+    `, null, {
+      formName: "assignment-save",
+      saveLabel: assignment ? "Save Assignment" : "Add Assignment"
+    });
+  }
+
+  function openPunchModal(punchId) {
+    const punch = punchId ? findRecord("punches", punchId) : null;
+    const scoped = getScopedData();
+    openModal(punch ? "Edit Punch" : "Add Manual Punch", `
+      <input name="id" type="hidden" value="${escapeAttribute(punch?.id || "")}" />
+      <div class="field-group">
+        <label for="punch-worker">Worker</label>
+        <select id="punch-worker" name="workerId">
+          ${renderSelectOptions(scoped.workers, punch?.workerId, "Select worker")}
+        </select>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="punch-action">Action</label>
+          <select id="punch-action" name="action">
+            ${renderStaticOptions(Object.keys(PUNCH_LABELS), punch?.action || "clockIn", key => PUNCH_LABELS[key] || key)}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="punch-client">Client</label>
+          <select id="punch-client" name="clientId">
+            ${renderSelectOptions(scoped.clients, punch?.clientId, "Select client")}
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="punch-site">Site</label>
+          <select id="punch-site" name="siteId">
+            ${renderSelectOptions(scoped.sites, punch?.siteId, "Select site")}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="punch-reason">Edited reason</label>
+          <input id="punch-reason" name="editReason" type="text" value="" placeholder="${escapeAttribute(punch ? "Required for edits" : "Reason for manual punch")}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="punch-date">Date</label>
+          <input id="punch-date" name="punchDate" type="date" value="${escapeAttribute(formatDateInput(punch?.timestamp || state.now))}" />
+        </div>
+        <div class="field-group">
+          <label for="punch-time">Time</label>
+          <input id="punch-time" name="punchTime" type="time" value="${escapeAttribute(formatTimeInput(punch?.timestamp || state.now))}" />
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="punch-notes">Notes</label>
+        <textarea id="punch-notes" name="notes">${escapeHtml(punch?.notes || "")}</textarea>
+      </div>
+    `, null, {
+      formName: "punch-save",
+      saveLabel: punch ? "Save Punch" : "Add Punch"
+    });
+  }
+
+  function openPunchNoteModal(punchId) {
+    const punch = findRecord("punches", punchId);
+    if (!punch) {
+      return;
+    }
+    openModal("Add Punch Note", `
+      <input name="id" type="hidden" value="${escapeAttribute(punch.id)}" />
+      <div class="field-group">
+        <label for="punch-note-text">Notes</label>
+        <textarea id="punch-note-text" name="notes">${escapeHtml(punch.notes || "")}</textarea>
+      </div>
+      <div class="field-group">
+        <label for="punch-note-reason">Edited reason</label>
+        <input id="punch-note-reason" name="editReason" type="text" placeholder="Why was this note added?" />
+      </div>
+    `, async values => {
+      if (!values.editReason) {
+        throw new Error("Add a reason before saving the note.");
+      }
+      await updateData("punches", punch.id, {
+        notes: values.notes || "",
+        edited: true,
+        editReason: values.editReason
+      });
+      await appendAuditLog("punch_note_saved", "punches", punch.id, punch, {
+        ...punch,
+        notes: values.notes || "",
+        edited: true,
+        editReason: values.editReason
+      });
+      state.modal = null;
+      await refreshCurrentView();
+      pushToast("Punch note saved.", "success");
+    }, {
+      saveLabel: "Save Note"
+    });
+  }
+
+  function openApprovalEditModal(timesheetId) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      return;
+    }
+    openModal("Edit Hours", `
+      <input name="id" type="hidden" value="${escapeAttribute(timesheet.id)}" />
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="approval-approved-hours">Approved hours</label>
+          <input id="approval-approved-hours" name="approvedHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.approvedHours || 0))}" />
+        </div>
+        <div class="field-group">
+          <label for="approval-status">Status</label>
+          <select id="approval-status" name="status">
+            ${renderStaticOptions(["pending", "approved", "rejected"], timesheet.status || "pending")}
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="approval-regular-hours">Regular hours</label>
+          <input id="approval-regular-hours" name="regularHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.regularHours || 0))}" />
+        </div>
+        <div class="field-group">
+          <label for="approval-overtime-hours">Overtime hours</label>
+          <input id="approval-overtime-hours" name="overtimeHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.overtimeHours || 0))}" />
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="approval-client-notes">Approval note</label>
+        <textarea id="approval-client-notes" name="clientNotes">${escapeHtml(timesheet.clientNotes || timesheet.adminNotes || "")}</textarea>
+      </div>
+      ${state.session.role !== "clientManager" ? `
+        <div class="field-group">
+          <label for="approval-admin-notes">Admin notes</label>
+          <textarea id="approval-admin-notes" name="adminNotes">${escapeHtml(timesheet.adminNotes || "")}</textarea>
+        </div>
+      ` : ""}
+    `, null, {
+      formName: "approval-hours-save",
+      saveLabel: "Save Hours"
+    });
+  }
+
+  function openApprovalDetailModal(timesheetId) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      return;
+    }
+    const approval = getScopedData().approvals.find(item => item.timesheetId === timesheetId);
+    openModal("Approval Details", `
+      <div class="detail-grid">
+        ${renderDetailBox("Worker", getWorkerName(timesheet.workerId))}
+        ${renderDetailBox("Client", getClientName(timesheet.clientId))}
+        ${renderDetailBox("Site", getSiteName(timesheet.siteId))}
+        ${renderDetailBox("Hours submitted", formatHours(timesheet.approvedHours))}
+        ${renderDetailBox("Regular hours", formatHours(timesheet.regularHours))}
+        ${renderDetailBox("Overtime hours", formatHours(timesheet.overtimeHours))}
+        ${renderDetailBox("Punch details", buildPunchSummaryText(timesheet.workerId, getScopedData().punches))}
+        ${renderDetailBox("Approval note", approval?.note || timesheet.clientNotes || timesheet.adminNotes || "-")}
+      </div>
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
+    });
+  }
+
+  async function copyTimesheetCsv(timesheetId) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      throw new Error("That payroll row could not be found.");
+    }
+    await copyText(buildPayrollCsv([timesheet], false));
+  }
+
+  function openAuditHistoryModal(entityType, entityId, title) {
+    const logs = getScopedData().auditLogs
+      .filter(log => log.entityType === entityType && log.entityId === entityId)
+      .sort((left, right) => compareDates(right.timestamp, left.timestamp));
+    openModal(title, `
+      ${logs.length ? `
+        <ul class="history-list">
+          ${logs.map(log => `
+            <li class="history-item">
+              <div>
+                <strong>${escapeHtml(formatStatusLabel(log.action.replace(/_/g, " ")))}</strong>
+                <p class="inline-note">${escapeHtml(formatDateTime(log.timestamp))}</p>
+              </div>
+              <span class="status-badge">${escapeHtml(ROLE_META[log.role]?.label || log.role)}</span>
+            </li>
+          `).join("")}
+        </ul>
+      ` : renderEmptyState("No audit history yet", "Changes to this record will show here after someone edits it.") }
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
+    });
+  }
+
+  function openMarginEditModal(assignmentId, timesheetId) {
+    const assignment = findRecord("assignments", assignmentId);
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!assignment || !timesheet) {
+      return;
+    }
+    openModal("Edit Margin Inputs", `
+      <div class="field-group">
+        <label for="margin-status">Assignment status</label>
+        <select id="margin-status" name="status">
+          ${renderStaticOptions(["active", "ended", "pending"], assignment.status || "active")}
+        </select>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="margin-pay-rate">Pay rate</label>
+          <input id="margin-pay-rate" name="payRate" type="number" step="0.01" value="${escapeAttribute(String(assignment.payRate || 0))}" />
+        </div>
+        <div class="field-group">
+          <label for="margin-bill-rate">Bill rate</label>
+          <input id="margin-bill-rate" name="billRate" type="number" step="0.01" value="${escapeAttribute(String(assignment.billRate || 0))}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="margin-regular-hours">Regular hours</label>
+          <input id="margin-regular-hours" name="regularHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.regularHours || 0))}" />
+        </div>
+        <div class="field-group">
+          <label for="margin-overtime-hours">Overtime hours</label>
+          <input id="margin-overtime-hours" name="overtimeHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.overtimeHours || 0))}" />
+        </div>
+      </div>
+    `, async values => {
+      await updateData("assignments", assignment.id, {
+        payRate: Number(values.payRate || 0),
+        billRate: Number(values.billRate || 0),
+        status: values.status || assignment.status
+      });
+      await updateData("timesheets", timesheet.id, {
+        payRate: Number(values.payRate || 0),
+        regularHours: Number(values.regularHours || 0),
+        overtimeHours: Number(values.overtimeHours || 0),
+        approvedHours: Number(values.regularHours || 0) + Number(values.overtimeHours || 0)
+      });
+      await appendAuditLog("margin_inputs_updated", "assignments", assignment.id, assignment, {
+        ...assignment,
+        payRate: Number(values.payRate || 0),
+        billRate: Number(values.billRate || 0),
+        status: values.status || assignment.status
+      });
+      state.modal = null;
+      await refreshCurrentView();
+      pushToast("Margin inputs updated.", "success");
+    }, {
+      saveLabel: "Save Margin Inputs"
+    });
+  }
+
+  function openMarginBreakdownModal(assignmentId, timesheetId) {
+    const assignment = findRecord("assignments", assignmentId);
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!assignment || !timesheet) {
+      return;
+    }
+    const payRate = Number(timesheet.payRate || assignment.payRate || 0);
+    const billRate = Number(assignment.billRate || 0);
+    const regularHours = Number(timesheet.regularHours || 0);
+    const overtimeHours = Number(timesheet.overtimeHours || 0);
+    const revenue = billRate * (regularHours + overtimeHours);
+    const laborCost = calculateLaborCost(regularHours, overtimeHours, payRate);
+    const grossProfit = revenue - laborCost;
+    const marginPercent = revenue ? (grossProfit / revenue) * 100 : 0;
+    openModal("Margin Breakdown", `
+      <div class="detail-grid">
+        ${renderDetailBox("Worker", getWorkerName(timesheet.workerId))}
+        ${renderDetailBox("Pay rate", formatCurrency(payRate))}
+        ${renderDetailBox("Bill rate", formatCurrency(billRate))}
+        ${renderDetailBox("Hours", formatHours(regularHours + overtimeHours))}
+        ${renderDetailBox("Revenue", formatCurrency(revenue))}
+        ${renderDetailBox("Labor cost", formatCurrency(laborCost))}
+        ${renderDetailBox("Gross profit", formatCurrency(grossProfit))}
+        ${renderDetailBox("Margin %", formatPercent(marginPercent))}
+      </div>
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
+    });
+  }
+
+  function openQrModal(input = {}) {
+    const scoped = getScopedData();
+    const qrType = input.qrType || (input.workerId ? "worker" : "site");
+    const worker = input.workerId ? findRecord("workers", input.workerId) : scoped.workers[0] || null;
+    const site = input.siteId ? findRecord("sites", input.siteId) : scoped.sites[0] || null;
+    openModal(qrType === "worker" ? "Generate Worker QR Link" : "Generate Site QR Link", `
+      <input name="qrType" type="hidden" value="${escapeAttribute(qrType)}" />
+      <div class="field-group">
+        <label for="qr-type">QR type</label>
+        <select id="qr-type" name="qrTypeSelect">
+          ${renderStaticOptions(["worker", "site"], qrType, value => value === "worker" ? "Worker" : "Site")}
+        </select>
+      </div>
+      ${qrType === "worker" ? `
+        <div class="field-group">
+          <label for="qr-worker">Worker</label>
+          <select id="qr-worker" name="workerId">
+            ${renderSelectOptions(scoped.workers, worker?.id || "", "Select worker")}
+          </select>
+        </div>
+      ` : ""}
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="qr-client">Client</label>
+          <select id="qr-client" name="clientId">
+            ${renderSelectOptions(scoped.clients, qrType === "worker" ? worker?.assignedClientId : site?.clientId, "Select client")}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="qr-site">Site</label>
+          <select id="qr-site" name="siteId">
+            ${renderSelectOptions(scoped.sites, qrType === "worker" ? worker?.assignedSiteId : site?.id, "Select site")}
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="qr-expiration">Expiration</label>
+          <input id="qr-expiration" name="qrExpiresAt" type="date" value="${escapeAttribute(formatDateInput((qrType === "worker" ? worker?.qrExpiresAt : site?.qrExpiresAt) || ""))}" />
+        </div>
+        <div class="field-group">
+          <label for="qr-notes">Notes</label>
+          <input id="qr-notes" name="qrNotes" type="text" value="${escapeAttribute((qrType === "worker" ? worker?.qrNotes : site?.qrNotes) || "")}" />
+        </div>
+      </div>
+    `, null, {
+      formName: "qr-save",
+      saveLabel: "Save QR Link"
+    });
+  }
+
+  async function deactivateQrLink(qrType, recordId) {
+    requirePermission(canManageSites() || canManageWorkers(), "You do not have permission to change QR links.");
+    const collectionName = qrType === "worker" ? "workers" : "sites";
+    const record = findRecord(collectionName, recordId);
+    if (!record) {
+      throw new Error("That QR link could not be found.");
+    }
+    await updateData(collectionName, recordId, {
+      qrEnabled: false
+    });
+    await appendAuditLog("qr_link_deactivated", collectionName, recordId, record, { ...record, qrEnabled: false });
+    await refreshCurrentView();
+    pushToast("QR link deactivated.", "warning");
+  }
+
+  function openUserModal(userId) {
+    const user = userId ? findRecord("users", userId) : null;
+    const scoped = getScopedData();
+    openModal(user ? "Edit User" : "Invite User", `
+      <input name="id" type="hidden" value="${escapeAttribute(user?.id || "")}" />
+      ${state.session.role === "platformOwner" ? `
+        <div class="field-group">
+          <label for="user-agency">Agency</label>
+          <select id="user-agency" name="agencyId">
+            ${renderSelectOptions(state.cache.agencies, user?.agencyId || "", "Select agency")}
+          </select>
+        </div>
+      ` : ""}
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="user-first-name">First name</label>
+          <input id="user-first-name" name="firstName" type="text" value="${escapeAttribute(user?.firstName || "")}" />
+        </div>
+        <div class="field-group">
+          <label for="user-last-name">Last name</label>
+          <input id="user-last-name" name="lastName" type="text" value="${escapeAttribute(user?.lastName || "")}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="user-email">Email</label>
+          <input id="user-email" name="email" type="email" value="${escapeAttribute(user?.email || "")}" />
+        </div>
+        <div class="field-group">
+          <label for="user-phone">Phone</label>
+          <input id="user-phone" name="phone" type="text" value="${escapeAttribute(user?.phone || "")}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="user-role">Role</label>
+          <select id="user-role" name="role">
+            ${renderStaticOptions(["agencyOwner", "agencyAdmin", "clientManager", "worker"], user?.role || "agencyAdmin", value => ROLE_META[value]?.label || value)}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="user-status">Status</label>
+          <select id="user-status" name="status">
+            ${renderStaticOptions(["active", "inactive", "invited"], user?.status || "active")}
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="user-client">Assigned client</label>
+          <select id="user-client" name="assignedClientId">
+            ${renderSelectOptions(scoped.clients, user?.assignedClientIds?.[0] || "", "Optional client")}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="user-site">Assigned site</label>
+          <select id="user-site" name="assignedSiteId">
+            ${renderSelectOptions(scoped.sites, user?.assignedSiteIds?.[0] || "", "Optional site")}
+          </select>
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="user-worker-link">Linked worker</label>
+        <select id="user-worker-link" name="workerId">
+          ${renderSelectOptions(scoped.workers, user?.workerId || "", "Optional worker")}
+        </select>
+      </div>
+    `, null, {
+      formName: "user-save",
+      saveLabel: user ? "Save User" : "Invite User"
+    });
+  }
+
+  async function deactivateUser(userId) {
+    requirePermission(canManageUsers(), "Only platform owners and agency owners can manage users.");
+    const user = findRecord("users", userId);
+    if (!user) {
+      throw new Error("That user could not be found.");
+    }
+    await updateData("users", userId, { status: "inactive" });
+    await appendAuditLog("user_deactivated", "users", userId, user, { ...user, status: "inactive" });
+    await refreshCurrentView();
+    pushToast("User deactivated successfully.", "warning");
+  }
+
+  async function sendUserResetPassword(userId) {
+    requirePermission(canManageUsers(), "Only platform owners and agency owners can manage users.");
+    const user = findRecord("users", userId);
+    if (!user?.email) {
+      throw new Error("That user record does not have an email address.");
+    }
+    if (state.session.mode !== "cloud" || !state.firebase.ready) {
+      pushToast("Password reset is only available for Cloud Mode users.", "warning");
+      return;
+    }
+    await state.firebase.auth.sendPasswordResetEmail(user.email);
+    await appendAuditLog("password_reset_sent", "users", userId, user, { email: user.email });
+    pushToast("Password reset email sent.", "success");
+  }
+
+  async function createCloudInviteProfile(email, values) {
+    if (!email) {
+      throw new Error("Enter an email address before inviting a user.");
+    }
+    if (!state.firebase.ready || !state.firebase.api?.initializeApp || !state.firebase.api?.getAuth) {
+      return {
+        userId: createId("user"),
+        notice: "User profile created, but cloud auth invite is not connected."
+      };
+    }
+
+    const config = state.firebase.config.firebaseConfig || {};
+    const secondaryName = `PortalyInvite_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const tempPassword = `Portaly!${Math.random().toString(36).slice(2, 10)}9`;
+    let secondaryApp = null;
+
+    try {
+      secondaryApp = state.firebase.api.initializeApp(config, secondaryName);
+      const secondaryAuth = state.firebase.api.getAuth(secondaryApp);
+      const credential = await state.firebase.api.createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
+      await state.firebase.api.sendPasswordResetEmail(secondaryAuth, email).catch(() => {});
+      await state.firebase.api.signOut(secondaryAuth).catch(() => {});
+      if (typeof secondaryApp.delete === "function") {
+        await secondaryApp.delete().catch(() => {});
+      }
+      return {
+        userId: credential.user.uid,
+        notice: `User invited. A reset email was sent to ${email}.`
+      };
+    } catch (error) {
+      if (secondaryApp && typeof secondaryApp.delete === "function") {
+        await secondaryApp.delete().catch(() => {});
+      }
+      if (String(error?.code || "").includes("email-already-in-use")) {
+        throw new Error("That email already exists in Firebase Auth. Ask the user to log in once or reset their password before creating a new profile.");
+      }
+      throw error;
+    }
+  }
+
+  async function handlePlanPreview(planId) {
+    if (!planId) {
+      return;
+    }
+    state.selectedPlan = planId;
+    if (!state.firebase.config.functionsBaseUrl) {
+      handleBillingPlaceholder("Stripe backend is not connected yet.");
+      if (state.session.mode === "demo") {
+        const agency = getCurrentAgency();
+        const subscription = getCurrentSubscription();
+        if (agency) {
+          await updateData("agencies", agency.id, { planId });
+        }
+        if (subscription) {
+          await updateData("subscriptions", subscription.id, { planId });
+        }
+        await refreshCurrentView();
+      } else {
+        renderApp();
+      }
+      return;
+    }
+    await startBillingCheckout(planId);
+  }
+
+  function handleBillingPlaceholder(message) {
+    state.notice = message;
+    storeNotice(state.notice);
+    pushToast(message, "warning");
+    renderApp();
+  }
+
   function enforcePlanLimit(entityType, willBeActive, existingRecord) {
     if (!willBeActive) {
       return;
@@ -1548,7 +2874,7 @@
       return;
     }
     const audit = {
-      agencyId: state.session.agencyId || "",
+      agencyId: state.session.agencyId || newValue?.agencyId || oldValue?.agencyId || "",
       userId: state.session.userId || "",
       role: state.session.role || "",
       action,
@@ -1574,7 +2900,8 @@
     }
 
     if (!state.firebase.config.functionsBaseUrl) {
-      throw new Error("Add your Functions base URL in firebase-config.js first.");
+      handleBillingPlaceholder("Stripe backend is not connected yet.");
+      return;
     }
 
     const response = await authenticatedPost("/createCheckoutSession", {
@@ -1602,7 +2929,8 @@
     }
 
     if (!state.firebase.config.functionsBaseUrl) {
-      throw new Error("Add your Functions base URL in firebase-config.js first.");
+      handleBillingPlaceholder("Stripe backend is not connected yet.");
+      return;
     }
 
     const response = await authenticatedPost("/createBillingPortalSession", {});
@@ -2378,7 +3706,7 @@
                 <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate QR</button>
                 <button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Approvals</button>
                 <button class="button button-ghost" data-action="go-route" data-route="payroll" type="button">Export Payroll</button>
-                ${state.session.role === "agencyOwner" ? `<button class="button button-ghost" data-action="go-route" data-route="billing" type="button">Manage Billing</button>` : ""}
+                ${canManageBilling() ? `<button class="button button-ghost" data-action="go-route" data-route="billing" type="button">Manage Billing</button>` : ""}
               </div>
             </div>
 
@@ -2473,7 +3801,7 @@
               <h2 class="page-heading">Worker management</h2>
             </div>
             <div class="page-actions">
-              <button class="button button-primary" data-action="open-worker-form" type="button">Add Worker</button>
+              ${canManageWorkers() ? `<button class="button button-primary" data-action="open-worker-form" type="button">Add Worker</button>` : ""}
             </div>
           </div>
           ${workers.length ? `
@@ -2513,6 +3841,8 @@
                             <button class="button button-ghost" data-action="view-worker" data-worker-id="${escapeHtml(worker.id)}" type="button">View</button>
                             <button class="button button-ghost" data-action="open-worker-form" data-worker-id="${escapeHtml(worker.id)}" type="button">Edit</button>
                             <button class="button button-ghost" data-action="worker-history" data-worker-id="${escapeHtml(worker.id)}" type="button">Punch History</button>
+                            ${canDeactivateEntity("workers") ? `<button class="button button-ghost" data-action="deactivate-worker" data-worker-id="${escapeHtml(worker.id)}" type="button">Deactivate</button>` : ""}
+                            ${canPermanentlyDeleteRecords() ? `<button class="button button-danger" data-action="delete-worker" data-worker-id="${escapeHtml(worker.id)}" type="button">Delete</button>` : ""}
                           </div>
                         </td>
                       </tr>
@@ -2537,7 +3867,7 @@
               <p class="eyebrow">Clients</p>
               <h2 class="page-heading">Client accounts</h2>
             </div>
-            <button class="button button-primary" data-action="open-client-form" type="button">Add Client</button>
+            ${canManageClients() ? `<button class="button button-primary" data-action="open-client-form" type="button">Add Client</button>` : ""}
           </div>
           ${clients.length ? `
             <div class="table-wrap">
@@ -2562,7 +3892,14 @@
                       <td>${escapeHtml(client.phone || "-")}</td>
                       <td>${renderInlineStatus(client.status)}</td>
                       <td>${escapeHtml(String(getScopedData().sites.filter(site => site.clientId === client.id).length))}</td>
-                      <td><button class="button button-ghost" data-action="open-client-form" data-client-id="${escapeHtml(client.id)}" type="button">Edit</button></td>
+                      <td>
+                        <div class="table-actions">
+                          <button class="button button-ghost" data-action="open-client-form" data-client-id="${escapeHtml(client.id)}" type="button">Edit</button>
+                          <button class="button button-ghost" data-action="view-client-sites" data-client-id="${escapeHtml(client.id)}" type="button">View Sites</button>
+                          ${canDeactivateEntity("clients") ? `<button class="button button-ghost" data-action="deactivate-client" data-client-id="${escapeHtml(client.id)}" type="button">Deactivate</button>` : ""}
+                          ${canPermanentlyDeleteRecords() ? `<button class="button button-danger" data-action="delete-client" data-client-id="${escapeHtml(client.id)}" type="button">Delete</button>` : ""}
+                        </div>
+                      </td>
                     </tr>
                   `).join("")}
                 </tbody>
@@ -2585,7 +3922,7 @@
               <p class="eyebrow">Sites</p>
               <h2 class="page-heading">Client sites and locations</h2>
             </div>
-            <button class="button button-primary" data-action="open-site-form" type="button">Add Site</button>
+            ${canManageSites() ? `<button class="button button-primary" data-action="open-site-form" type="button">Add Site</button>` : ""}
           </div>
           ${sites.length ? `
             <div class="table-wrap">
@@ -2605,10 +3942,17 @@
                     <tr>
                       <td>${escapeHtml(site.name)}</td>
                       <td>${escapeHtml(getClientName(site.clientId))}</td>
-                      <td>${escapeHtml(site.address || "-")}</td>
+                      <td>${escapeHtml(buildSiteAddress(site))}</td>
                       <td>${renderInlineStatus(site.status)}</td>
                       <td>${escapeHtml(String(scoped.workers.filter(worker => worker.assignedSiteId === site.id).length))}</td>
-                      <td><button class="button button-ghost" data-action="open-site-form" data-site-id="${escapeHtml(site.id)}" type="button">Edit</button></td>
+                      <td>
+                        <div class="table-actions">
+                          <button class="button button-ghost" data-action="open-site-form" data-site-id="${escapeHtml(site.id)}" type="button">Edit</button>
+                          <button class="button button-ghost" data-action="open-site-qr" data-site-id="${escapeHtml(site.id)}" type="button">Generate Site QR</button>
+                          ${canDeactivateEntity("sites") ? `<button class="button button-ghost" data-action="deactivate-site" data-site-id="${escapeHtml(site.id)}" type="button">Deactivate</button>` : ""}
+                          ${canPermanentlyDeleteRecords() ? `<button class="button button-danger" data-action="delete-site" data-site-id="${escapeHtml(site.id)}" type="button">Delete</button>` : ""}
+                        </div>
+                      </td>
                     </tr>
                   `).join("")}
                 </tbody>
@@ -2631,6 +3975,7 @@
               <p class="eyebrow">Assignments</p>
               <h2 class="page-heading">Pay rate, bill rate, and spread</h2>
             </div>
+            ${canManageAssignments() ? `<button class="button button-primary" data-action="open-assignment-form" type="button">Add Assignment</button>` : ""}
           </div>
           ${assignments.length ? `
             <div class="table-wrap">
@@ -2644,6 +3989,7 @@
                     <th>Bill Rate</th>
                     <th>Spread</th>
                     <th>Status</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2656,6 +4002,13 @@
                       <td>${escapeHtml(formatCurrency(assignment.billRate))}</td>
                       <td>${escapeHtml(formatCurrency(Number(assignment.billRate || 0) - Number(assignment.payRate || 0)))}</td>
                       <td>${renderInlineStatus(assignment.status)}</td>
+                      <td>
+                        <div class="table-actions">
+                          <button class="button button-ghost" data-action="open-assignment-form" data-assignment-id="${escapeHtml(assignment.id)}" type="button">Edit</button>
+                          <button class="button button-ghost" data-action="end-assignment" data-assignment-id="${escapeHtml(assignment.id)}" type="button">End Assignment</button>
+                          ${canDeleteAssignment() ? `<button class="button button-danger" data-action="delete-assignment" data-assignment-id="${escapeHtml(assignment.id)}" type="button">Delete</button>` : ""}
+                        </div>
+                      </td>
                     </tr>
                   `).join("")}
                 </tbody>
@@ -2693,6 +4046,7 @@
               <p class="eyebrow">Live Punches</p>
               <h2 class="page-heading">Today's punch activity</h2>
             </div>
+            ${canManagePunches() ? `<button class="button button-primary" data-action="open-punch-form" type="button">Add Manual Punch</button>` : ""}
           </div>
           <div class="filter-group">
             <div class="field-group" style="min-width: 200px;">
@@ -2736,6 +4090,7 @@
                     <th>Current Status</th>
                     <th>Hours Today</th>
                     <th>Exception Flag</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2749,6 +4104,13 @@
                       <td>${renderInlineStatus(row.statusLabel)}</td>
                       <td>${escapeHtml(row.hoursToday)}</td>
                       <td>${row.exception ? `<span class="status-badge status-warning">${escapeHtml(row.exception)}</span>` : `<span class="status-badge status-success">Clear</span>`}</td>
+                      <td>
+                        <div class="table-actions">
+                          ${row.lastPunchId ? `<button class="button button-ghost" data-action="open-punch-form" data-punch-id="${escapeHtml(row.lastPunchId)}" type="button">Edit Punch</button>` : ""}
+                          ${row.exception === "Missing clock out" ? `<button class="button button-primary" data-action="fix-missing-clock-out" data-worker-id="${escapeHtml(row.workerId)}" type="button">Mark Missing Clock Out Fixed</button>` : ""}
+                          ${row.lastPunchId ? `<button class="button button-ghost" data-action="open-punch-note" data-punch-id="${escapeHtml(row.lastPunchId)}" type="button">Add Note</button>` : ""}
+                        </div>
+                      </td>
                     </tr>
                   `).join("")}
                 </tbody>
@@ -2809,6 +4171,8 @@
                         <td>${renderInlineStatus(approval.status)}</td>
                         <td>
                           <div class="table-actions">
+                            <button class="button button-ghost" data-action="view-approval" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">View Details</button>
+                            <button class="button button-ghost" data-action="open-approval-edit" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Edit Hours</button>
                             <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Approve</button>
                             <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(approval.timesheetId)}" type="button">Reject</button>
                           </div>
@@ -2923,6 +4287,8 @@
                             <button class="button button-ghost" data-action="open-payroll-edit" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">Edit</button>
                             <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">Approve</button>
                             <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(timesheet.id)}" type="button">Reject</button>
+                            <button class="button button-ghost" data-action="export-payroll-row" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">Export Row</button>
+                            <button class="button button-ghost" data-action="view-timesheet-history" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">View History</button>
                           </div>
                         </td>
                       </tr>
@@ -2972,6 +4338,7 @@
                     <th>Labor Cost</th>
                     <th>Gross Profit</th>
                     <th>Margin %</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2987,6 +4354,13 @@
                       <td>${escapeHtml(formatCurrency(row.laborCost))}</td>
                       <td>${escapeHtml(formatCurrency(row.grossProfit))}</td>
                       <td>${escapeHtml(formatPercent(row.marginPercent))}</td>
+                      <td>
+                        <div class="table-actions">
+                          <button class="button button-ghost" data-action="open-margin-edit" data-assignment-id="${escapeHtml(row.assignmentId)}" data-timesheet-id="${escapeHtml(row.timesheetId)}" type="button">Edit Assignment</button>
+                          <button class="button button-ghost" data-action="open-margin-edit" data-assignment-id="${escapeHtml(row.assignmentId)}" data-timesheet-id="${escapeHtml(row.timesheetId)}" type="button">Edit Bill Rate</button>
+                          <button class="button button-ghost" data-action="view-margin-breakdown" data-assignment-id="${escapeHtml(row.assignmentId)}" data-timesheet-id="${escapeHtml(row.timesheetId)}" type="button">View Breakdown</button>
+                        </div>
+                      </td>
                     </tr>
                   `).join("")}
                 </tbody>
@@ -3029,51 +4403,85 @@
 
   function renderQrCodesPage() {
     const scoped = getScopedData();
-    const worker = scoped.workers[0];
-    const site = scoped.sites[0];
-    const workerLink = worker ? buildWorkerLink(worker.id) : "";
-    const siteLink = site ? buildSiteLink(site.id) : "";
+    const workerCards = scoped.workers.slice(0, 6);
+    const siteCards = scoped.sites.slice(0, 6);
 
     return `
       <section class="stack-lg">
-        <div class="split-grid">
-          <div class="link-card">
-            <p class="eyebrow">Generate Worker QR</p>
-            <h3>Worker punch link card</h3>
-            <p>Use worker-specific links for the safest punch experience. In Cloud Mode, the worker still has to sign in with the correct account.</p>
-            ${worker ? `
-              <div class="qr-preview">
-                ${renderQrBox()}
-              </div>
-              <div class="stack-sm" style="margin-top: 16px;">
-                <strong>${escapeHtml(getWorkerName(worker.id))}</strong>
-                <p class="helper-copy">${escapeHtml(workerLink)}</p>
-                <p class="helper-copy">Open this link on a phone or print the card for QR-ready worker access.</p>
-                <div class="page-actions">
-                  <button class="button button-secondary" data-action="copy-link" data-copy="${escapeHtml(workerLink)}" type="button">Copy Link</button>
-                  <button class="button button-ghost" data-action="print-view" type="button">Print QR Card</button>
-                </div>
-              </div>
-            ` : renderEmptyState("No workers to generate", "Add a worker first, then return here to create a QR-style link card.")}
+        <div class="table-top">
+          <div>
+            <p class="eyebrow">QR Codes</p>
+            <h2 class="page-heading">Generate worker and site punch links</h2>
           </div>
-          <div class="link-card">
-            <p class="eyebrow">Generate Site QR</p>
-            <h3>Client / site punch link</h3>
-            <p>A site card can be printed on location today. For live agencies, pair site access with authenticated worker selection.</p>
-            ${site ? `
-              <div class="qr-preview">
-                ${renderQrBox()}
+          <div class="page-actions">
+            <button class="button button-primary" data-action="open-qr-form" data-qr-type="worker" type="button">Generate Worker QR Link</button>
+            <button class="button button-secondary" data-action="open-qr-form" data-qr-type="site" type="button">Generate Site QR Link</button>
+          </div>
+        </div>
+
+        <div class="split-grid">
+          <div class="surface-card">
+            <div class="card-top">
+              <div>
+                <p class="eyebrow">Worker QR Links</p>
+                <h3>Worker punch cards</h3>
               </div>
-              <div class="stack-sm" style="margin-top: 16px;">
-                <strong>${escapeHtml(site.name)}</strong>
-                <p class="helper-copy">${escapeHtml(siteLink)}</p>
-                <p class="helper-copy">Print this site card and place it where workers start their shift.</p>
-                <div class="page-actions">
-                  <button class="button button-secondary" data-action="copy-link" data-copy="${escapeHtml(siteLink)}" type="button">Copy Link</button>
-                  <button class="button button-ghost" data-action="print-view" type="button">Print QR Card</button>
-                </div>
+            </div>
+            ${workerCards.length ? `
+              <div class="stack-md" style="margin-top: 18px;">
+                ${workerCards.map(worker => {
+                  const link = worker.qrEnabled === false ? "" : (worker.qrCodeUrl || buildWorkerLink(worker.id));
+                  return `
+                    <div class="link-card">
+                      <div class="qr-preview">${renderQrBox()}</div>
+                      <div class="stack-sm" style="margin-top: 16px;">
+                        <strong>${escapeHtml(fullName(worker))}</strong>
+                        <p class="helper-copy">${escapeHtml(link || "Link deactivated")}</p>
+                        <p class="helper-copy">${escapeHtml(getSiteName(worker.assignedSiteId))}</p>
+                        <div class="table-actions">
+                          <button class="button button-secondary" data-action="copy-link" data-copy="${escapeHtml(link)}" type="button" ${link ? "" : "disabled"}>Copy Link</button>
+                          <button class="button button-ghost" data-action="print-view" type="button">Print QR Card</button>
+                          <button class="button button-ghost" data-action="open-qr-form" data-qr-type="worker" data-worker-id="${escapeHtml(worker.id)}" type="button">Edit</button>
+                          <button class="button button-danger" data-action="deactivate-qr-link" data-qr-type="worker" data-record-id="${escapeHtml(worker.id)}" type="button">Deactivate QR Link</button>
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join("")}
               </div>
-            ` : renderEmptyState("No sites to generate", "Add a site first so Portaly can generate a printable link card.")}
+            ` : renderEmptyState("No workers to generate", "Add a worker first, then come back to create a worker punch link.")}
+          </div>
+
+          <div class="surface-card">
+            <div class="card-top">
+              <div>
+                <p class="eyebrow">Site QR Links</p>
+                <h3>Printable site punch cards</h3>
+              </div>
+            </div>
+            ${siteCards.length ? `
+              <div class="stack-md" style="margin-top: 18px;">
+                ${siteCards.map(site => {
+                  const link = site.qrEnabled === false ? "" : (site.qrCodeUrl || buildSiteLink(site.id));
+                  return `
+                    <div class="link-card">
+                      <div class="qr-preview">${renderQrBox()}</div>
+                      <div class="stack-sm" style="margin-top: 16px;">
+                        <strong>${escapeHtml(site.name)}</strong>
+                        <p class="helper-copy">${escapeHtml(link || "Link deactivated")}</p>
+                        <p class="helper-copy">${escapeHtml(getClientName(site.clientId))}</p>
+                        <div class="table-actions">
+                          <button class="button button-secondary" data-action="copy-link" data-copy="${escapeHtml(link)}" type="button" ${link ? "" : "disabled"}>Copy Link</button>
+                          <button class="button button-ghost" data-action="print-view" type="button">Print QR Card</button>
+                          <button class="button button-ghost" data-action="open-qr-form" data-qr-type="site" data-site-id="${escapeHtml(site.id)}" type="button">Edit</button>
+                          <button class="button button-danger" data-action="deactivate-qr-link" data-qr-type="site" data-record-id="${escapeHtml(site.id)}" type="button">Deactivate QR Link</button>
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            ` : renderEmptyState("No sites to generate", "Add a site first so Portaly can generate a printable site card.")}
           </div>
         </div>
       </section>
@@ -3096,6 +4504,7 @@
               <p class="eyebrow">Users</p>
               <h2 class="page-heading">Role-based access profiles</h2>
             </div>
+            ${canManageUsers() ? `<button class="button button-primary" data-action="open-user-form" type="button">Invite User</button>` : ""}
           </div>
           ${users.length ? `
             <div class="table-wrap">
@@ -3109,6 +4518,7 @@
                     <th>Status</th>
                     <th>Assigned Clients</th>
                     <th>Assigned Sites</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3121,6 +4531,13 @@
                       <td>${renderInlineStatus(user.status || "active")}</td>
                       <td>${escapeHtml(String((user.assignedClientIds || []).length))}</td>
                       <td>${escapeHtml(String((user.assignedSiteIds || []).length))}</td>
+                      <td>
+                        <div class="table-actions">
+                          ${canManageUsers() ? `<button class="button button-ghost" data-action="open-user-form" data-user-id="${escapeHtml(user.id)}" type="button">Edit User Role</button>` : ""}
+                          ${canManageUsers() ? `<button class="button button-ghost" data-action="deactivate-user" data-user-id="${escapeHtml(user.id)}" type="button">Deactivate User</button>` : ""}
+                          ${canManageUsers() ? `<button class="button button-secondary" data-action="reset-password-user" data-user-id="${escapeHtml(user.id)}" type="button">Reset Password Email</button>` : ""}
+                        </div>
+                      </td>
                     </tr>
                   `).join("")}
                 </tbody>
@@ -3161,9 +4578,13 @@
           <p class="eyebrow">Billing</p>
           <h3>${escapeHtml(plan.label)} plan</h3>
           <p class="helper-copy">Next billing date placeholder: ${escapeHtml(formatDate(nextBillingDate))}</p>
+          ${!state.firebase.config.functionsBaseUrl ? `<p class="helper-copy">Stripe backend is not connected yet.</p>` : ""}
           <div class="page-actions" style="margin-top: 18px;">
             <button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">Start Paid Subscription</button>
             <button class="button button-secondary" data-action="manage-billing" type="button">Manage Billing</button>
+            <button class="button button-ghost" data-action="upgrade-plan" data-plan="growth" type="button">Upgrade Plan</button>
+            <button class="button button-ghost" data-action="downgrade-plan" data-plan="starter" type="button">Downgrade Plan</button>
+            <button class="button button-danger" data-action="cancel-subscription" type="button">Cancel Subscription</button>
           </div>
         </div>
 
@@ -3184,7 +4605,9 @@
       supportEmail: settings?.supportEmail || DEFAULT_SUPPORT_EMAIL,
       supportPhone: settings?.supportPhone || DEFAULT_SUPPORT_PHONE,
       payrollContact: settings?.payrollContact || DEFAULT_SUPPORT_EMAIL,
-      defaultPayPeriod: settings?.defaultPayPeriod || "Weekly"
+      defaultPayPeriod: settings?.defaultPayPeriod || "Weekly",
+      timezone: settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York",
+      weekStartDay: settings?.weekStartDay || "Monday"
     });
 
     return `
@@ -3237,6 +4660,18 @@
             <div class="field-group">
               <label for="settings-payroll-contact">Payroll contact</label>
               <input id="settings-payroll-contact" name="payrollContact" type="email" value="${escapeAttribute(applied.payrollContact)}" />
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="settings-timezone">Timezone</label>
+                <input id="settings-timezone" name="timezone" type="text" value="${escapeAttribute(applied.timezone || "")}" />
+              </div>
+              <div class="field-group">
+                <label for="settings-week-start-day">Week start day</label>
+                <select id="settings-week-start-day" name="weekStartDay">
+                  ${renderStaticOptions(["Monday", "Sunday"], applied.weekStartDay || "Monday", value => value)}
+                </select>
+              </div>
             </div>
             <div class="page-actions">
               <button class="button button-primary" type="submit">Save Settings</button>
@@ -3405,6 +4840,10 @@
     }
 
     switch (state.modal.type) {
+      case "custom-form":
+        return renderCustomModal();
+      case "confirm":
+        return renderConfirmModal();
       case "worker-form":
         return renderWorkerFormModal();
       case "worker-view":
@@ -3424,9 +4863,68 @@
     }
   }
 
+  function renderCustomModal() {
+    const sizeClass = state.modal.size ? ` ${escapeHtml(state.modal.size)}` : "";
+    const saveActions = state.modal.readOnly ? `
+      <div class="modal-actions">
+        <button class="button button-ghost" data-action="close-modal" type="button">${escapeHtml(state.modal.cancelLabel || "Close")}</button>
+      </div>
+    ` : `
+      <div class="modal-actions">
+        <button class="button button-primary" type="submit">${escapeHtml(state.modal.saveLabel || "Save")}</button>
+        <button class="button button-ghost" data-action="close-modal" type="button">${escapeHtml(state.modal.cancelLabel || "Cancel")}</button>
+      </div>
+    `;
+
+    const body = state.modal.readOnly ? state.modal.html : `
+      <form class="form-grid" data-form="${escapeAttribute(state.modal.formName || "custom-modal-save")}">
+        ${state.modal.html}
+        ${saveActions}
+      </form>
+    `;
+
+    return `
+      <div class="modal">
+        <div class="modal-card${sizeClass}">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Edit</p>
+              <h3>${escapeHtml(state.modal.title || "Update")}</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          ${state.modal.message ? `<p class="helper-copy" style="margin-bottom: 18px;">${escapeHtml(state.modal.message)}</p>` : ""}
+          ${state.modal.readOnly ? `${state.modal.html}${saveActions}` : body}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderConfirmModal() {
+    return `
+      <div class="modal">
+        <div class="modal-card small">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Confirm</p>
+              <h3>${escapeHtml(state.modal.title || "Confirm")}</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          <p class="helper-copy">${escapeHtml(state.modal.message || "Are you sure?")}</p>
+          <div class="modal-actions">
+            <button class="button ${escapeHtml(state.modal.confirmTone || "button-primary")}" data-action="confirm-modal" type="button">${escapeHtml(state.modal.confirmLabel || "Confirm")}</button>
+            <button class="button button-ghost" data-action="close-modal" type="button">${escapeHtml(state.modal.cancelLabel || "Cancel")}</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderWorkerFormModal() {
     const worker = state.modal.workerId ? getScopedData().workers.find(item => item.id === state.modal.workerId) : null;
     const scoped = getScopedData();
+    const agencies = scoped.agencies.length ? scoped.agencies : state.cache.agencies;
     return `
       <div class="modal">
         <div class="modal-card">
@@ -3439,6 +4937,14 @@
           </div>
           <form class="form-grid" data-form="worker-save">
             <input name="id" type="hidden" value="${escapeAttribute(worker?.id || "")}" />
+            ${state.session.role === "platformOwner" ? `
+              <div class="field-group">
+                <label for="worker-agency">Agency</label>
+                <select id="worker-agency" name="agencyId">
+                  ${renderSelectOptions(agencies, worker?.agencyId || "", "Select agency")}
+                </select>
+              </div>
+            ` : ""}
             <div class="form-row two">
               <div class="field-group">
                 <label for="worker-first-name">First name</label>
@@ -3458,6 +4964,10 @@
                 <label for="worker-email">Email</label>
                 <input id="worker-email" name="email" type="email" value="${escapeAttribute(worker?.email || "")}" />
               </div>
+            </div>
+            <div class="field-group">
+              <label for="worker-login-email">Worker login email</label>
+              <input id="worker-login-email" name="loginEmail" type="email" value="${escapeAttribute(worker?.loginEmail || worker?.email || "")}" />
             </div>
             <div class="form-row two">
               <div class="field-group">
@@ -3485,6 +4995,10 @@
                   <option value="inactive" ${worker?.status === "inactive" ? "selected" : ""}>Inactive</option>
                 </select>
               </div>
+            </div>
+            <div class="field-group">
+              <label for="worker-notes">Notes</label>
+              <textarea id="worker-notes" name="notes">${escapeHtml(worker?.notes || "")}</textarea>
             </div>
             <div class="modal-actions">
               <button class="button button-primary" type="submit">Save Worker</button>
@@ -3558,6 +5072,7 @@
 
   function renderClientFormModal() {
     const client = state.modal.clientId ? getScopedData().clients.find(item => item.id === state.modal.clientId) : null;
+    const agencies = getScopedData().agencies.length ? getScopedData().agencies : state.cache.agencies;
     return `
       <div class="modal">
         <div class="modal-card">
@@ -3570,6 +5085,14 @@
           </div>
           <form class="form-grid" data-form="client-save">
             <input name="id" type="hidden" value="${escapeAttribute(client?.id || "")}" />
+            ${state.session.role === "platformOwner" ? `
+              <div class="field-group">
+                <label for="client-agency">Agency</label>
+                <select id="client-agency" name="agencyId">
+                  ${renderSelectOptions(agencies, client?.agencyId || "", "Select agency")}
+                </select>
+              </div>
+            ` : ""}
             <div class="field-group">
               <label for="client-name">Client name</label>
               <input id="client-name" name="name" type="text" value="${escapeAttribute(client?.name || "")}" />
@@ -3597,6 +5120,14 @@
                 </select>
               </div>
             </div>
+            <div class="field-group">
+              <label for="client-billing-contact">Billing contact</label>
+              <input id="client-billing-contact" name="billingContact" type="text" value="${escapeAttribute(client?.billingContact || "")}" />
+            </div>
+            <div class="field-group">
+              <label for="client-notes">Notes</label>
+              <textarea id="client-notes" name="notes">${escapeHtml(client?.notes || "")}</textarea>
+            </div>
             <div class="modal-actions">
               <button class="button button-primary" type="submit">Save Client</button>
               <button class="button button-ghost" data-action="close-modal" type="button">Cancel</button>
@@ -3610,6 +5141,7 @@
   function renderSiteFormModal() {
     const site = state.modal.siteId ? getScopedData().sites.find(item => item.id === state.modal.siteId) : null;
     const clients = getScopedData().clients;
+    const agencies = getScopedData().agencies.length ? getScopedData().agencies : state.cache.agencies;
     return `
       <div class="modal">
         <div class="modal-card">
@@ -3622,6 +5154,14 @@
           </div>
           <form class="form-grid" data-form="site-save">
             <input name="id" type="hidden" value="${escapeAttribute(site?.id || "")}" />
+            ${state.session.role === "platformOwner" ? `
+              <div class="field-group">
+                <label for="site-agency">Agency</label>
+                <select id="site-agency" name="agencyId">
+                  ${renderSelectOptions(agencies, site?.agencyId || "", "Select agency")}
+                </select>
+              </div>
+            ` : ""}
             <div class="field-group">
               <label for="site-client">Client</label>
               <select id="site-client" name="clientId">
@@ -3636,6 +5176,30 @@
               <label for="site-address">Address</label>
               <input id="site-address" name="address" type="text" value="${escapeAttribute(site?.address || "")}" />
             </div>
+            <div class="form-row three">
+              <div class="field-group">
+                <label for="site-city">City</label>
+                <input id="site-city" name="city" type="text" value="${escapeAttribute(site?.city || "")}" />
+              </div>
+              <div class="field-group">
+                <label for="site-state">State</label>
+                <input id="site-state" name="state" type="text" value="${escapeAttribute(site?.state || "")}" />
+              </div>
+              <div class="field-group">
+                <label for="site-zip">ZIP</label>
+                <input id="site-zip" name="zip" type="text" value="${escapeAttribute(site?.zip || "")}" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="site-contact">Site contact</label>
+                <input id="site-contact" name="siteContact" type="text" value="${escapeAttribute(site?.siteContact || "")}" />
+              </div>
+              <div class="field-group">
+                <label for="site-phone">Site phone</label>
+                <input id="site-phone" name="sitePhone" type="text" value="${escapeAttribute(site?.sitePhone || "")}" />
+              </div>
+            </div>
             <div class="form-row two">
               <div class="field-group">
                 <label for="site-status">Status</label>
@@ -3648,6 +5212,10 @@
                 <label for="site-qr-url">QR link override</label>
                 <input id="site-qr-url" name="qrCodeUrl" type="text" value="${escapeAttribute(site?.qrCodeUrl || "")}" placeholder="${escapeAttribute(buildSiteLink(site?.id || "site_example"))}" />
               </div>
+            </div>
+            <div class="field-group">
+              <label for="site-notes">Notes</label>
+              <textarea id="site-notes" name="notes">${escapeHtml(site?.notes || "")}</textarea>
             </div>
             <div class="modal-actions">
               <button class="button button-primary" type="submit">Save Site</button>
@@ -3665,6 +5233,7 @@
       return "";
     }
     const payRate = Number(timesheet.payRate || getWorker(timesheet.workerId)?.payRate || 0);
+    const scoped = getScopedData();
     return `
       <div class="modal">
         <div class="modal-card">
@@ -3677,6 +5246,26 @@
           </div>
           <form class="form-grid" data-form="payroll-save">
             <input name="id" type="hidden" value="${escapeAttribute(timesheet.id)}" />
+            <div class="form-row three">
+              <div class="field-group">
+                <label for="timesheet-worker">Worker</label>
+                <select id="timesheet-worker" name="workerId">
+                  ${renderSelectOptions(scoped.workers, timesheet.workerId, "Select worker")}
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="timesheet-client">Client</label>
+                <select id="timesheet-client" name="clientId">
+                  ${renderSelectOptions(scoped.clients, timesheet.clientId, "Select client")}
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="timesheet-site">Site</label>
+                <select id="timesheet-site" name="siteId">
+                  ${renderSelectOptions(scoped.sites, timesheet.siteId, "Select site")}
+                </select>
+              </div>
+            </div>
             <div class="form-row two">
               <div class="field-group">
                 <label for="timesheet-approved-hours">Approved hours</label>
@@ -3710,6 +5299,10 @@
                 <label for="timesheet-admin-notes">Admin notes</label>
                 <textarea id="timesheet-admin-notes" name="adminNotes">${escapeHtml(timesheet.adminNotes || "")}</textarea>
               </div>
+            </div>
+            <div class="field-group">
+              <label for="timesheet-client-notes">Client notes</label>
+              <textarea id="timesheet-client-notes" name="clientNotes">${escapeHtml(timesheet.clientNotes || "")}</textarea>
             </div>
             <div class="modal-actions">
               <button class="button button-primary" type="submit">Save Row</button>
@@ -3864,6 +5457,7 @@
         clientName: getClientName(worker.assignedClientId),
         siteId: worker.assignedSiteId,
         siteName: getSiteName(worker.assignedSiteId),
+        lastPunchId: lastPunch?.id || "",
         lastActionLabel: lastPunch ? PUNCH_LABELS[lastPunch.action] || lastPunch.action : "No punch yet",
         lastPunchTime: lastPunch ? formatDateTime(lastPunch.timestamp) : "-",
         statusLabel: punchState.label,
@@ -3877,7 +5471,7 @@
 
   function buildMarginRows(scoped) {
     return scoped.timesheets.map(timesheet => {
-      const assignment = scoped.assignments.find(item => item.workerId === timesheet.workerId) || null;
+      const assignment = scoped.assignments.find(item => item.id === timesheet.assignmentId) || scoped.assignments.find(item => item.workerId === timesheet.workerId) || null;
       const worker = scoped.workers.find(item => item.id === timesheet.workerId) || null;
       const payRate = Number(timesheet.payRate || assignment?.payRate || worker?.payRate || 0);
       const billRate = Number(assignment?.billRate || 0);
@@ -3889,6 +5483,8 @@
       const grossProfit = revenue - laborCost;
       const marginPercent = revenue ? (grossProfit / revenue) * 100 : 0;
       return {
+        assignmentId: assignment?.id || "",
+        timesheetId: timesheet.id,
         workerName: getWorkerName(timesheet.workerId),
         clientName: getClientName(timesheet.clientId),
         siteName: getSiteName(timesheet.siteId),
@@ -4391,7 +5987,9 @@
       supportEmail: input.supportEmail || DEFAULT_SUPPORT_EMAIL,
       supportPhone: input.supportPhone || DEFAULT_SUPPORT_PHONE,
       payrollContact: input.payrollContact || input.supportEmail || DEFAULT_SUPPORT_EMAIL,
-      defaultPayPeriod: input.defaultPayPeriod || "Weekly"
+      defaultPayPeriod: input.defaultPayPeriod || "Weekly",
+      timezone: input.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York",
+      weekStartDay: input.weekStartDay || "Monday"
     };
   }
 
@@ -4492,6 +6090,29 @@
         <p>${escapeHtml(copy)}</p>
       </div>
     `;
+  }
+
+  function renderSelectOptions(rows, selectedId, placeholder, labelKey = "name") {
+    const optionRows = rows || [];
+    const placeholderOption = placeholder ? `<option value="">${escapeHtml(placeholder)}</option>` : "";
+    const options = optionRows.map(row => {
+      const label = labelKey === "fullName" ? fullName(row) : (row[labelKey] || row.name || fullName(row) || row.id);
+      return `<option value="${escapeAttribute(row.id)}" ${selectedId === row.id ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+    return `${placeholderOption}${options}`;
+  }
+
+  function renderStaticOptions(values, selectedValue, labelBuilder = value => formatStatusLabel(value)) {
+    return values.map(value => `
+      <option value="${escapeAttribute(value)}" ${value === selectedValue ? "selected" : ""}>${escapeHtml(labelBuilder(value))}</option>
+    `).join("");
+  }
+
+  function buildSiteAddress(site) {
+    if (!site) {
+      return "-";
+    }
+    return [site.address, site.city, site.state, site.zip].filter(Boolean).join(", ") || "-";
   }
 
   function renderInlineStatus(value) {
@@ -5233,8 +6854,19 @@
   }
 
   function formatDateInput(value) {
+    if (!value) {
+      return "";
+    }
     const date = value instanceof Date ? value : new Date(value);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+
+  function formatTimeInput(value) {
+    if (!value) {
+      return "";
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
   }
 
   function formatDate(value) {

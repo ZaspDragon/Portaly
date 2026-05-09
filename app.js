@@ -1,2941 +1,5404 @@
-const STORAGE_KEY = "portaly_staffing_saas_demo_v2";
+(() => {
+  "use strict";
 
-const NAV_ITEMS = [
-  { id: "dashboard", label: "Dashboard", badge: "DB" },
-  { id: "agencies", label: "Agencies", badge: "AG" },
-  { id: "clients", label: "Clients", badge: "CL" },
-  { id: "sites", label: "Sites", badge: "SI" },
-  { id: "workers", label: "Workers", badge: "WK" },
-  { id: "assignments", label: "Assignments", badge: "AS" },
-  { id: "timeclock", label: "QR Timeclock", badge: "QR" },
-  { id: "approvals", label: "Client Approvals", badge: "AP" },
-  { id: "payroll", label: "Payroll", badge: "PY" },
-  { id: "margin", label: "Margin Reports", badge: "MR" },
-  { id: "settings", label: "Settings", badge: "ST" }
-];
+  const COLLECTIONS = [
+    "agencies",
+    "users",
+    "clients",
+    "sites",
+    "workers",
+    "assignments",
+    "punches",
+    "timesheets",
+    "approvals",
+    "payrollRuns",
+    "subscriptions",
+    "auditLogs",
+    "settings"
+  ];
 
-const ROLE_LABELS = {
-  super_admin: "Platform Owner",
-  agency_admin: "Agency Admin",
-  client_manager: "Client Manager",
-  worker: "Worker"
-};
+  const STORAGE_KEYS = {
+    demo: "portaly_demo_store_v6",
+    session: "portaly_session_v6",
+    routeNotice: "portaly_route_notice_v6"
+  };
 
-const ROLE_HOME = {
-  super_admin: "agencies",
-  agency_admin: "dashboard",
-  client_manager: "approvals",
-  worker: "timeclock"
-};
+  const DEFAULT_BRAND = "#1f6fff";
+  const DEFAULT_SUPPORT_EMAIL = "support@portaly-demo.com";
+  const DEFAULT_SUPPORT_PHONE = "(800) 555-0199";
+  const BILLING_LOCK_STATUSES = new Set(["past_due", "unpaid", "expired_trial", "canceled"]);
+  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired"]);
+  const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
+  const CLIENT_ROUTES = new Set(["approvals", "help", "billing-required"]);
+  const DEFAULT_APP_URL = `${window.location.origin}${window.location.pathname}`;
 
-const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-
-let state = loadState();
-let toastTimer = 0;
-
-document.addEventListener("DOMContentLoaded", () => {
-  bindEvents();
-  applyUrlParams();
-  normalizeSelections(state);
-  applyTheme();
-  renderShell();
-  renderView();
-});
-
-function loadState() {
-  const seed = buildSeedState();
-  const raw = localStorage.getItem(STORAGE_KEY);
-
-  if (!raw) {
-    return normalizeLoadedState(seed, seed);
-  }
-
-  try {
-    return normalizeLoadedState(JSON.parse(raw), seed);
-  } catch {
-    return normalizeLoadedState(seed, seed);
-  }
-}
-
-function normalizeLoadedState(input, seed) {
-  const merged = {
-    ...seed,
-    ...input,
-    agencies: Array.isArray(input.agencies) && input.agencies.length ? input.agencies : seed.agencies,
-    clients: Array.isArray(input.clients) && input.clients.length ? input.clients : seed.clients,
-    sites: Array.isArray(input.sites) && input.sites.length ? input.sites : seed.sites,
-    workers: Array.isArray(input.workers) && input.workers.length ? input.workers : seed.workers,
-    assignments: Array.isArray(input.assignments) && input.assignments.length ? input.assignments : seed.assignments,
-    punches: Array.isArray(input.punches) && input.punches.length ? input.punches : seed.punches,
-    timesheets: Array.isArray(input.timesheets) && input.timesheets.length ? input.timesheets : seed.timesheets,
-    auditTrail: Array.isArray(input.auditTrail) && input.auditTrail.length ? input.auditTrail : seed.auditTrail,
-    settingsByAgency: {
-      ...seed.settingsByAgency,
-      ...(input.settingsByAgency || {})
+  const ROLE_META = {
+    platformOwner: {
+      label: "Platform Owner",
+      home: "dashboard",
+      badge: "PO"
+    },
+    agencyOwner: {
+      label: "Agency Owner",
+      home: "dashboard",
+      badge: "AO"
+    },
+    agencyAdmin: {
+      label: "Agency Admin",
+      home: "dashboard",
+      badge: "AA"
+    },
+    clientManager: {
+      label: "Client Manager",
+      home: "approvals",
+      badge: "CM"
+    },
+    worker: {
+      label: "Worker",
+      home: "worker-punch",
+      badge: "WK"
     }
   };
 
-  merged.currentView = NAV_ITEMS.some(item => item.id === merged.currentView) ? merged.currentView : seed.currentView;
-  merged.currentRole = ROLE_LABELS[merged.currentRole] ? merged.currentRole : seed.currentRole;
-  merged.punchMessage = merged.punchMessage || seed.punchMessage;
-
-  merged.agencies = merged.agencies.map((agencyRecord, index) => ({
-    ...agencyRecord,
-    code: agencyRecord.code || buildAgencyCode(agencyRecord.name, index)
-  }));
-
-  merged.assignments = merged.assignments.map(record => ({ ...record, active: record.active !== false }));
-  merged.timesheets = merged.timesheets.map(syncTimesheet);
-  normalizeSelections(merged);
-  return merged;
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function buildSeedState() {
-  const currentWeek = toISODate(startOfWeek(new Date()));
-  const previousWeek = toISODate(addDays(parseISODate(currentWeek), -7));
-
-  const agencies = [
-    {
-      id: "agency_1",
-      code: "BRS-1201",
-      name: "BlueRidge Staffing Partners",
-      owner: "Melissa Grant",
-      plan: "Agency",
-      payrollEmail: "payroll@blueridgestaffing.com",
-      supportPhone: "(614) 555-0188"
+  const PLAN_DEFINITIONS = {
+    starter: {
+      id: "starter",
+      name: "Starter",
+      label: "Starter",
+      price: 99,
+      workerLimit: 25,
+      siteLimit: 1,
+      stripePriceId: "STRIPE_PRICE_STARTER",
+      features: ["QR punches", "Basic payroll export", "Up to 25 workers", "1 client site"]
     },
-    {
-      id: "agency_2",
-      code: "HLG-2210",
-      name: "Harbor Labor Group",
-      owner: "Darius Webb",
-      plan: "Growth",
-      payrollEmail: "ops@harborlaborgroup.com",
-      supportPhone: "(502) 555-0140"
+    agency: {
+      id: "agency",
+      name: "Agency",
+      label: "Agency",
+      price: 249,
+      workerLimit: 100,
+      siteLimit: 5,
+      stripePriceId: "STRIPE_PRICE_AGENCY",
+      features: ["Client approvals", "Payroll exports", "Exception alerts", "Up to 100 workers"]
+    },
+    growth: {
+      id: "growth",
+      name: "Growth",
+      label: "Growth",
+      price: 499,
+      workerLimit: null,
+      siteLimit: null,
+      stripePriceId: "STRIPE_PRICE_GROWTH",
+      features: ["Unlimited workers", "Unlimited clients and sites", "White-label branding", "Advanced reports"]
+    },
+    enterprise: {
+      id: "enterprise",
+      name: "Enterprise",
+      label: "Enterprise",
+      price: null,
+      workerLimit: null,
+      siteLimit: null,
+      stripePriceId: "CUSTOM",
+      features: ["Multi-branch agencies", "Custom integrations", "Dedicated onboarding", "Contact sales"]
     }
+  };
+
+  const NAV_ITEMS = [
+    { id: "dashboard", label: "Dashboard", badge: "DB", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
+    { id: "workers", label: "Workers", badge: "WK", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "clients", label: "Clients", badge: "CL", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "sites", label: "Sites", badge: "ST", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "assignments", label: "Assignments", badge: "AS", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "live-punches", label: "Live Punches", badge: "LP", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
+    { id: "approvals", label: "Approvals", badge: "AP", roles: ["platformOwner", "agencyOwner", "agencyAdmin", "clientManager"] },
+    { id: "payroll", label: "Payroll", badge: "PY", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "margin", label: "Margin", badge: "MR", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
+    { id: "exceptions", label: "Problems to Fix", badge: "PF", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
+    { id: "qr-codes", label: "QR Codes", badge: "QR", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "users", label: "Users", badge: "US", roles: ["platformOwner", "agencyOwner"] },
+    { id: "billing", label: "Billing", badge: "BL", roles: ["platformOwner", "agencyOwner"] },
+    { id: "settings", label: "Settings", badge: "SE", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] }
   ];
 
-  const clients = [
-    {
-      id: "client_1",
-      agencyId: "agency_1",
-      name: "NorthPeak Logistics",
-      contactName: "Dana Wilson",
-      contactTitle: "Warehouse Operations Manager",
-      email: "dana.wilson@northpeaklogistics.com"
+  const PUNCH_LABELS = {
+    clockIn: "Clock In",
+    startLunch: "Start Lunch",
+    endLunch: "End Lunch",
+    clockOut: "Clock Out"
+  };
+
+  const QR_PATTERN = [1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0];
+
+  const state = {
+    initialized: false,
+    loading: false,
+    mobileNavOpen: false,
+    route: "landing",
+    selectedPlan: "agency",
+    selectedPayPeriod: "",
+    now: new Date(),
+    notice: loadStoredNotice(),
+    modal: null,
+    toasts: [],
+    pendingLink: null,
+    filters: {
+      liveStatus: "all",
+      liveClient: "all",
+      liveSite: "all"
     },
-    {
-      id: "client_2",
-      agencyId: "agency_1",
-      name: "Summit Fresh Foods",
-      contactName: "Eric Madden",
-      contactTitle: "Distribution Supervisor",
-      email: "eric.madden@summitfresh.com"
+    firebase: {
+      config: window.PORTALY_FIREBASE_CONFIG || {},
+      ready: false,
+      app: null,
+      auth: null,
+      db: null,
+      api: null,
+      stripe: null,
+      error: ""
     },
-    {
-      id: "client_3",
-      agencyId: "agency_2",
-      name: "Apex Retail Distribution",
-      contactName: "Kelly Monroe",
-      contactTitle: "Regional Site Lead",
-      email: "kelly.monroe@apexretail.com"
+    session: {
+      mode: "public",
+      role: null,
+      userId: null,
+      agencyId: null,
+      workerId: null,
+      email: "",
+      name: "Guest",
+      assignedClientIds: [],
+      assignedSiteIds: [],
+      subscriptionStatus: null
+    },
+    authUser: null,
+    demoStore: emptyStore(),
+    cache: emptyStore()
+  };
+
+  window.PortalyApp = {
+    isFirebaseReady,
+    isDemoMode,
+    isCloudMode,
+    saveRecord,
+    addRecord,
+    getRecords,
+    getRecord,
+    updateRecord,
+    deleteRecord,
+    createAuditLog
+  };
+
+  document.addEventListener("DOMContentLoaded", () => {
+    void initializeApp();
+  });
+
+  window.addEventListener("hashchange", () => {
+    void handleHashChange();
+  });
+
+  window.addEventListener("unhandledrejection", event => {
+    if (state.initialized) {
+      console.error(event.reason);
+      pushToast("Something went wrong. Please try again.", "danger");
     }
-  ];
+  });
 
-  const sites = [
-    {
-      id: "site_1",
-      agencyId: "agency_1",
-      clientId: "client_1",
-      name: "NorthPeak East DC",
-      code: "NPL-EAST",
-      address: "3800 Alum Creek Dr, Columbus, OH",
-      shiftProfile: "Day shift"
-    },
-    {
-      id: "site_2",
-      agencyId: "agency_1",
-      clientId: "client_1",
-      name: "NorthPeak Overflow Yard",
-      code: "NPL-OVR",
-      address: "7815 Green Pointe Dr, Groveport, OH",
-      shiftProfile: "Day shift"
-    },
-    {
-      id: "site_3",
-      agencyId: "agency_1",
-      clientId: "client_2",
-      name: "Summit Fresh Cold Storage",
-      code: "SFF-COLD",
-      address: "5151 Commerce Center Dr, Lockbourne, OH",
-      shiftProfile: "Cold chain"
-    },
-    {
-      id: "site_4",
-      agencyId: "agency_2",
-      clientId: "client_3",
-      name: "Apex Retail South Hub",
-      code: "ARD-SOUTH",
-      address: "1450 Logistics Way, Louisville, KY",
-      shiftProfile: "Split shift"
+  window.addEventListener("error", event => {
+    if (state.initialized && event.error) {
+      console.error(event.error);
     }
-  ];
+  });
 
-  const workers = [
-    workerSeed("worker_1", "agency_1", "Mia", "Hernandez", "Forklift Operator", "mia.hernandez@blueridge-demo.com", "(614) 555-0101"),
-    workerSeed("worker_2", "agency_1", "Caleb", "Foster", "Order Selector", "caleb.foster@blueridge-demo.com", "(614) 555-0102"),
-    workerSeed("worker_3", "agency_1", "Jasmine", "Brooks", "Packer", "jasmine.brooks@blueridge-demo.com", "(614) 555-0103"),
-    workerSeed("worker_4", "agency_1", "Terrance", "Lee", "Loader", "terrance.lee@blueridge-demo.com", "(614) 555-0104"),
-    workerSeed("worker_5", "agency_1", "Olivia", "Price", "Inventory Associate", "olivia.price@blueridge-demo.com", "(614) 555-0105"),
-    workerSeed("worker_6", "agency_1", "Andre", "Collins", "Sanitation Lead", "andre.collins@blueridge-demo.com", "(614) 555-0106"),
-    workerSeed("worker_7", "agency_2", "Sofia", "Nguyen", "Reach Truck Operator", "sofia.nguyen@harbor-demo.com", "(502) 555-0107"),
-    workerSeed("worker_8", "agency_2", "Marcus", "Bell", "Shipping Clerk", "marcus.bell@harbor-demo.com", "(502) 555-0108"),
-    workerSeed("worker_9", "agency_2", "Nia", "Turner", "Pallet Sorter", "nia.turner@harbor-demo.com", "(502) 555-0109"),
-    workerSeed("worker_10", "agency_2", "Devonte", "Hayes", "Dock Associate", "devonte.hayes@harbor-demo.com", "(502) 555-0110")
-  ];
+  async function initializeApp() {
+    renderLoading();
+    bindGlobalEvents();
+    state.demoStore = loadDemoStore();
 
-  const assignments = [
-    assignmentSeed("assignment_1", "agency_1", "worker_1", "client_1", "site_1", "Forklift Operator", 19.5, 31, "07:00", "15:30"),
-    assignmentSeed("assignment_2", "agency_1", "worker_2", "client_1", "site_1", "Order Selector", 18, 29, "07:00", "15:30"),
-    assignmentSeed("assignment_3", "agency_1", "worker_3", "client_1", "site_2", "Packer", 18.75, 29.5, "06:30", "15:00"),
-    assignmentSeed("assignment_4", "agency_1", "worker_4", "client_1", "site_2", "Loader", 19, 30, "07:00", "15:30"),
-    assignmentSeed("assignment_5", "agency_1", "worker_5", "client_2", "site_3", "Inventory Control", 20.5, 33, "08:00", "16:30"),
-    assignmentSeed("assignment_6", "agency_1", "worker_6", "client_2", "site_3", "Sanitation Lead", 21.25, 34, "08:00", "16:30"),
-    assignmentSeed("assignment_7", "agency_2", "worker_7", "client_3", "site_4", "Reach Truck Operator", 19.75, 31.5, "06:00", "14:30"),
-    assignmentSeed("assignment_8", "agency_2", "worker_8", "client_3", "site_4", "Shipping Clerk", 18.5, 29, "06:00", "14:30"),
-    assignmentSeed("assignment_9", "agency_2", "worker_9", "client_3", "site_4", "Pallet Sorter", 17.75, 28.5, "14:00", "22:30"),
-    assignmentSeed("assignment_10", "agency_2", "worker_10", "client_3", "site_4", "Dock Associate", 18.25, 29.25, "14:00", "22:30")
-  ];
+    try {
+      await initializeFirebase();
+      const initialCloudUser = state.firebase.ready ? await getInitialAuthUser() : null;
 
-  const timesheets = [
-    createTimesheet("ts_1", "agency_1", "worker_1", "client_1", "site_1", "assignment_1", currentWeek, [8, 8, 8, 8, 6], "approved", "finalized", { approvalNote: "Approved by Dana Wilson." }),
-    createTimesheet("ts_2", "agency_1", "worker_2", "client_1", "site_1", "assignment_2", currentWeek, [8, 8, 8, 8, 8.5], "pending", "ready", {}),
-    createTimesheet("ts_3", "agency_1", "worker_3", "client_1", "site_2", "assignment_3", currentWeek, [8, 8, 7.5, 8, 7.5], "pending", "ready", {
-      manualEdited: true,
-      manualNote: "Agency adjusted Tuesday scan after a scanner battery swap."
-    }),
-    createTimesheet("ts_4", "agency_1", "worker_4", "client_1", "site_2", "assignment_4", currentWeek, [8.5, 8.5, 8.5, 8.5, 8], "approved", "finalized", { approvalNote: "Outbound dock volume verified." }),
-    createTimesheet("ts_5", "agency_1", "worker_5", "client_2", "site_3", "assignment_5", currentWeek, [8, 8, 8, 8, 8], "approved", "ready", { approvalNote: "Client approved for payroll review." }),
-    createTimesheet("ts_6", "agency_1", "worker_6", "client_2", "site_3", "assignment_6", currentWeek, [7.5, 7.5, 7.5, 8, 8], "rejected", "hold", { rejectionNote: "Thursday sanitation hours need dock lead confirmation." }),
-    createTimesheet("ts_7", "agency_2", "worker_7", "client_3", "site_4", "assignment_7", currentWeek, [8, 8, 8, 8, 7], "approved", "finalized", { approvalNote: "Approved by Kelly Monroe." }),
-    createTimesheet("ts_8", "agency_2", "worker_8", "client_3", "site_4", "assignment_8", currentWeek, [8, 8, 8, 8, 8], "pending", "ready", {}),
-    createTimesheet("ts_9", "agency_2", "worker_9", "client_3", "site_4", "assignment_9", currentWeek, [8, 8, 8, 7.5, 7.5], "approved", "finalized", { approvalNote: "PM crew released cleanly." }),
-    createTimesheet("ts_10", "agency_2", "worker_10", "client_3", "site_4", "assignment_10", currentWeek, [8, 8, 8, 8, 8.5], "approved", "finalized", { approvalNote: "Dock closeout approved." }),
-    createTimesheet("ts_11", "agency_1", "worker_1", "client_1", "site_1", "assignment_1", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_12", "agency_1", "worker_2", "client_1", "site_1", "assignment_2", previousWeek, [8, 8, 8, 8, 7.5], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_13", "agency_1", "worker_3", "client_1", "site_2", "assignment_3", previousWeek, [8, 8, 8, 8, 7], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_14", "agency_1", "worker_4", "client_1", "site_2", "assignment_4", previousWeek, [8, 8, 8, 8, 8.5], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_15", "agency_1", "worker_5", "client_2", "site_3", "assignment_5", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_16", "agency_1", "worker_6", "client_2", "site_3", "assignment_6", previousWeek, [8, 8, 8, 8, 7.5], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_17", "agency_2", "worker_7", "client_3", "site_4", "assignment_7", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_18", "agency_2", "worker_8", "client_3", "site_4", "assignment_8", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_19", "agency_2", "worker_9", "client_3", "site_4", "assignment_9", previousWeek, [8, 8, 8, 8, 7.5], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
-    createTimesheet("ts_20", "agency_2", "worker_10", "client_3", "site_4", "assignment_10", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." })
-  ];
+      if (initialCloudUser) {
+        await establishCloudSession(initialCloudUser);
+      } else {
+        restoreStoredSession();
+      }
 
-  const punches = [
-    punchSeed("punch_1", "agency_1", "worker_1", "site_1", "Clock In", makeTimestamp(0, "06:56")),
-    punchSeed("punch_2", "agency_1", "worker_1", "site_1", "Start Lunch", makeTimestamp(0, "11:59")),
-    punchSeed("punch_3", "agency_1", "worker_1", "site_1", "End Lunch", makeTimestamp(0, "12:28")),
-    punchSeed("punch_4", "agency_1", "worker_1", "site_1", "Clock Out", makeTimestamp(0, "15:34")),
-    punchSeed("punch_5", "agency_1", "worker_2", "site_1", "Clock In", makeTimestamp(0, "07:12")),
-    punchSeed("punch_6", "agency_1", "worker_2", "site_1", "Start Lunch", makeTimestamp(0, "12:02")),
-    punchSeed("punch_7", "agency_1", "worker_2", "site_1", "End Lunch", makeTimestamp(0, "12:31")),
-    punchSeed("punch_8", "agency_1", "worker_3", "site_2", "Clock In", makeTimestamp(0, "06:33")),
-    punchSeed("punch_9", "agency_1", "worker_3", "site_2", "Start Lunch", makeTimestamp(0, "11:57")),
-    punchSeed("punch_10", "agency_1", "worker_4", "site_2", "Clock In", makeTimestamp(0, "07:09")),
-    punchSeed("punch_11", "agency_1", "worker_4", "site_2", "Clock In", makeTimestamp(0, "07:12")),
-    punchSeed("punch_12", "agency_1", "worker_4", "site_2", "Clock Out", makeTimestamp(0, "15:21")),
-    punchSeed("punch_13", "agency_1", "worker_5", "site_3", "Clock In", makeTimestamp(0, "08:17")),
-    punchSeed("punch_14", "agency_2", "worker_7", "site_4", "Clock In", makeTimestamp(0, "05:58")),
-    punchSeed("punch_15", "agency_2", "worker_7", "site_4", "Start Lunch", makeTimestamp(0, "10:58")),
-    punchSeed("punch_16", "agency_2", "worker_7", "site_4", "End Lunch", makeTimestamp(0, "11:27")),
-    punchSeed("punch_17", "agency_2", "worker_7", "site_4", "Clock Out", makeTimestamp(0, "14:35")),
-    punchSeed("punch_18", "agency_2", "worker_8", "site_4", "Clock In", makeTimestamp(0, "06:02")),
-    punchSeed("punch_19", "agency_2", "worker_8", "site_4", "Clock Out", makeTimestamp(0, "14:29")),
-    punchSeed("punch_20", "agency_2", "worker_9", "site_4", "Clock In", makeTimestamp(0, "13:58")),
-    punchSeed("punch_21", "agency_2", "worker_10", "site_4", "Clock In", makeTimestamp(0, "14:02")),
-    punchSeed("punch_22", "agency_1", "worker_5", "site_3", "Clock Out", makeTimestamp(-1, "16:31")),
-    punchSeed("punch_23", "agency_1", "worker_6", "site_3", "Clock In", makeTimestamp(-1, "07:58"))
-  ];
+      await applyEntryRoute();
+      await refreshSessionData();
+      normalizeFilters();
+      applyTheme();
+      state.initialized = true;
+      renderApp();
+      startClock();
+    } catch (error) {
+      console.error(error);
+      renderFatalError(error);
+    }
+  }
 
-  const auditTrail = [
-    auditSeed("audit_1", "agency_1", "Timesheet approved", "NorthPeak approved Mia Hernandez for final payroll.", makeTimestamp(0, "15:40"), "Client Manager"),
-    auditSeed("audit_2", "agency_1", "Payroll finalized", "Terrance Lee moved into the final approved queue.", makeTimestamp(0, "16:04"), "Agency Admin"),
-    auditSeed("audit_3", "agency_1", "Manual edit noted", "Jasmine Brooks Tuesday hours were corrected after a scanner battery swap.", makeTimestamp(0, "13:10"), "Agency Admin"),
-    auditSeed("audit_4", "agency_1", "Client rejection", "Summit Fresh sent Andre Collins back for review with a note.", makeTimestamp(0, "12:42"), "Client Manager"),
-    auditSeed("audit_5", "agency_2", "Pay period exported", "Previous-week payroll was exported for Apex Retail.", makeTimestamp(-1, "17:05"), "Agency Admin"),
-    auditSeed("audit_6", "agency_1", "QR link shared", "NorthPeak East DC punch link copied for a supervisor kickoff.", makeTimestamp(-1, "09:11"), "Agency Admin")
-  ];
+  function bindGlobalEvents() {
+    document.addEventListener("click", event => {
+      const trigger = event.target.closest("[data-action]");
+      if (!trigger) {
+        return;
+      }
+      event.preventDefault();
+      void handleAction(trigger);
+    });
 
-  return {
-    currentView: "dashboard",
-    currentRole: "agency_admin",
-    currentAgencyId: "agency_1",
-    currentClientId: "client_1",
-    currentWorkerId: "worker_1",
-    currentWeek,
-    selectedWeekStart: currentWeek,
-    punchSiteId: "site_1",
-    punchMessage: "Ready for the next worker punch.",
-    agencies,
-    clients,
-    sites,
-    workers,
-    assignments,
-    punches,
-    timesheets,
-    auditTrail,
-    settingsByAgency: {
-      agency_1: {
-        agencyName: "BlueRidge Staffing Partners",
-        logoText: "BP",
-        primaryColor: "#1f6fff",
-        payrollContactEmail: "payroll@blueridgestaffing.com",
-        supportPhone: "(614) 555-0188"
-      },
-      agency_2: {
-        agencyName: "Harbor Labor Group",
-        logoText: "HG",
-        primaryColor: "#145bdb",
-        payrollContactEmail: "ops@harborlaborgroup.com",
-        supportPhone: "(502) 555-0140"
+    document.addEventListener("submit", event => {
+      const form = event.target.closest("form[data-form]");
+      if (!form) {
+        return;
+      }
+      event.preventDefault();
+      void handleFormSubmit(form);
+    });
+
+    document.addEventListener("change", event => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      void handleInputChange(target);
+    });
+  }
+
+  async function initializeFirebase() {
+    const config = normalizeFirebaseConfig(window.PORTALY_FIREBASE_CONFIG || {});
+    state.firebase.config = config;
+
+    if (!config.enabled) {
+      return;
+    }
+
+    await waitForFirebaseLayer();
+
+    if (!window.PortalyFirebase) {
+      state.firebase.error = "Firebase browser modules did not load.";
+      return;
+    }
+
+    try {
+      const bridge = window.PortalyFirebase;
+      state.firebase.api = bridge;
+      state.firebase.app = bridge.app || null;
+      state.firebase.auth = bridge.auth || null;
+      state.firebase.db = bridge.db || null;
+      state.firebase.ready = !!bridge.ready;
+      state.firebase.error = bridge.error || "";
+
+      if (config.stripePublishableKey && window.Stripe) {
+        state.firebase.stripe = window.Stripe(config.stripePublishableKey);
+      }
+    } catch (error) {
+      console.error(error);
+      state.firebase.error = error.message || "Unable to initialize Firebase.";
+      state.firebase.ready = false;
+    }
+  }
+
+  function getInitialAuthUser() {
+    return new Promise(resolve => {
+      if (!state.firebase.auth) {
+        resolve(null);
+        return;
+      }
+      const unsubscribe = state.firebase.auth.onAuthStateChanged(user => {
+        unsubscribe();
+        resolve(user || null);
+      });
+    });
+  }
+
+  function waitForFirebaseLayer(timeoutMs = 7000) {
+    if (window.PortalyFirebase && (window.PortalyFirebase.ready || window.PortalyFirebase.error || window.PortalyFirebase.disabled)) {
+      return Promise.resolve(window.PortalyFirebase);
+    }
+
+    return new Promise(resolve => {
+      let done = false;
+      const finish = () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        window.removeEventListener("portaly-firebase-ready", onReady);
+        clearTimeout(timer);
+        resolve(window.PortalyFirebase || null);
+      };
+      const onReady = () => finish();
+      const timer = window.setTimeout(() => finish(), timeoutMs);
+      window.addEventListener("portaly-firebase-ready", onReady, { once: true });
+    });
+  }
+
+  function normalizeFirebaseConfig(config) {
+    const normalized = {
+      ...config,
+      enabled: typeof config.enabled === "boolean" ? config.enabled : !!config.apiKey,
+      trialDays: Number(config.trialDays || 14),
+      appUrl: config.appUrl || DEFAULT_APP_URL,
+      functionsBaseUrl: config.functionsBaseUrl || "",
+      stripePublishableKey: config.stripePublishableKey || "",
+      stripePriceIds: config.stripePriceIds || {}
+    };
+
+    if (!normalized.firebaseConfig) {
+      normalized.firebaseConfig = {
+        apiKey: config.apiKey || "",
+        authDomain: config.authDomain || "",
+        projectId: config.projectId || "",
+        storageBucket: config.storageBucket || "",
+        messagingSenderId: config.messagingSenderId || "",
+        appId: config.appId || "",
+        measurementId: config.measurementId || ""
+      };
+    }
+
+    return normalized;
+  }
+
+  function renderLoading() {
+    const root = document.getElementById("app");
+    if (!root) {
+      return;
+    }
+    root.innerHTML = `
+      <div class="loading-card">
+        <div class="surface-card">
+          <p class="eyebrow">Portaly</p>
+          <h2>Loading your staffing agency workspace</h2>
+          <p>Preparing demo access, cloud auth, worker punch tools, and billing controls.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  async function handleHashChange() {
+    if (!state.initialized) {
+      return;
+    }
+    state.route = normalizeRoute(parseHashRoute());
+    state.mobileNavOpen = false;
+    applyBodyState();
+    renderApp();
+  }
+
+  async function applyEntryRoute() {
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get("mode");
+    const workerId = params.get("workerId");
+    const siteId = params.get("siteId");
+    const hashWorker = parseWorkerHash();
+
+    if (hashWorker) {
+      await handleDirectWorkerRequest(hashWorker);
+      return;
+    }
+
+    if (mode === "worker" && workerId) {
+      await handleDirectWorkerRequest(workerId);
+      return;
+    }
+
+    if (mode === "site" && siteId) {
+      state.notice = "Site QR links work in demo today. For live agencies, pair them with worker sign-in.";
+      storeNotice(state.notice);
+      navigate("demo", { replace: true });
+      return;
+    }
+
+    state.route = normalizeRoute(parseHashRoute());
+    if (!window.location.hash) {
+      navigate(state.route, { replace: true });
+    }
+  }
+
+  async function handleDirectWorkerRequest(workerId) {
+    const scoped = getScopedData();
+    const demoWorker = state.demoStore.workers.find(worker => worker.id === workerId);
+
+    if (state.session.mode === "cloud" && state.session.role === "worker" && state.session.workerId === workerId) {
+      navigate("worker-punch", { replace: true });
+      return;
+    }
+
+    if (demoWorker) {
+      startDemoRole("worker", { workerId });
+      navigate("worker-punch", { replace: true });
+      return;
+    }
+
+    if (state.session.mode === "public") {
+      state.pendingLink = { type: "worker", workerId };
+      state.notice = "This worker link requires a signed-in worker account.";
+      storeNotice(state.notice);
+      navigate("login", { replace: true });
+      return;
+    }
+
+    if (scoped.workers.some(worker => worker.id === workerId)) {
+      navigate("worker-punch", { replace: true });
+      return;
+    }
+
+    state.notice = "We could not match that worker QR link.";
+    storeNotice(state.notice);
+    navigate(getHomeRoute(), { replace: true });
+  }
+
+  function parseHashRoute() {
+    const hash = window.location.hash.replace(/^#\/?/, "").trim();
+    if (!hash) {
+      return getHomeRoute();
+    }
+    if (hash.startsWith("worker/")) {
+      return "worker-punch";
+    }
+    return hash;
+  }
+
+  function parseWorkerHash() {
+    const hash = window.location.hash.replace(/^#\/?/, "").trim();
+    if (!hash.startsWith("worker/")) {
+      return "";
+    }
+    return hash.split("/")[1] || "";
+  }
+
+  function getHomeRoute() {
+    if (state.session.mode === "public" || !state.session.role) {
+      return "landing";
+    }
+    if (isBillingLocked()) {
+      if (state.session.role === "agencyOwner" || state.session.role === "agencyAdmin" || state.session.role === "platformOwner") {
+        return "billing";
+      }
+      return "billing-required";
+    }
+    return ROLE_META[state.session.role].home;
+  }
+
+  function normalizeRoute(route) {
+    const candidate = route || getHomeRoute();
+    const allowed = getAllowedRoutes();
+    if (allowed.has(candidate)) {
+      return candidate;
+    }
+    return getHomeRoute();
+  }
+
+  function getAllowedRoutes() {
+    if (state.session.mode === "public" || !state.session.role) {
+      return PUBLIC_ROUTES;
+    }
+
+    if (state.session.role === "worker") {
+      return WORKER_ROUTES;
+    }
+
+    if (state.session.role === "clientManager") {
+      return CLIENT_ROUTES;
+    }
+
+    if (isBillingLocked()) {
+      return new Set(["billing", "settings", "billing-required"]);
+    }
+
+    return new Set(NAV_ITEMS.filter(item => item.roles.includes(state.session.role)).map(item => item.id));
+  }
+
+  function navigate(route, options = {}) {
+    const target = `#/${route}`;
+    if (options.replace) {
+      window.history.replaceState(null, "", target);
+      state.route = normalizeRoute(route);
+      renderApp();
+      return;
+    }
+
+    if (window.location.hash === target) {
+      state.route = normalizeRoute(route);
+      renderApp();
+      return;
+    }
+
+    window.location.hash = target;
+  }
+
+  function restoreStoredSession() {
+    const raw = safeJsonParse(window.localStorage.getItem(STORAGE_KEYS.session));
+    if (!raw || raw.mode !== "demo" || !raw.role) {
+      setPublicSession();
+      return;
+    }
+    const user = findDemoUserByRole(raw.role, raw.userId, raw.workerId);
+    if (!user) {
+      setPublicSession();
+      return;
+    }
+    state.session = buildSessionFromUser(user, "demo");
+  }
+
+  function persistSession() {
+    if (state.session.mode === "demo") {
+      window.localStorage.setItem(STORAGE_KEYS.session, JSON.stringify({
+        mode: "demo",
+        role: state.session.role,
+        userId: state.session.userId,
+        workerId: state.session.workerId || null
+      }));
+      return;
+    }
+    window.localStorage.removeItem(STORAGE_KEYS.session);
+  }
+
+  function setPublicSession() {
+    state.session = {
+      mode: "public",
+      role: null,
+      userId: null,
+      agencyId: null,
+      workerId: null,
+      email: "",
+      name: "Guest",
+      assignedClientIds: [],
+      assignedSiteIds: [],
+      subscriptionStatus: null
+    };
+    persistSession();
+  }
+
+  async function establishCloudSession(authUser) {
+    state.authUser = authUser;
+    const profile = await loadCloudUserProfile(authUser.uid);
+
+    if (!profile) {
+      pushToast("Your user profile is missing in Firestore.", "danger");
+      setPublicSession();
+      return;
+    }
+
+    state.session = buildSessionFromUser(profile, "cloud");
+    state.session.email = authUser.email || profile.email || "";
+    state.session.name = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || profile.email || "Cloud User";
+
+    if (state.pendingLink && state.pendingLink.type === "worker" && state.session.role === "worker" && state.session.workerId === state.pendingLink.workerId) {
+      navigate("worker-punch", { replace: true });
+      state.pendingLink = null;
+    }
+  }
+
+  async function loadCloudUserProfile(uid) {
+    if (!state.firebase.ready) {
+      return null;
+    }
+    const snapshot = await state.firebase.db.collection("users").doc(uid).get();
+    if (!snapshot.exists) {
+      return null;
+    }
+    return { id: snapshot.id, ...snapshot.data() };
+  }
+
+  function buildSessionFromUser(user, mode) {
+    return {
+      mode,
+      role: user.role,
+      userId: user.id,
+      agencyId: user.agencyId || null,
+      workerId: user.workerId || null,
+      email: user.email || "",
+      name: [user.firstName, user.lastName].filter(Boolean).join(" ") || user.displayName || user.email || ROLE_META[user.role]?.label || "User",
+      assignedClientIds: Array.isArray(user.assignedClientIds) ? user.assignedClientIds : [],
+      assignedSiteIds: Array.isArray(user.assignedSiteIds) ? user.assignedSiteIds : [],
+      subscriptionStatus: null
+    };
+  }
+
+  async function refreshSessionData() {
+    if (state.session.mode === "public" || !state.session.role) {
+      state.cache = emptyStore();
+      applyTheme();
+      return;
+    }
+
+    if (state.session.mode === "demo") {
+      state.demoStore = loadDemoStore();
+      state.cache = deepClone(state.demoStore);
+      syncSubscriptionStatus();
+      applyTheme();
+      return;
+    }
+
+    const collections = collectionsForRole(state.session.role);
+    const results = await Promise.all(collections.map(async collection => {
+      const rows = await getData(collection);
+      return [collection, rows];
+    }));
+
+    state.cache = emptyStore();
+    results.forEach(([collection, rows]) => {
+      state.cache[collection] = rows;
+    });
+
+    syncSubscriptionStatus();
+    applyTheme();
+  }
+
+  function collectionsForRole(role) {
+    if (role === "platformOwner") {
+      return COLLECTIONS.slice();
+    }
+
+    if (role === "worker") {
+      return ["agencies", "users", "clients", "sites", "workers", "punches", "timesheets", "settings"];
+    }
+
+    if (role === "clientManager") {
+      return ["agencies", "users", "clients", "sites", "punches", "timesheets", "approvals", "settings"];
+    }
+
+    return COLLECTIONS.slice();
+  }
+
+  function syncSubscriptionStatus() {
+    const agency = getCurrentAgency();
+    const subscription = getCurrentSubscription();
+    state.session.subscriptionStatus = subscription?.status || (agency ? agency.subscriptionStatus : null);
+  }
+
+  function emptyStore() {
+    return COLLECTIONS.reduce((accumulator, collection) => {
+      accumulator[collection] = [];
+      return accumulator;
+    }, {});
+  }
+
+  async function getData(collection) {
+    if (state.session.mode !== "cloud") {
+      return deepClone(state.demoStore[collection] || []);
+    }
+
+    const db = state.firebase.db;
+    const role = state.session.role;
+    const agencyId = state.session.agencyId;
+    const assignedClientIds = state.session.assignedClientIds || [];
+    const assignedSiteIds = state.session.assignedSiteIds || [];
+
+    if (collection === "agencies") {
+      if (role === "platformOwner") {
+        return mapSnapshot(await db.collection("agencies").get());
+      }
+      if (!agencyId) {
+        return [];
+      }
+      const snapshot = await db.collection("agencies").doc(agencyId).get();
+      return snapshot.exists ? [{ id: snapshot.id, ...snapshot.data() }] : [];
+    }
+
+    if (collection === "users") {
+      if (role === "platformOwner") {
+        return mapSnapshot(await db.collection("users").get());
+      }
+      if (role === "worker") {
+        const snapshot = await db.collection("users").doc(state.session.userId).get();
+        return snapshot.exists ? [{ id: snapshot.id, ...snapshot.data() }] : [];
+      }
+      return mapSnapshot(await db.collection("users").where("agencyId", "==", agencyId).get()).filter(user => {
+        if (role === "clientManager") {
+          return user.id === state.session.userId;
+        }
+        return true;
+      });
+    }
+
+    const baseRows = agencyId
+      ? mapSnapshot(await db.collection(collection).where("agencyId", "==", agencyId).get())
+      : mapSnapshot(await db.collection(collection).get());
+
+    if (role === "platformOwner") {
+      return baseRows;
+    }
+
+    if (role === "worker") {
+      return filterWorkerRows(collection, baseRows);
+    }
+
+    if (role === "clientManager") {
+      return filterClientManagerRows(collection, baseRows, assignedClientIds, assignedSiteIds);
+    }
+
+    return baseRows;
+  }
+
+  function filterWorkerRows(collection, rows) {
+    switch (collection) {
+      case "workers":
+        return rows.filter(row => row.id === state.session.workerId);
+      case "clients":
+        return rows.filter(row => row.id === getCurrentWorker()?.assignedClientId);
+      case "sites":
+        return rows.filter(row => row.id === getCurrentWorker()?.assignedSiteId);
+      case "punches":
+      case "timesheets":
+      case "approvals":
+        return rows.filter(row => row.workerId === state.session.workerId);
+      default:
+        return [];
+    }
+  }
+
+  function filterClientManagerRows(collection, rows, assignedClientIds, assignedSiteIds) {
+    switch (collection) {
+      case "clients":
+        return rows.filter(row => assignedClientIds.includes(row.id));
+      case "sites":
+        return rows.filter(row => assignedSiteIds.includes(row.id));
+      case "workers":
+      case "punches":
+      case "timesheets":
+      case "approvals":
+        return rows.filter(row => assignedClientIds.includes(row.clientId || row.assignedClientId) || assignedSiteIds.includes(row.siteId || row.assignedSiteId));
+      default:
+        return [];
+    }
+  }
+
+  async function saveData(collection, id, data) {
+    const now = new Date().toISOString();
+    const recordId = id || createId(collection);
+    const existing = findRecord(collection, recordId);
+    const payload = {
+      ...existing,
+      ...data,
+      id: recordId,
+      updatedAt: now,
+      createdAt: existing?.createdAt || data.createdAt || now
+    };
+
+    if (state.session.mode === "cloud") {
+      await state.firebase.db.collection(collection).doc(recordId).set(payload, { merge: false });
+    } else {
+      const store = loadDemoStore();
+      const rows = (store[collection] || []).filter(row => row.id !== recordId);
+      rows.push(payload);
+      store[collection] = rows;
+      writeDemoStore(store);
+      state.demoStore = store;
+    }
+
+    return payload;
+  }
+
+  async function updateData(collection, id, data) {
+    const existing = findRecord(collection, id);
+    if (!existing) {
+      return saveData(collection, id, data);
+    }
+    return saveData(collection, id, { ...existing, ...data });
+  }
+
+  async function deleteData(collection, id) {
+    if (state.session.mode === "cloud") {
+      await state.firebase.db.collection(collection).doc(id).delete();
+      return;
+    }
+
+    const store = loadDemoStore();
+    store[collection] = (store[collection] || []).filter(row => row.id !== id);
+    writeDemoStore(store);
+    state.demoStore = store;
+  }
+
+  function isFirebaseReady() {
+    return !!state.firebase.ready;
+  }
+
+  function isDemoMode() {
+    return state.session.mode === "demo";
+  }
+
+  function isCloudMode() {
+    return state.session.mode === "cloud";
+  }
+
+  async function saveRecord(collectionName, id, data) {
+    return saveData(collectionName, id, data);
+  }
+
+  async function addRecord(collectionName, data) {
+    return saveData(collectionName, createId(collectionName), data);
+  }
+
+  async function getRecords(collectionName) {
+    return getData(collectionName);
+  }
+
+  async function getRecord(collectionName, id) {
+    const rows = await getData(collectionName);
+    return rows.find(row => row.id === id) || null;
+  }
+
+  async function updateRecord(collectionName, id, data) {
+    return updateData(collectionName, id, data);
+  }
+
+  async function deleteRecord(collectionName, id) {
+    return deleteData(collectionName, id);
+  }
+
+  async function createAuditLog(action, entityType, entityId, oldValue, newValue) {
+    return appendAuditLog(action, entityType, entityId, oldValue, newValue);
+  }
+
+  function findRecord(collection, id) {
+    const source = state.session.mode === "demo" ? state.demoStore : state.cache;
+    return (source[collection] || []).find(row => row.id === id) || null;
+  }
+
+  function loadDemoStore() {
+    const parsed = safeJsonParse(window.localStorage.getItem(STORAGE_KEYS.demo));
+    if (parsed && COLLECTIONS.every(collection => Array.isArray(parsed[collection]))) {
+      return parsed;
+    }
+    const seed = buildDemoSeed();
+    window.localStorage.setItem(STORAGE_KEYS.demo, JSON.stringify(seed));
+    return seed;
+  }
+
+  function writeDemoStore(store) {
+    window.localStorage.setItem(STORAGE_KEYS.demo, JSON.stringify(store));
+  }
+
+  function resetDemoStore() {
+    const seed = buildDemoSeed();
+    writeDemoStore(seed);
+    state.demoStore = seed;
+    state.cache = deepClone(seed);
+  }
+
+  function findDemoUserByRole(role, userId, workerId) {
+    const users = state.demoStore.users || [];
+    if (role === "worker" && workerId) {
+      const workerUser = users.find(user => user.role === "worker" && user.workerId === workerId);
+      if (workerUser) {
+        return workerUser;
       }
     }
-  };
-}
-
-function workerSeed(id, agencyId, firstName, lastName, title, email, phone) {
-  return {
-    id,
-    agencyId,
-    firstName,
-    lastName,
-    title,
-    email,
-    phone,
-    status: "Active"
-  };
-}
-
-function assignmentSeed(id, agencyId, workerId, clientId, siteId, title, payRate, billRate, shiftStart, shiftEnd) {
-  return {
-    id,
-    agencyId,
-    workerId,
-    clientId,
-    siteId,
-    title,
-    payRate,
-    billRate,
-    shiftStart,
-    shiftEnd,
-    active: true
-  };
-}
-
-function createTimesheet(id, agencyId, workerId, clientId, siteId, assignmentId, weekStart, hours, clientStatus, agencyStatus, extras) {
-  const days = WEEKDAY_LABELS.map((label, index) => ({
-    label,
-    date: toISODate(addDays(parseISODate(weekStart), index)),
-    hours: round2(Number(hours[index] || 0))
-  }));
-
-  const totalHours = round2(days.reduce((sum, day) => sum + day.hours, 0));
-  const regularHours = round2(Math.min(totalHours, 40));
-  const overtimeHours = round2(Math.max(totalHours - 40, 0));
-  const approvedHours = clientStatus === "approved" ? totalHours : 0;
-
-  return syncTimesheet({
-    id,
-    agencyId,
-    workerId,
-    clientId,
-    siteId,
-    assignmentId,
-    weekStart,
-    days,
-    totalHours,
-    regularHours,
-    overtimeHours,
-    approvedHours,
-    clientStatus,
-    agencyStatus,
-    approvalNote: extras.approvalNote || "",
-    rejectionNote: extras.rejectionNote || "",
-    manualEdited: Boolean(extras.manualEdited),
-    manualNote: extras.manualNote || "",
-    updatedAt: new Date().toISOString()
-  });
-}
-
-function punchSeed(id, agencyId, workerId, siteId, type, timestamp) {
-  return {
-    id,
-    agencyId,
-    workerId,
-    siteId,
-    type,
-    timestamp
-  };
-}
-
-function auditSeed(id, agencyId, title, note, timestamp, actor) {
-  return {
-    id,
-    agencyId,
-    title,
-    note,
-    timestamp,
-    actor
-  };
-}
-
-function bindEvents() {
-  const roleSelect = document.getElementById("roleSelect");
-  const agencySelect = document.getElementById("agencySelect");
-  const clientSelect = document.getElementById("clientSelect");
-  const workerSelect = document.getElementById("workerSelect");
-  const menuButton = document.getElementById("menuButton");
-  const mobileOverlay = document.getElementById("mobileOverlay");
-  const resetDemoBtn = document.getElementById("resetDemoBtn");
-
-  roleSelect.addEventListener("change", event => {
-    state.currentRole = event.target.value;
-    state.currentView = ROLE_HOME[state.currentRole] || "dashboard";
-    saveState();
-    renderShell();
-    renderView();
-  });
-
-  agencySelect.addEventListener("change", event => {
-    state.currentAgencyId = event.target.value;
-    normalizeSelections(state);
-    applyTheme();
-    saveState();
-    renderShell();
-    renderView();
-  });
-
-  clientSelect.addEventListener("change", event => {
-    state.currentClientId = event.target.value;
-    saveState();
-    renderShell();
-    renderView();
-  });
-
-  workerSelect.addEventListener("change", event => {
-    state.currentWorkerId = event.target.value;
-    const nextAssignment = activeAssignmentForWorker(state.currentWorkerId);
-    if (nextAssignment) {
-      state.punchSiteId = nextAssignment.siteId;
+    if (userId) {
+      const byId = users.find(user => user.id === userId);
+      if (byId) {
+        return byId;
+      }
     }
-    saveState();
-    renderShell();
-    renderView();
-  });
+    return users.find(user => user.role === role) || null;
+  }
 
-  menuButton.addEventListener("click", toggleMobileMenu);
-  mobileOverlay.addEventListener("click", closeMobileMenu);
-
-  resetDemoBtn.addEventListener("click", () => {
-    state = normalizeLoadedState(buildSeedState(), buildSeedState());
-    localStorage.removeItem(STORAGE_KEY);
-    applyTheme();
-    renderShell();
-    renderView();
-    toast("Demo data reset.");
-  });
-
-  document.addEventListener("click", handleDocumentClick);
-  document.addEventListener("submit", handleSubmit);
-  document.addEventListener("change", handleDocumentChange);
-  window.addEventListener("resize", () => {
-    if (window.innerWidth > 1080) {
-      closeMobileMenu();
+  function startDemoRole(role, options = {}) {
+    const user = findDemoUserByRole(role, null, options.workerId);
+    if (!user) {
+      pushToast("That demo role is not available.", "warning");
+      return;
     }
-  });
-}
-
-function handleDocumentClick(event) {
-  const viewButton = event.target.closest("[data-view]");
-  if (viewButton) {
-    setView(viewButton.dataset.view);
-    return;
+    state.session = buildSessionFromUser(user, "demo");
+    persistSession();
   }
 
-  const punchButton = event.target.closest("[data-punch]");
-  if (punchButton) {
-    createPunch(punchButton.dataset.punch);
-    return;
+  async function handleAction(trigger) {
+    const action = trigger.dataset.action;
+
+    try {
+      switch (action) {
+        case "toggle-nav":
+          state.mobileNavOpen = !state.mobileNavOpen;
+          renderApp();
+          break;
+        case "close-nav":
+          state.mobileNavOpen = false;
+          renderApp();
+          break;
+        case "go-route":
+          navigate(trigger.dataset.route || getHomeRoute());
+          break;
+        case "logout":
+          await handleLogout();
+          break;
+        case "demo-login":
+          startDemoRole(trigger.dataset.role || "agencyOwner", { workerId: trigger.dataset.workerId });
+          await refreshSessionData();
+          navigate(getHomeRoute(), { replace: true });
+          pushToast(`Opened ${ROLE_META[state.session.role].label} demo.`, "success");
+          break;
+        case "reset-demo":
+          if (window.confirm("Reset the demo back to the original sample data?")) {
+            resetDemoStore();
+            if (state.session.mode === "demo") {
+              await refreshSessionData();
+            }
+            pushToast("Demo data reset in this browser.", "success");
+            renderApp();
+          }
+          break;
+        case "open-worker-form":
+          state.modal = { type: "worker-form", workerId: trigger.dataset.workerId || "" };
+          renderApp();
+          break;
+        case "view-worker":
+          state.modal = { type: "worker-view", workerId: trigger.dataset.workerId || "" };
+          renderApp();
+          break;
+        case "worker-history":
+          state.modal = { type: "worker-history", workerId: trigger.dataset.workerId || "" };
+          renderApp();
+          break;
+        case "open-client-form":
+          state.modal = { type: "client-form", clientId: trigger.dataset.clientId || "" };
+          renderApp();
+          break;
+        case "open-site-form":
+          state.modal = { type: "site-form", siteId: trigger.dataset.siteId || "" };
+          renderApp();
+          break;
+        case "open-payroll-edit":
+          state.modal = { type: "payroll-edit", timesheetId: trigger.dataset.timesheetId || "" };
+          renderApp();
+          break;
+        case "open-reject-modal":
+          state.modal = {
+            type: "reject-note",
+            targetType: trigger.dataset.targetType || "timesheet",
+            targetId: trigger.dataset.targetId || ""
+          };
+          renderApp();
+          break;
+        case "close-modal":
+          state.modal = null;
+          renderApp();
+          break;
+        case "approve-timesheet":
+          await approveTimesheet(trigger.dataset.timesheetId || "", "");
+          break;
+        case "reject-timesheet":
+          await rejectTimesheet(trigger.dataset.timesheetId || "", trigger.dataset.note || "");
+          break;
+        case "punch-action":
+          await capturePunch(trigger.dataset.punch || "");
+          break;
+        case "copy-link":
+          await copyText(trigger.dataset.copy || "");
+          break;
+        case "copy-payroll-csv":
+          await copyPayrollCsv(false);
+          break;
+        case "copy-payroll-excel":
+          await copyPayrollCsv(true);
+          break;
+        case "select-plan":
+          state.selectedPlan = trigger.dataset.plan || "agency";
+          renderApp();
+          break;
+        case "start-checkout":
+          await startBillingCheckout(trigger.dataset.plan || state.selectedPlan);
+          break;
+        case "manage-billing":
+          await openBillingPortal();
+          break;
+        case "print-view":
+          window.print();
+          break;
+        case "dismiss-notice":
+          state.notice = "";
+          storeNotice("");
+          renderApp();
+          break;
+        default:
+          break;
+      }
+    } catch (error) {
+      console.error(error);
+      pushToast(error.message || "We hit a snag.", "danger");
+    }
   }
 
-  const copyButton = event.target.closest("[data-copy-link]");
-  if (copyButton) {
-    copyText(copyButton.dataset.copyLink, "Punch link copied.");
-    return;
+  async function handleFormSubmit(form) {
+    const formName = form.dataset.form;
+    const values = readFormValues(form);
+
+    try {
+      switch (formName) {
+        case "login":
+          await submitLogin(values);
+          break;
+        case "forgot-password":
+          await submitForgotPassword(values);
+          break;
+        case "trial":
+          await submitTrialSignup(values);
+          break;
+        case "worker-save":
+          await saveWorkerForm(values);
+          break;
+        case "client-save":
+          await saveClientForm(values);
+          break;
+        case "site-save":
+          await saveSiteForm(values);
+          break;
+        case "payroll-save":
+          await savePayrollForm(values);
+          break;
+        case "settings-save":
+          await saveSettingsForm(values);
+          break;
+        case "reject-note":
+          await submitRejectNote(values);
+          break;
+        default:
+          break;
+      }
+    } catch (error) {
+      console.error(error);
+      pushToast(error.message || "We could not save that change.", "danger");
+    }
   }
 
-  const approveButton = event.target.closest("[data-approve-timesheet]");
-  if (approveButton) {
-    approveTimesheet(approveButton.dataset.approveTimesheet);
-    return;
+  async function handleInputChange(target) {
+    if (target.name === "liveStatus") {
+      state.filters.liveStatus = target.value;
+      renderApp();
+      return;
+    }
+
+    if (target.name === "liveClient") {
+      state.filters.liveClient = target.value;
+      renderApp();
+      return;
+    }
+
+    if (target.name === "liveSite") {
+      state.filters.liveSite = target.value;
+      renderApp();
+      return;
+    }
+
+    if (target.name === "payPeriod") {
+      state.selectedPayPeriod = target.value;
+      renderApp();
+      return;
+    }
+
+    if (target.name === "primaryColor") {
+      applyTheme(target.value || DEFAULT_BRAND);
+    }
   }
 
-  const rejectButton = event.target.closest("[data-reject-timesheet]");
-  if (rejectButton) {
-    rejectTimesheet(rejectButton.dataset.rejectTimesheet);
-    return;
+  async function handleLogout() {
+    state.modal = null;
+    state.mobileNavOpen = false;
+    if (state.session.mode === "cloud" && state.firebase.ready) {
+      await state.firebase.auth.signOut();
+      state.authUser = null;
+    }
+    setPublicSession();
+    state.cache = emptyStore();
+    navigate("landing", { replace: true });
+    pushToast("You are signed out.", "success");
   }
 
-  const finalizeButton = event.target.closest("[data-finalize-timesheet]");
-  if (finalizeButton) {
-    finalizeTimesheet(finalizeButton.dataset.finalizeTimesheet);
-    return;
+  async function submitLogin(values) {
+    if (!state.firebase.ready) {
+      throw new Error("Cloud Mode is not configured yet. Use Demo Mode until Firebase is enabled.");
+    }
+
+    if (!values.email || !values.password) {
+      throw new Error("Enter your email and password.");
+    }
+
+    const result = await state.firebase.auth.signInWithEmailAndPassword(values.email, values.password);
+    await establishCloudSession(result.user);
+    await refreshSessionData();
+    persistSession();
+
+    if (state.pendingLink && state.pendingLink.type === "worker" && state.session.role === "worker" && state.session.workerId === state.pendingLink.workerId) {
+      state.pendingLink = null;
+      navigate("worker-punch", { replace: true });
+      pushToast("Welcome back. Your punch screen is ready.", "success");
+      return;
+    }
+
+    navigate(getHomeRoute(), { replace: true });
+    pushToast(`Logged in as ${ROLE_META[state.session.role].label}.`, "success");
   }
 
-  const exportButton = event.target.closest("[data-export]");
-  if (exportButton) {
-    const exportMode = exportButton.dataset.export;
-    if (exportMode === "csv") exportPayrollCsv(false);
-    if (exportMode === "excel") exportPayrollCsv(true);
-    if (exportMode === "pdf") exportPayrollPdf();
-  }
-}
+  async function submitForgotPassword(values) {
+    if (!state.firebase.ready) {
+      throw new Error("Cloud Mode is not configured yet. Add Firebase first.");
+    }
 
-function handleDocumentChange(event) {
-  if (event.target.id === "payrollWeekSelect") {
-    state.selectedWeekStart = event.target.value;
-    saveState();
-    renderView();
+    if (!values.email) {
+      throw new Error("Enter the email address for the account.");
+    }
+
+    await state.firebase.auth.sendPasswordResetEmail(values.email);
+    pushToast("Password reset email sent.", "success");
+    navigate("login", { replace: true });
   }
 
-  if (event.target.id === "timeclockSiteSelect") {
-    state.punchSiteId = event.target.value;
-    saveState();
+  async function submitTrialSignup(values) {
+    if (!state.firebase.ready) {
+      throw new Error("Cloud Mode is not configured yet. Add your Firebase config first.");
+    }
+
+    const required = ["agencyName", "ownerFirstName", "ownerLastName", "email", "phone", "password", "confirmPassword", "selectedPlan"];
+    required.forEach(field => {
+      if (!values[field]) {
+        throw new Error("Please complete every required field.");
+      }
+    });
+
+    if (values.password !== values.confirmPassword) {
+      throw new Error("Passwords do not match.");
+    }
+
+    const selectedPlan = values.selectedPlan;
+    const trialDays = Number((state.firebase.config && state.firebase.config.trialDays) || 14);
+    const trialStart = new Date();
+    const trialEnd = addDays(trialStart, trialDays);
+    const agencyId = createId("agency");
+    const authResult = await state.firebase.auth.createUserWithEmailAndPassword(values.email, values.password);
+    const uid = authResult.user.uid;
+
+    const agencyDoc = {
+      id: agencyId,
+      name: values.agencyName,
+      ownerUserId: uid,
+      planId: selectedPlan,
+      subscriptionStatus: "trialing",
+      trialStart: trialStart.toISOString(),
+      trialEnd: trialEnd.toISOString(),
+      stripeCustomerId: "",
+      stripeSubscriptionId: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      settings: buildAgencySettings({
+        agencyName: values.agencyName,
+        logoInitials: initials(values.agencyName),
+        primaryColor: DEFAULT_BRAND,
+        supportEmail: values.email,
+        supportPhone: values.phone,
+        payrollContact: values.email,
+        defaultPayPeriod: "Weekly"
+      })
+    };
+
+    const userDoc = {
+      id: uid,
+      agencyId,
+      role: "agencyOwner",
+      firstName: values.ownerFirstName,
+      lastName: values.ownerLastName,
+      email: values.email,
+      phone: values.phone,
+      status: "active",
+      assignedClientIds: [],
+      assignedSiteIds: [],
+      workerId: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    const settingDoc = {
+      id: createId("setting"),
+      agencyId,
+      ...agencyDoc.settings,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    const subscriptionDoc = {
+      id: createId("subscription"),
+      agencyId,
+      stripeCustomerId: "",
+      stripeSubscriptionId: "",
+      planId: selectedPlan,
+      status: "trialing",
+      currentPeriodStart: "",
+      currentPeriodEnd: "",
+      trialStart: trialStart.toISOString(),
+      trialEnd: trialEnd.toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    const batch = state.firebase.db.batch();
+    batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
+    batch.set(state.firebase.db.collection("users").doc(uid), userDoc);
+    batch.set(state.firebase.db.collection("settings").doc(settingDoc.id), settingDoc);
+    batch.set(state.firebase.db.collection("subscriptions").doc(subscriptionDoc.id), subscriptionDoc);
+    await batch.commit();
+
+    if (values.loadSampleData === "on") {
+      await loadSampleDataIntoCloud(agencyId, uid, values.agencyName, selectedPlan);
+    }
+
+    await establishCloudSession(authResult.user);
+    await refreshSessionData();
+    navigate("trial-success", { replace: true });
+    pushToast("Your 14-day free trial is ready.", "success");
   }
-}
 
-function handleSubmit(event) {
-  event.preventDefault();
+  async function loadSampleDataIntoCloud(agencyId, ownerUserId, agencyName, planId) {
+    const bundle = buildCloudSampleBundle({
+      agencyId,
+      ownerUserId,
+      agencyName,
+      planId
+    });
 
-  const formId = event.target.id;
-  const data = new FormData(event.target);
+    const batch = state.firebase.db.batch();
+    Object.entries(bundle).forEach(([collection, rows]) => {
+      if (["agencies", "settings", "subscriptions"].includes(collection)) {
+        return;
+      }
+      rows.forEach(row => {
+        batch.set(state.firebase.db.collection(collection).doc(row.id), row);
+      });
+    });
+    await batch.commit();
+  }
 
-  if (formId === "agencyForm") addAgency(data);
-  if (formId === "clientForm") addClient(data);
-  if (formId === "siteForm") addSite(data);
-  if (formId === "workerForm") addWorker(data);
-  if (formId === "assignmentForm") addAssignment(data);
-  if (formId === "settingsForm") saveSettings(data);
-}
+  async function saveWorkerForm(values) {
+    const workerId = values.id || createId("worker");
+    const existing = findRecord("workers", workerId);
+    const willBeActive = values.status !== "inactive";
+    enforcePlanLimit("worker", willBeActive, existing);
 
-function setView(view) {
-  if (!NAV_ITEMS.some(item => item.id === view)) return;
-  state.currentView = view;
-  saveState();
-  renderShell();
-  renderView();
-  closeMobileMenu();
-}
+    const worker = {
+      agencyId: state.session.agencyId,
+      firstName: values.firstName || "",
+      lastName: values.lastName || "",
+      phone: values.phone || "",
+      email: values.email || "",
+      payRate: Number(values.payRate || 0),
+      status: values.status || "active",
+      assignedClientId: values.assignedClientId || "",
+      assignedSiteId: values.assignedSiteId || "",
+      userId: existing?.userId || ""
+    };
 
-function renderShell() {
-  const roleSelect = document.getElementById("roleSelect");
-  const agencySelect = document.getElementById("agencySelect");
-  const clientSelect = document.getElementById("clientSelect");
-  const workerSelect = document.getElementById("workerSelect");
-  const nav = document.getElementById("nav");
-  const contextLabel = document.getElementById("contextLabel");
-  const pageTitle = document.getElementById("pageTitle");
-  const brandMark = document.getElementById("brandMark");
-  const brandCopy = document.querySelector(".brand-copy");
+    await saveData("workers", workerId, worker);
+    await syncTimesheetPayRates(workerId, worker.payRate);
+    await appendAuditLog("worker_saved", "workers", workerId, existing, worker);
+    await refreshSessionData();
+    state.modal = null;
+    pushToast(existing ? "Worker updated." : "Worker added.", "success");
+    renderApp();
+  }
 
-  roleSelect.innerHTML = Object.entries(ROLE_LABELS)
-    .map(([value, label]) => `<option value="${safe(value)}">${safe(label)}</option>`)
-    .join("");
-  roleSelect.value = state.currentRole;
+  async function syncTimesheetPayRates(workerId, payRate) {
+    const timesheets = getScopedData().timesheets.filter(timesheet => timesheet.workerId === workerId);
+    await Promise.all(timesheets.map(timesheet => updateData("timesheets", timesheet.id, { payRate })));
+  }
 
-  agencySelect.innerHTML = state.agencies
-    .map(agencyRecord => `<option value="${safe(agencyRecord.id)}">${safe(agencyRecord.code)} - ${safe(agencyRecord.name)}</option>`)
-    .join("");
-  agencySelect.value = state.currentAgencyId;
+  async function saveClientForm(values) {
+    const clientId = values.id || createId("client");
+    const existing = findRecord("clients", clientId);
+    const client = {
+      agencyId: state.session.agencyId,
+      name: values.name || "",
+      contactName: values.contactName || "",
+      contactEmail: values.contactEmail || "",
+      phone: values.phone || "",
+      status: values.status || "active"
+    };
+    await saveData("clients", clientId, client);
+    await appendAuditLog("client_saved", "clients", clientId, existing, client);
+    await refreshSessionData();
+    state.modal = null;
+    pushToast(existing ? "Client updated." : "Client added.", "success");
+    renderApp();
+  }
 
-  clientSelect.innerHTML = clientsForCurrentAgency()
-    .map(clientRecord => `<option value="${safe(clientRecord.id)}">${safe(clientRecord.name)}</option>`)
-    .join("");
-  clientSelect.value = state.currentClientId;
+  async function saveSiteForm(values) {
+    const siteId = values.id || createId("site");
+    const existing = findRecord("sites", siteId);
+    const willBeActive = values.status !== "inactive";
+    enforcePlanLimit("site", willBeActive, existing);
 
-  workerSelect.innerHTML = workersForCurrentAgency()
-    .map(workerRecord => `<option value="${safe(workerRecord.id)}">${safe(fullWorkerName(workerRecord.id))}</option>`)
-    .join("");
-  workerSelect.value = state.currentWorkerId;
+    const site = {
+      agencyId: state.session.agencyId,
+      clientId: values.clientId || "",
+      name: values.name || "",
+      address: values.address || "",
+      qrCodeUrl: values.qrCodeUrl || "",
+      status: values.status || "active"
+    };
+    await saveData("sites", siteId, site);
+    await appendAuditLog("site_saved", "sites", siteId, existing, site);
+    await refreshSessionData();
+    state.modal = null;
+    pushToast(existing ? "Site updated." : "Site added.", "success");
+    renderApp();
+  }
 
-  nav.innerHTML = NAV_ITEMS.map(item => `
-    <button class="nav-button ${state.currentView === item.id ? "active" : ""}" data-view="${safe(item.id)}" type="button">
-      <span class="nav-badge">${safe(item.badge)}</span>
-      <span>${safe(item.label)}</span>
-    </button>
-  `).join("");
+  async function savePayrollForm(values) {
+    const existing = findRecord("timesheets", values.id);
+    if (!existing) {
+      throw new Error("That timesheet could not be found.");
+    }
 
-  const page = NAV_ITEMS.find(item => item.id === state.currentView);
-  const settings = currentAgencySettings();
+    const updated = {
+      approvedHours: Number(values.approvedHours || 0),
+      regularHours: Number(values.regularHours || 0),
+      overtimeHours: Number(values.overtimeHours || 0),
+      payRate: Number(values.payRate || 0),
+      status: values.status || existing.status,
+      adminNotes: values.adminNotes || ""
+    };
 
-  brandMark.textContent = (settings.logoText || initials(currentAgency()?.name || "Portaly", 2)).slice(0, 3).toUpperCase();
-  brandCopy.textContent = `${settings.agencyName || currentAgency()?.name || "Agency workspace"} demo workspace`;
-  pageTitle.textContent = page ? page.label : "Dashboard";
-  contextLabel.textContent = renderContextLabel();
-}
+    await updateData("timesheets", existing.id, updated);
+    await appendAuditLog("timesheet_edited", "timesheets", existing.id, existing, updated);
+    await refreshSessionData();
+    state.modal = null;
+    pushToast("Payroll row updated.", "success");
+    renderApp();
+  }
 
-function renderView() {
-  const view = document.getElementById("view");
-  const renderers = {
-    dashboard: dashboardView,
-    agencies: agenciesView,
-    clients: clientsView,
-    sites: sitesView,
-    workers: workersView,
-    assignments: assignmentsView,
-    timeclock: timeclockView,
-    approvals: approvalsView,
-    payroll: payrollView,
-    margin: marginView,
-    settings: settingsView
-  };
+  async function saveSettingsForm(values) {
+    const settingsRecord = getCurrentSettings();
+    const agency = getCurrentAgency();
+    const nextSettings = buildAgencySettings({
+      agencyName: values.agencyName || agency?.name || "Portaly Agency",
+      logoInitials: values.logoInitials || initials(values.agencyName || agency?.name || "Portaly"),
+      primaryColor: values.primaryColor || DEFAULT_BRAND,
+      supportEmail: values.supportEmail || DEFAULT_SUPPORT_EMAIL,
+      supportPhone: values.supportPhone || DEFAULT_SUPPORT_PHONE,
+      payrollContact: values.payrollContact || values.supportEmail || DEFAULT_SUPPORT_EMAIL,
+      defaultPayPeriod: values.defaultPayPeriod || "Weekly"
+    });
 
-  view.innerHTML = (renderers[state.currentView] || dashboardView)();
-}
+    if (agency) {
+      await updateData("agencies", agency.id, {
+        name: nextSettings.agencyName,
+        settings: nextSettings
+      });
+    }
 
-function dashboardView() {
-  const metrics = dashboardMetrics();
-  const exceptions = buildExceptions().slice(0, 6);
-  const recent = recentActivity().slice(0, 6);
-  const settings = currentAgencySettings();
+    if (settingsRecord) {
+      await updateData("settings", settingsRecord.id, nextSettings);
+    } else {
+      await saveData("settings", createId("setting"), {
+        agencyId: state.session.agencyId,
+        ...nextSettings
+      });
+    }
 
-  return `
-    <section class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Portaly</p>
-        <h3>QR Timeclock &amp; Agency Operations Platform</h3>
-        <p>Track worker punches, client approvals, payroll exports, and gross margin from one clean dashboard.</p>
-        <div class="hero-actions">
-          <button class="button button-primary" data-view="dashboard" type="button">Try Demo</button>
-          <button class="button button-secondary" data-view="timeclock" type="button">Open Worker Punch</button>
-          <button class="button button-ghost" data-view="payroll" type="button">View Payroll Workflow</button>
+    await appendAuditLog("settings_saved", "settings", settingsRecord?.id || "new", settingsRecord, nextSettings);
+    await refreshSessionData();
+    applyTheme(nextSettings.primaryColor);
+    pushToast("Settings saved.", "success");
+    renderApp();
+  }
+
+  async function submitRejectNote(values) {
+    if (!state.modal) {
+      return;
+    }
+    if (state.modal.targetType === "timesheet") {
+      await rejectTimesheet(state.modal.targetId, values.note || "");
+    }
+  }
+
+  async function approveTimesheet(timesheetId, note) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      throw new Error("That timesheet could not be found.");
+    }
+
+    const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === timesheetId);
+    const updated = {
+      status: "approved",
+      approvedAt: new Date().toISOString(),
+      approvedBy: state.session.userId,
+      adminNotes: note || timesheet.adminNotes || ""
+    };
+
+    await updateData("timesheets", timesheetId, updated);
+    if (approvalRecord) {
+      await updateData("approvals", approvalRecord.id, {
+        status: "approved",
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: state.session.userId,
+        note: note || approvalRecord.note || ""
+      });
+    }
+    await appendAuditLog("timesheet_approved", "timesheets", timesheetId, timesheet, updated);
+    await refreshSessionData();
+    state.modal = null;
+    pushToast("Timesheet approved.", "success");
+    renderApp();
+  }
+
+  async function rejectTimesheet(timesheetId, note) {
+    if (!note) {
+      throw new Error("Please add a rejection note.");
+    }
+
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      throw new Error("That timesheet could not be found.");
+    }
+
+    const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === timesheetId);
+    const updated = {
+      status: "rejected",
+      approvedAt: new Date().toISOString(),
+      approvedBy: state.session.userId,
+      adminNotes: note
+    };
+
+    await updateData("timesheets", timesheetId, updated);
+    if (approvalRecord) {
+      await updateData("approvals", approvalRecord.id, {
+        status: "rejected",
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: state.session.userId,
+        note
+      });
+    }
+    await appendAuditLog("timesheet_rejected", "timesheets", timesheetId, timesheet, updated);
+    await refreshSessionData();
+    state.modal = null;
+    pushToast("Timesheet rejected with note.", "warning");
+    renderApp();
+  }
+
+  async function capturePunch(action) {
+    if (!action) {
+      return;
+    }
+
+    const worker = getCurrentWorker();
+    if (!worker) {
+      throw new Error("No worker is selected.");
+    }
+
+    const assignment = getAssignmentsForWorker(worker.id)[0];
+    const punchState = getWorkerPunchState(worker.id, getScopedData());
+    if (!punchState.allowed[action]) {
+      throw new Error("That punch action is not available right now.");
+    }
+
+    const timestamp = new Date().toISOString();
+    const punch = {
+      agencyId: worker.agencyId,
+      workerId: worker.id,
+      workerName: fullName(worker),
+      assignmentId: assignment?.id || "",
+      clientId: worker.assignedClientId || assignment?.clientId || "",
+      clientName: getClientName(worker.assignedClientId || assignment?.clientId || ""),
+      siteId: worker.assignedSiteId || assignment?.siteId || "",
+      siteName: getSiteName(worker.assignedSiteId || assignment?.siteId || ""),
+      action,
+      timestamp,
+      source: state.session.mode === "cloud" ? "cloud" : "demo",
+      createdBy: state.session.userId || worker.userId || "demo-worker",
+      edited: false,
+      notes: ""
+    };
+
+    await saveData("punches", createId("punch"), punch);
+    await appendAuditLog("punch_captured", "punches", punch.id || "new", null, punch);
+    await refreshSessionData();
+
+    const messageMap = {
+      clockIn: "You are clocked in",
+      startLunch: "Lunch started",
+      endLunch: "Lunch ended",
+      clockOut: "You are clocked out"
+    };
+
+    state.notice = `${messageMap[action]} at ${formatDateTime(timestamp)}.`;
+    storeNotice(state.notice);
+    pushToast(`${PUNCH_LABELS[action]} saved.`, "success");
+    renderApp();
+  }
+
+  function enforcePlanLimit(entityType, willBeActive, existingRecord) {
+    if (!willBeActive) {
+      return;
+    }
+
+    const scoped = getScopedData();
+    const agency = getCurrentAgency();
+    const plan = getPlanDefinition(agency?.planId || "agency");
+    const usage = getUsageStats(scoped, agency?.id);
+
+    if (entityType === "worker" && !existingRecord && plan.workerLimit !== null && usage.activeWorkers >= plan.workerLimit) {
+      throw new Error(`You have reached the ${plan.label} worker limit. Upgrade the plan to add more workers.`);
+    }
+
+    if (entityType === "site" && !existingRecord && plan.siteLimit !== null && usage.activeSites >= plan.siteLimit) {
+      throw new Error(`You have reached the ${plan.label} site limit. Upgrade the plan to add more sites.`);
+    }
+  }
+
+  async function appendAuditLog(action, entityType, entityId, oldValue, newValue) {
+    if (!state.session.role || state.session.mode === "public") {
+      return;
+    }
+    const audit = {
+      agencyId: state.session.agencyId || "",
+      userId: state.session.userId || "",
+      role: state.session.role || "",
+      action,
+      entityType,
+      entityId,
+      oldValue: oldValue || null,
+      newValue: newValue || null,
+      timestamp: new Date().toISOString()
+    };
+    await saveData("auditLogs", createId("audit"), audit);
+  }
+
+  async function startBillingCheckout(planId) {
+    const plan = getPlanDefinition(planId);
+    if (!plan || plan.id === "enterprise") {
+      window.location.href = "mailto:sales@portaly-demo.com?subject=Portaly%20Enterprise%20Plan";
+      return;
+    }
+
+    if (state.session.mode !== "cloud") {
+      pushToast("Billing is disabled in Demo Mode. Open Cloud Mode to test real subscriptions.", "warning");
+      return;
+    }
+
+    if (!state.firebase.config.functionsBaseUrl) {
+      throw new Error("Add your Functions base URL in firebase-config.js first.");
+    }
+
+    const response = await authenticatedPost("/createCheckoutSession", {
+      planId,
+      trialDays: getTrialDaysRemaining()
+    });
+
+    if (response.url) {
+      window.location.href = response.url;
+      return;
+    }
+
+    if (response.checkoutUrl) {
+      window.location.href = response.checkoutUrl;
+      return;
+    }
+
+    throw new Error("Checkout session did not return a URL.");
+  }
+
+  async function openBillingPortal() {
+    if (state.session.mode !== "cloud") {
+      pushToast("Billing is disabled in Demo Mode.", "warning");
+      return;
+    }
+
+    if (!state.firebase.config.functionsBaseUrl) {
+      throw new Error("Add your Functions base URL in firebase-config.js first.");
+    }
+
+    const response = await authenticatedPost("/createBillingPortalSession", {});
+    if (response.url) {
+      window.location.href = response.url;
+      return;
+    }
+
+    throw new Error("Billing portal did not return a URL.");
+  }
+
+  async function authenticatedPost(path, payload) {
+    const user = state.firebase.auth.currentUser;
+    if (!user) {
+      throw new Error("You need to log in again before opening billing.");
+    }
+
+    const token = await user.getIdToken();
+    const base = (state.firebase.config.functionsBaseUrl || "").replace(/\/$/, "");
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload || {})
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body.error || `Request failed with status ${response.status}.`);
+    }
+    return body;
+  }
+
+  function renderApp() {
+    const root = document.getElementById("app");
+    if (!root) {
+      return;
+    }
+
+    state.route = normalizeRoute(state.route || parseHashRoute());
+    applyBodyState();
+
+    let html = "";
+    if (state.session.role === "worker" && state.session.mode !== "public") {
+      html = renderWorkerShell();
+    } else if (state.session.mode === "public" || !state.session.role) {
+      html = renderPublicShell();
+    } else {
+      html = renderOwnerShell();
+    }
+
+    root.innerHTML = html + renderModal();
+    renderToasts();
+  }
+
+  function applyBodyState() {
+    document.body.classList.toggle("nav-open", !!state.mobileNavOpen);
+    document.body.dataset.layout = getLayoutMode();
+  }
+
+  function getLayoutMode() {
+    if (state.session.role === "worker" && state.session.mode !== "public") {
+      return "worker";
+    }
+    if (state.session.mode === "public" || !state.session.role) {
+      return "public";
+    }
+    return "app";
+  }
+
+  function renderPublicShell() {
+    return `
+      <div class="public-root">
+        ${renderMarketingHeader()}
+        ${renderPublicPage()}
+        ${renderMarketingFooter()}
+      </div>
+    `;
+  }
+
+  function renderMarketingHeader() {
+    return `
+      <header class="marketing-header">
+        <div class="container marketing-nav">
+          <div class="marketing-brand">
+            <div class="brand-mark">${escapeHtml(getBrandInitials())}</div>
+            <div>
+              <p class="eyebrow">Staffing Agency Platform</p>
+              <h1>${escapeHtml(getBrandName())}</h1>
+            </div>
+          </div>
+          <div class="marketing-links">
+            <button class="marketing-link" data-action="go-route" data-route="landing" type="button">How It Works</button>
+            <button class="marketing-link" data-action="go-route" data-route="pricing" type="button">Pricing</button>
+            <button class="marketing-link" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+            <button class="marketing-link" data-action="go-route" data-route="login" type="button">Login</button>
+          </div>
+          <div class="marketing-actions">
+            <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+            <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+          </div>
         </div>
-        <div class="hero-proof">
-          <span class="tiny-pill">${safe(settings.agencyName || currentAgency()?.name || "Agency")}</span>
-          <span class="tiny-pill">${safe(metrics.activeSitesLabel)}</span>
-          <span class="tiny-pill">${safe(metrics.readyHoursLabel)}</span>
+      </header>
+    `;
+  }
+
+  function renderPublicPage() {
+    switch (state.route) {
+      case "pricing":
+        return renderMarketingLanding(true);
+      case "demo":
+        return renderDemoAccessHub();
+      case "login":
+        return renderLoginPage();
+      case "forgot-password":
+        return renderForgotPasswordPage();
+      case "trial":
+        return renderTrialPage();
+      case "trial-success":
+        return renderTrialSuccessPage();
+      case "trial-expired":
+        return renderTrialExpiredPage();
+      case "billing-required":
+        return renderPublicBillingRequired();
+      case "landing":
+      default:
+        return renderMarketingLanding(false);
+    }
+  }
+
+  function renderMarketingLanding(focusPricing) {
+    const planCards = Object.values(PLAN_DEFINITIONS).map(plan => renderPricingCard(plan, focusPricing && plan.id === state.selectedPlan)).join("");
+    return `
+      <main class="hero-shell">
+        <section class="section">
+          <div class="container hero-grid">
+            <div class="hero-copy">
+              <p class="eyebrow">QR Timeclock & Staffing Agency Operations Platform</p>
+              <h2>QR Timeclock & Staffing Agency Operations Platform</h2>
+              <p>Track worker punches, client approvals, payroll exports, and gross margin from one clean platform.</p>
+              <div class="hero-actions">
+                <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+                <button class="button button-secondary button-large" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+                <button class="button button-ghost button-large" data-action="go-route" data-route="login" type="button">Login</button>
+                <button class="button button-ghost button-large" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
+              </div>
+              <div class="hero-stat-grid">
+                ${renderHeroStat("14-day trial", "Create a real agency account and start in Cloud Mode.")}
+                ${renderHeroStat("Open demo", "Walk through owner, client, and worker roles with sample data.")}
+                ${renderHeroStat("Worker-first UX", "Clock in and out in seconds from a simple kiosk screen.")}
+              </div>
+            </div>
+            <div class="hero-panel">
+              <p class="eyebrow">How It Works</p>
+              <div class="hero-flow">
+                ${renderFlowStep(1, "Workers punch with QR or login", "Keep clock in, lunch, and clock out simple on phone or kiosk.")}
+                ${renderFlowStep(2, "Clients approve hours", "Client managers review submitted labor without seeing pay or margin data.")}
+                ${renderFlowStep(3, "Admins export payroll", "Edit timesheets, export CSV, and review exceptions in one place.")}
+                ${renderFlowStep(4, "Owners watch margin", "See revenue, labor cost, and gross profit by worker, client, and site.")}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Built for Staffing Agencies</p>
+                <h2 class="section-title">Built for staffing agencies that still chase paper timecards</h2>
+              </div>
+              <p class="section-copy">Portaly gives owners, payroll teams, client approvers, and workers separate experiences that still stay connected.</p>
+            </div>
+            <div class="feature-grid">
+              ${renderFeatureCard("QR worker punches", "Clock in and out from a mobile-first punch screen with clear status and recent history.")}
+              ${renderFeatureCard("Client approvals", "Route submitted hours to client managers without exposing pay rate or margin details.")}
+              ${renderFeatureCard("Payroll export", "Review weekly time, edit payroll rows, and export CSV from one clean queue.")}
+              ${renderFeatureCard("Gross margin visibility", "Track pay rate, bill rate, revenue, labor cost, and gross profit by assignment.")}
+              ${renderFeatureCard("Multi-site tracking", "Manage agencies with multiple clients, sites, and assignment flows from one workspace.")}
+              ${renderFeatureCard("Audit trail", "Keep a history of punches, payroll edits, approvals, and manual changes.")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container info-grid">
+            <div class="surface-card">
+              <p class="eyebrow">Worker QR Clock-In</p>
+              <h2 class="page-heading">Simple enough for the warehouse floor</h2>
+              <p class="section-copy">Workers see one large screen with their name, assignment, site, current time, status, and four large buttons: Clock In, Start Lunch, End Lunch, and Clock Out.</p>
+            </div>
+            <div class="surface-card">
+              <p class="eyebrow">Client Approvals</p>
+              <h2 class="page-heading">Approvals without agency financial noise</h2>
+              <p class="section-copy">Client managers review hours, approve or reject timesheets with notes, and stay scoped to their own client or site only.</p>
+            </div>
+            <div class="surface-card">
+              <p class="eyebrow">Payroll Export</p>
+              <h2 class="page-heading">Move from approved time to payroll faster</h2>
+              <p class="section-copy">Payroll teams can edit approved hours, regular hours, overtime, pay rate, and notes, then export CSV or print a weekly PDF view.</p>
+            </div>
+            <div class="surface-card">
+              <p class="eyebrow">Gross Margin Visibility</p>
+              <h2 class="page-heading">Owners get a clean margin picture</h2>
+              <p class="section-copy">See revenue, labor cost, gross profit, margin percent, usage limits, and subscription status from the same dashboard.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="pricing">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Pricing</p>
+                <h2 class="section-title">Plans for agencies growing from one site to many</h2>
+              </div>
+              <p class="section-copy">Every real account starts with a 14-day free trial. Demo Mode stays free and local to the browser.</p>
+            </div>
+            <div class="pricing-grid">
+              ${planCards}
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">FAQ</p>
+                <h2 class="section-title">Questions agency owners usually ask first</h2>
+              </div>
+            </div>
+            <div class="feature-grid">
+              ${renderFaq("Can I keep a public demo open?", "Yes. Demo Mode runs on sample data in localStorage and never touches Firestore or billing.")}
+              ${renderFaq("Can workers log in directly?", "Yes. Worker accounts go straight to the punch screen and only see their own punch history.")}
+              ${renderFaq("How do subscriptions work?", "Real agencies start with a 14-day trial, then move into Stripe-managed monthly billing.")}
+              ${renderFaq("Will this still deploy on GitHub Pages?", "Yes. The frontend stays plain HTML, CSS, and JavaScript with no npm or build step required.")}
+            </div>
+          </div>
+        </section>
+      </main>
+    `;
+  }
+
+  function renderDemoAccessHub() {
+    return `
+      <main class="auth-shell">
+        <div class="container auth-grid">
+          <div class="stack-lg">
+            <div class="auth-card">
+              <p class="eyebrow">Access Hub</p>
+              <h3>Choose a Portal</h3>
+              <p>Demo Mode stays public and separate from real user accounts. Changes only save in this browser.</p>
+              <div class="page-actions" style="margin-top: 18px;">
+                <span class="mode-badge">Demo Mode - sample data only</span>
+                <button class="button button-ghost" data-action="reset-demo" type="button">Reset Demo Data</button>
+              </div>
+            </div>
+            <div class="grid grid-2">
+              <div class="auth-card">
+                <p class="eyebrow">Owner / Admin Portal</p>
+                <h3>Powerful for agency operations</h3>
+                <p>Review workers, approvals, payroll, margin, billing, and settings in a clean command center.</p>
+                <ul class="list">
+                  <li>Platform-wide metrics</li>
+                  <li>Agency owner dashboard</li>
+                  <li>Agency admin workflow</li>
+                  <li>Client approval view</li>
+                </ul>
+              </div>
+              <div class="auth-card">
+                <p class="eyebrow">Worker Punch Portal</p>
+                <h3>Simple enough for the warehouse floor</h3>
+                <p>Open the worker punch screen directly and keep clock in, lunch, and clock out easy on a phone or kiosk.</p>
+                <ul class="list">
+                  <li>Large punch buttons</li>
+                  <li>Current status on screen</li>
+                  <li>Recent history</li>
+                  <li>Need help card</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack-md">
+            ${renderDemoRoleCard("Platform Owner", "View agencies, users, subscriptions, and system health.", "platformOwner")}
+            ${renderDemoRoleCard("Agency Owner", "Manage one agency, workers, payroll, margin, billing, and settings.", "agencyOwner")}
+            ${renderDemoRoleCard("Agency Admin", "Manage workers, assignments, punches, approvals, and payroll.", "agencyAdmin")}
+            ${renderDemoRoleCard("Client Manager", "Approve submitted hours for your assigned client and sites only.", "clientManager")}
+            ${renderDemoRoleCard("Worker", "Go directly to the mobile punch screen.", "worker")}
+          </div>
         </div>
-      </div>
+      </main>
+    `;
+  }
 
-      <div class="hero-rail">
-        ${heroStat("Live worker punches", String(metrics.workersClockedInToday), "Workers clocked in across today's active sites.")}
-        ${heroStat("Pending approvals", String(metrics.pendingApprovals), "Client-side timecards still waiting for signoff.")}
-        ${heroStat("Estimated gross margin", formatCurrency(metrics.grossMargin), "Current-week spread modeled from bill and pay rates.")}
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Executive Dashboard</p>
-          <h3>Live agency operations at a glance</h3>
-          <p>Built for staffing agencies that need one credible place to see labor activity, payroll readiness, and account health.</p>
-        </div>
-      </div>
-
-      <div class="metric-grid">
-        ${metricCard("WK", "Workers Clocked In Today", String(metrics.workersClockedInToday), "Unique workers with a live punch today.")}
-        ${metricCard("AP", "Pending Client Approvals", String(metrics.pendingApprovals), "Timecards waiting for client signoff.")}
-        ${metricCard("EX", "Missing Punches", String(metrics.missingPunches), "Open lunch or missing clock-out exceptions.")}
-        ${metricCard("HR", "Payroll Hours This Week", formatHours(metrics.payrollHours), "Current pay-period total hours.")}
-        ${metricCard("GM", "Estimated Gross Margin", formatCurrency(metrics.grossMargin), "Revenue less labor cost for the week.")}
-        ${metricCard("ST", "Active Client Sites", String(metrics.activeSites), "Live staffing locations for this agency.")}
-      </div>
-    </section>
-
-    <section class="split-grid">
-      <div class="card">
-        <div class="section-heading">
+  function renderLoginPage() {
+    const localPreviewWarning = isLocalFilePreview()
+      ? `
+        <div class="notice-card warning" style="margin: 0 0 18px;">
           <div>
-            <p class="eyebrow">Product Credibility</p>
-            <h3>Built for staffing agencies that still chase paper timecards</h3>
-            <p>Position the demo around operational trust, clean approval flows, and margin visibility instead of just punch capture.</p>
+            <strong>Cloud login works best from GitHub Pages or another authorized web domain.</strong>
+            <p>You can keep using Demo Mode from this local preview. Use the published site URL when testing real Firebase sign-in.</p>
+          </div>
+        </div>
+      `
+      : "";
+
+    return `
+      <main class="auth-shell">
+        <div class="container auth-grid">
+          <div class="auth-card">
+            <p class="eyebrow">Cloud Mode</p>
+            <h3>Login</h3>
+            <p>Real users sign in with Firebase Authentication. Workers go straight to the punch screen. Client managers land in Approvals. Owners and admins land in the command center.</p>
+            ${localPreviewWarning}
+            <form class="form-grid" data-form="login">
+              <div class="field-group">
+                <label for="login-email">Email</label>
+                <input id="login-email" name="email" type="email" placeholder="name@agency.com" />
+              </div>
+              <div class="field-group">
+                <label for="login-password">Password</label>
+                <input id="login-password" name="password" type="password" placeholder="Enter your password" />
+              </div>
+              <div class="page-actions">
+                <button class="button button-primary button-block" type="submit">Login</button>
+              </div>
+            </form>
+            <div class="auth-link-row">
+              <button class="button button-ghost" data-action="go-route" data-route="trial" type="button">Create Account / Start Free Trial</button>
+              <button class="marketing-link" data-action="go-route" data-route="forgot-password" type="button">Forgot password?</button>
+            </div>
+          </div>
+          <div class="stack-md">
+            <div class="support-card">
+              <p class="eyebrow">Two Data Modes</p>
+              <h3>Demo Mode stays local. Cloud Mode syncs.</h3>
+              <p>Demo Mode uses localStorage only and does not create real accounts or billing records. Cloud Mode uses Firebase Authentication, Firestore, and Stripe-ready billing.</p>
+            </div>
+            <div class="support-card">
+              <p class="eyebrow">Need a quick walkthrough?</p>
+              <h3>Use the public demo first</h3>
+              <p>Try the owner, client manager, and worker flows before you connect Firebase or Stripe.</p>
+              <div class="page-actions" style="margin-top: 16px;">
+                <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+                <button class="button button-ghost" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderForgotPasswordPage() {
+    return `
+      <main class="auth-shell">
+        <div class="container auth-grid">
+          <div class="auth-card">
+            <p class="eyebrow">Forgot Password</p>
+            <h3>Send a reset link</h3>
+            <p>Enter the email tied to the account. Portaly will ask Firebase Authentication to send a password reset email.</p>
+            <form class="form-grid" data-form="forgot-password">
+              <div class="field-group">
+                <label for="forgot-email">Email</label>
+                <input id="forgot-email" name="email" type="email" placeholder="name@agency.com" />
+              </div>
+              <div class="page-actions">
+                <button class="button button-primary button-block" type="submit">Send Reset Email</button>
+              </div>
+            </form>
+            <div class="auth-link-row">
+              <button class="button button-ghost" data-action="go-route" data-route="login" type="button">Back to Login</button>
+            </div>
+          </div>
+          <div class="support-card">
+            <p class="eyebrow">Need help?</p>
+            <h3>Reach your agency or support team</h3>
+            <p>If the reset email does not arrive, confirm the account exists first or contact support.</p>
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderTrialPage() {
+    const configReady = !!state.firebase.ready;
+    const localPreviewWarning = isLocalFilePreview()
+      ? `
+        <div class="notice-card warning" style="margin: 18px 0;">
+          <div>
+            <strong>Use the published GitHub Pages URL when testing real signup.</strong>
+            <p>Firebase Authentication can be limited from raw <code>file://</code> previews. Demo Mode still works locally.</p>
+          </div>
+        </div>
+      `
+      : "";
+    return `
+      <main class="auth-shell">
+        <div class="container auth-grid">
+          <div class="auth-card">
+            <p class="eyebrow">Start Free Trial</p>
+            <h3>Create your agency account</h3>
+            <p>Start a real ${Number((state.firebase.config && state.firebase.config.trialDays) || 14)}-day free trial. We create the agency record, owner profile, and trial status automatically.</p>
+            ${localPreviewWarning}
+            ${configReady ? "" : `
+              <div class="notice-card warning" style="margin: 18px 0;">
+                <div>
+                  <strong>Cloud Mode is not configured yet.</strong>
+                  <p>Paste your Firebase config into <code>firebase-config.js</code> before using real sign-up.</p>
+                </div>
+              </div>
+            `}
+            <form class="form-grid" data-form="trial">
+              <div class="field-group">
+                <label for="trial-agency-name">Agency name</label>
+                <input id="trial-agency-name" name="agencyName" type="text" placeholder="Harbor Staffing Group" />
+              </div>
+              <div class="form-row two">
+                <div class="field-group">
+                  <label for="trial-owner-first">Owner first name</label>
+                  <input id="trial-owner-first" name="ownerFirstName" type="text" placeholder="Jamie" />
+                </div>
+                <div class="field-group">
+                  <label for="trial-owner-last">Owner last name</label>
+                  <input id="trial-owner-last" name="ownerLastName" type="text" placeholder="Waters" />
+                </div>
+              </div>
+              <div class="form-row two">
+                <div class="field-group">
+                  <label for="trial-email">Email</label>
+                  <input id="trial-email" name="email" type="email" placeholder="owner@agency.com" />
+                </div>
+                <div class="field-group">
+                  <label for="trial-phone">Phone</label>
+                  <input id="trial-phone" name="phone" type="text" placeholder="(555) 555-0123" />
+                </div>
+              </div>
+              <div class="form-row two">
+                <div class="field-group">
+                  <label for="trial-password">Password</label>
+                  <input id="trial-password" name="password" type="password" placeholder="Create a password" />
+                </div>
+                <div class="field-group">
+                  <label for="trial-confirm">Confirm password</label>
+                  <input id="trial-confirm" name="confirmPassword" type="password" placeholder="Confirm password" />
+                </div>
+              </div>
+              <div class="field-group">
+                <label for="trial-plan">Selected plan</label>
+                <select id="trial-plan" name="selectedPlan">
+                  <option value="starter">Starter - $99/month</option>
+                  <option value="agency" selected>Agency - $249/month</option>
+                  <option value="growth">Growth - $499/month</option>
+                  <option value="enterprise">Enterprise - Custom</option>
+                </select>
+              </div>
+              <label class="checkbox-row">
+                <input type="checkbox" name="loadSampleData" checked />
+                <span>Load sample clients, sites, workers, timesheets, and punches into the new agency.</span>
+              </label>
+              <div class="page-actions">
+                <button class="button button-primary button-block" type="submit">Start Free Trial</button>
+              </div>
+            </form>
+          </div>
+          <div class="stack-md">
+            <div class="support-card">
+              <p class="eyebrow">What happens next</p>
+              <h3>Real account setup</h3>
+              <ul class="list">
+                <li>Create Firebase Auth user</li>
+                <li>Create agency record in Firestore</li>
+                <li>Create owner user profile</li>
+                <li>Set subscription status to trialing</li>
+                <li>Route you into onboarding</li>
+              </ul>
+            </div>
+            <div class="support-card">
+              <p class="eyebrow">Billing</p>
+              <h3>Stripe starts after the trial</h3>
+              <p>Portaly only uses Stripe secret keys inside Firebase Functions or your backend. The frontend never stores secret billing credentials.</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderTrialSuccessPage() {
+    return `
+      <main class="auth-shell">
+        <div class="container">
+          <div class="auth-card" style="max-width: 760px; margin: 0 auto;">
+            <p class="eyebrow">Trial Started</p>
+            <h3>Your agency workspace is ready</h3>
+            <p>You now have ${Math.max(getTrialDaysRemaining(), 0)} days left in your free trial. Continue into the onboarding dashboard, invite your team, and load payroll-ready sample records if you chose that option.</p>
+            <div class="page-actions" style="margin-top: 20px;">
+              <button class="button button-primary" data-action="go-route" data-route="${escapeHtml(getHomeRoute())}" type="button">Continue to Dashboard</button>
+              <button class="button button-secondary" data-action="go-route" data-route="billing" type="button">Open Billing</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderPublicBillingRequired() {
+    return `
+      <main class="auth-shell">
+        <div class="container">
+          <div class="auth-card" style="max-width: 760px; margin: 0 auto;">
+            <p class="eyebrow">Billing Required</p>
+            <h3>This agency needs to fix billing before work can continue</h3>
+            <p>Owners and admins can still log in and open Billing or Settings. Payroll, workers, clients, sites, and punch management stay locked until the subscription is active again.</p>
+            <div class="page-actions" style="margin-top: 20px;">
+              <button class="button button-primary" data-action="go-route" data-route="login" type="button">Login</button>
+              <button class="button button-ghost" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderTrialExpiredPage() {
+    return `
+      <main class="auth-shell">
+        <div class="container">
+          <div class="auth-card" style="max-width: 760px; margin: 0 auto;">
+            <p class="eyebrow">Trial Expired</p>
+            <h3>Your free trial has ended</h3>
+            <p>You can still log in to review Billing and Settings, but worker management, approvals, payroll, margin, and punch operations stay locked until a paid subscription is active.</p>
+            <div class="page-actions" style="margin-top: 20px;">
+              <button class="button button-primary" data-action="go-route" data-route="login" type="button">Login</button>
+              <button class="button button-secondary" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderMarketingFooter() {
+    return `
+      <footer class="marketing-footer">
+        <div class="container marketing-footer-row">
+          <div>
+            <strong>${escapeHtml(getBrandName())}</strong>
+            <p class="muted-text">QR punches, approvals, payroll, and margin visibility for staffing agencies.</p>
+          </div>
+          <div class="marketing-actions">
+            <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+            <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+          </div>
+        </div>
+      </footer>
+    `;
+  }
+
+  function renderOwnerShell() {
+    const pageTitle = getPageTitle();
+    return `
+      <div class="app-root app-layout">
+        <aside class="sidebar">
+          <div class="sidebar-brand">
+            <div class="brand-mark">${escapeHtml(getBrandInitials())}</div>
+            <div>
+              <p class="eyebrow">Staffing Agency Platform</p>
+              <h1>${escapeHtml(getBrandName())}</h1>
+              <p class="sidebar-copy">${escapeHtml(getCurrentAgency()?.name || "Portaly")}</p>
+            </div>
+          </div>
+          <div class="sidebar-mode">
+            <span class="mode-badge">${escapeHtml(getModeBadgeText())}</span>
+            <p>${escapeHtml(getModeBadgeCopy())}</p>
+          </div>
+          <div class="sidebar-agency">
+            <p class="eyebrow">Current role</p>
+            <h2>${escapeHtml(ROLE_META[state.session.role].label)}</h2>
+            <p class="sidebar-note">${escapeHtml(getSubscriptionSummaryLine())}</p>
+          </div>
+          <nav class="nav" aria-label="Primary navigation">
+            ${renderSidebarNav()}
+          </nav>
+          <div class="sidebar-footer">
+            ${state.session.mode === "demo" ? `<button class="button button-secondary button-block" data-action="reset-demo" type="button">Reset Demo Data</button>` : ""}
+            <button class="button button-ghost button-block" data-action="logout" type="button">Logout</button>
+          </div>
+        </aside>
+        <div class="mobile-backdrop" data-action="close-nav"></div>
+        <div class="app-main">
+          <header class="topbar">
+            <div class="topbar-title">
+              <button class="menu-button" data-action="toggle-nav" type="button">Menu</button>
+              <div>
+                <p class="eyebrow">${escapeHtml(ROLE_META[state.session.role].label)}</p>
+                <h2>${escapeHtml(pageTitle)}</h2>
+              </div>
+            </div>
+            <div class="topbar-actions">
+              <span class="mode-badge">${escapeHtml(getModeBadgeText())}</span>
+              ${renderTopbarButtons()}
+            </div>
+          </header>
+          <main class="content-wrap stack-lg">
+            ${renderNoticeBanner()}
+            ${renderModeWarnings()}
+            ${renderRouteView()}
+          </main>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderWorkerShell() {
+    return `
+      <div class="worker-root worker-shell">
+        <div class="worker-topbar">
+          <div>
+            <p class="eyebrow">${escapeHtml(getBrandName())}</p>
+            <h2 class="page-heading">${escapeHtml(getCurrentAgency()?.name || getBrandName())}</h2>
+          </div>
+          <div class="topbar-actions">
+            <span class="mode-badge">${escapeHtml(getModeBadgeText())}</span>
+            ${state.session.mode === "demo" ? `<button class="button button-ghost" data-action="go-route" data-route="demo" type="button">Back to Access Hub</button>` : ""}
+            <button class="button button-ghost" data-action="logout" type="button">Logout</button>
+          </div>
+        </div>
+        ${renderNoticeBanner()}
+        ${renderWorkerView()}
+      </div>
+    `;
+  }
+
+  function renderRouteView() {
+    if (isBillingLocked() && !["billing", "settings"].includes(state.route)) {
+      return renderLockedAgencyView();
+    }
+
+    switch (state.route) {
+      case "dashboard":
+        return renderDashboardPage();
+      case "workers":
+        return renderWorkersPage();
+      case "clients":
+        return renderClientsPage();
+      case "sites":
+        return renderSitesPage();
+      case "assignments":
+        return renderAssignmentsPage();
+      case "live-punches":
+        return renderLivePunchesPage();
+      case "approvals":
+        return renderApprovalsPage();
+      case "payroll":
+        return renderPayrollPage();
+      case "margin":
+        return renderMarginPage();
+      case "exceptions":
+        return renderExceptionsPage();
+      case "qr-codes":
+        return renderQrCodesPage();
+      case "users":
+        return renderUsersPage();
+      case "billing":
+        return renderBillingPage();
+      case "settings":
+        return renderSettingsPage();
+      case "billing-required":
+        return renderLockedAgencyView();
+      default:
+        return renderDashboardPage();
+    }
+  }
+
+  function renderWorkerView() {
+    if (isBillingLocked()) {
+      return `
+        <div class="worker-layout">
+          <div class="worker-card primary">
+            <p class="eyebrow">Billing Required</p>
+            <h2>Punching is locked right now</h2>
+            <p class="section-copy">Your agency needs to fix billing before worker punches can continue. Please contact your staffing agency.</p>
+          </div>
+          <div class="support-card">
+            <p class="eyebrow">Need help?</p>
+            <h3>Contact your agency</h3>
+            <p>If your punch is wrong or the screen is locked, contact your supervisor or staffing agency.</p>
+            <ul class="list">
+              <li>${escapeHtml(getSupportEmail())}</li>
+              <li>${escapeHtml(getSupportPhone())}</li>
+            </ul>
+          </div>
+        </div>
+      `;
+    }
+
+    switch (state.route) {
+      case "my-history":
+        return renderWorkerHistoryPage();
+      case "help":
+        return renderWorkerHelpPage();
+      case "billing-required":
+        return renderWorkerHelpPage();
+      case "worker-punch":
+      default:
+        return renderWorkerPunchPage();
+    }
+  }
+
+  function renderDashboardPage() {
+    if (state.session.role === "platformOwner") {
+      return renderPlatformDashboard();
+    }
+
+    const scoped = getScopedData();
+    const metrics = buildAgencyDashboardMetrics(scoped);
+    const attentionItems = buildAttentionItems(scoped).slice(0, 6);
+    const usage = getUsageStats(scoped, state.session.agencyId);
+    const plan = getPlanDefinition(getCurrentAgency()?.planId || "agency");
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Active Workers", metrics.activeWorkers, "Workers with active records", "AW")}
+          ${renderMetricCard("Workers Clocked In Now", metrics.clockedInNow, "Workers currently active on shift", "CI")}
+          ${renderMetricCard("Workers On Lunch", metrics.onLunch, "Workers currently on lunch", "LU")}
+          ${renderMetricCard("Missing Clock Outs", metrics.missingClockOuts, "Workers with no clock out yet", "MC")}
+          ${renderMetricCard("Pending Client Approvals", metrics.pendingApprovals, "Timesheets waiting on approval", "AP")}
+          ${renderMetricCard("Payroll Hours This Week", formatHours(metrics.payrollHours), "Approved and submitted time this week", "PY")}
+          ${renderMetricCard("Estimated Gross Margin", formatCurrency(metrics.grossProfit), `${formatPercent(metrics.marginPercent)} average margin`, "GM")}
+          ${renderMetricCard("Active Clients", metrics.activeClients, "Clients with active records", "CL")}
+          ${renderMetricCard("Active Sites", metrics.activeSites, "Sites currently in service", "SI")}
+          ${renderMetricCard("Subscription Status", formatStatusLabel(metrics.subscriptionStatus), `${escapeHtml(plan.label)} plan`, "SS")}
+        </div>
+
+        <div class="split-grid">
+          <div class="surface-card">
+            <div class="card-top">
+              <div>
+                <p class="eyebrow">Today's Attention Needed</p>
+                <h2 class="page-heading">Problems to fix before payroll gets messy</h2>
+              </div>
+              <button class="button button-ghost" data-action="go-route" data-route="exceptions" type="button">Open Exceptions</button>
+            </div>
+            ${attentionItems.length ? `
+              <ul class="attention-list" style="margin-top: 18px;">
+                ${attentionItems.map(item => `
+                  <li class="attention-item">
+                    <div>
+                      <strong>${escapeHtml(item.title)}</strong>
+                      <p class="inline-note">${escapeHtml(item.detail)}</p>
+                    </div>
+                    <span class="status-badge ${item.tone}">${escapeHtml(item.label)}</span>
+                  </li>
+                `).join("")}
+              </ul>
+            ` : renderEmptyState("Everything looks clean right now", "No urgent issues are blocking worker time, approvals, or payroll at the moment.")}
+          </div>
+
+          <div class="stack-md">
+            <div class="summary-card">
+              <p class="eyebrow">Quick Actions</p>
+              <h3>Move the day forward</h3>
+              <div class="page-actions" style="margin-top: 16px;">
+                <button class="button button-primary" data-action="open-worker-form" type="button">Add Worker</button>
+                <button class="button button-secondary" data-action="open-client-form" type="button">Add Client</button>
+                <button class="button button-secondary" data-action="open-site-form" type="button">Add Site</button>
+                <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate QR</button>
+                <button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Approvals</button>
+                <button class="button button-ghost" data-action="go-route" data-route="payroll" type="button">Export Payroll</button>
+                ${state.session.role === "agencyOwner" ? `<button class="button button-ghost" data-action="go-route" data-route="billing" type="button">Manage Billing</button>` : ""}
+              </div>
+            </div>
+
+            <div class="summary-card">
+              <p class="eyebrow">Plan Usage</p>
+              <h3>${escapeHtml(plan.label)} plan</h3>
+              <div class="stack-sm" style="margin-top: 16px;">
+                ${renderUsageRow("Workers", usage.activeWorkers, plan.workerLimit)}
+                ${renderUsageRow("Sites", usage.activeSites, plan.siteLimit)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderPlatformDashboard() {
+    const scoped = getScopedData();
+    const agencies = scoped.agencies;
+    const users = scoped.users;
+    const activeTrials = agencies.filter(agency => agency.subscriptionStatus === "trialing").length;
+    const pastDue = agencies.filter(agency => ["past_due", "unpaid", "expired_trial"].includes(agency.subscriptionStatus)).length;
+    const activeWorkers = scoped.workers.filter(worker => worker.status === "active").length;
+    const pendingApprovals = scoped.approvals.filter(approval => approval.status === "pending").length;
+    const monthlyValue = agencies.reduce((total, agency) => total + (getPlanDefinition(agency.planId).price || 0), 0);
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Agencies", agencies.length, "Total tenants in the system", "AG")}
+          ${renderMetricCard("Trialing", activeTrials, "Agencies currently in trial", "TR")}
+          ${renderMetricCard("Past Due", pastDue, "Accounts needing billing help", "PD")}
+          ${renderMetricCard("Users", users.length, "Profiles across all roles", "US")}
+          ${renderMetricCard("Workers", activeWorkers, "Active worker records", "WK")}
+          ${renderMetricCard("Pending Approvals", pendingApprovals, "Approvals still waiting", "AP")}
+          ${renderMetricCard("Plan MRR", formatCurrency(monthlyValue), "Monthly plan value across agencies", "MR")}
+          ${renderMetricCard("Payroll Runs", scoped.payrollRuns.length, "Recorded weekly payroll exports", "PR")}
+        </div>
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Agency Rollup</p>
+              <h2 class="page-heading">Subscription and plan status</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agency</th>
+                  <th>Plan</th>
+                  <th>Status</th>
+                  <th>Trial End</th>
+                  <th>Owner</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${agencies.map(agency => {
+                  const owner = users.find(user => user.id === agency.ownerUserId);
+                  return `
+                    <tr>
+                      <td>${escapeHtml(agency.name)}</td>
+                      <td>${escapeHtml(getPlanDefinition(agency.planId).label)}</td>
+                      <td>${renderInlineStatus(agency.subscriptionStatus)}</td>
+                      <td>${escapeHtml(formatDate(agency.trialEnd))}</td>
+                      <td>${escapeHtml(owner ? fullName(owner) : "Unknown")}</td>
+                      <td>${escapeHtml(formatDateTime(agency.updatedAt))}</td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderWorkersPage() {
+    const scoped = getScopedData();
+    const workers = scoped.workers.slice().sort((left, right) => fullName(left).localeCompare(fullName(right)));
+    const timesheets = scoped.timesheets;
+
+    return `
+      <section class="stack-lg">
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Workers</p>
+              <h2 class="page-heading">Worker management</h2>
+            </div>
+            <div class="page-actions">
+              <button class="button button-primary" data-action="open-worker-form" type="button">Add Worker</button>
+            </div>
+          </div>
+          ${workers.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Status</th>
+                    <th>Client</th>
+                    <th>Site</th>
+                    <th>Pay Rate</th>
+                    <th>Last Punch</th>
+                    <th>Total Hours This Week</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${workers.map(worker => {
+                    const punchState = getWorkerPunchState(worker.id, scoped);
+                    const lastPunch = getWorkerLatestPunch(worker.id, scoped.punches);
+                    const weekHours = timesheets.filter(timesheet => timesheet.workerId === worker.id).reduce((sum, timesheet) => sum + Number(timesheet.approvedHours || 0), 0);
+                    return `
+                      <tr>
+                        <td>
+                          <strong>${escapeHtml(fullName(worker))}</strong>
+                          <div class="inline-note">${escapeHtml(worker.phone || worker.email || "No contact info")}</div>
+                        </td>
+                        <td>${renderInlineStatus(punchState.label)}</td>
+                        <td>${escapeHtml(getClientName(worker.assignedClientId))}</td>
+                        <td>${escapeHtml(getSiteName(worker.assignedSiteId))}</td>
+                        <td>${escapeHtml(formatCurrency(worker.payRate))}</td>
+                        <td>${escapeHtml(lastPunch ? formatDateTime(lastPunch.timestamp) : "No punch today")}</td>
+                        <td>${escapeHtml(formatHours(weekHours))}</td>
+                        <td>
+                          <div class="table-actions">
+                            <button class="button button-ghost" data-action="view-worker" data-worker-id="${escapeHtml(worker.id)}" type="button">View</button>
+                            <button class="button button-ghost" data-action="open-worker-form" data-worker-id="${escapeHtml(worker.id)}" type="button">Edit</button>
+                            <button class="button button-ghost" data-action="worker-history" data-worker-id="${escapeHtml(worker.id)}" type="button">Punch History</button>
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No workers yet", "Add your first worker to start assignments, punch capture, and payroll tracking.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderClientsPage() {
+    const clients = getScopedData().clients;
+    return `
+      <section class="stack-lg">
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Clients</p>
+              <h2 class="page-heading">Client accounts</h2>
+            </div>
+            <button class="button button-primary" data-action="open-client-form" type="button">Add Client</button>
+          </div>
+          ${clients.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Client</th>
+                    <th>Contact</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Status</th>
+                    <th>Sites</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${clients.map(client => `
+                    <tr>
+                      <td>${escapeHtml(client.name)}</td>
+                      <td>${escapeHtml(client.contactName || "-")}</td>
+                      <td>${escapeHtml(client.contactEmail || "-")}</td>
+                      <td>${escapeHtml(client.phone || "-")}</td>
+                      <td>${renderInlineStatus(client.status)}</td>
+                      <td>${escapeHtml(String(getScopedData().sites.filter(site => site.clientId === client.id).length))}</td>
+                      <td><button class="button button-ghost" data-action="open-client-form" data-client-id="${escapeHtml(client.id)}" type="button">Edit</button></td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No clients yet", "Add client companies here so workers, sites, approvals, and payroll can tie back cleanly.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderSitesPage() {
+    const scoped = getScopedData();
+    const sites = scoped.sites;
+    return `
+      <section class="stack-lg">
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Sites</p>
+              <h2 class="page-heading">Client sites and locations</h2>
+            </div>
+            <button class="button button-primary" data-action="open-site-form" type="button">Add Site</button>
+          </div>
+          ${sites.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Site</th>
+                    <th>Client</th>
+                    <th>Address</th>
+                    <th>Status</th>
+                    <th>Workers</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${sites.map(site => `
+                    <tr>
+                      <td>${escapeHtml(site.name)}</td>
+                      <td>${escapeHtml(getClientName(site.clientId))}</td>
+                      <td>${escapeHtml(site.address || "-")}</td>
+                      <td>${renderInlineStatus(site.status)}</td>
+                      <td>${escapeHtml(String(scoped.workers.filter(worker => worker.assignedSiteId === site.id).length))}</td>
+                      <td><button class="button button-ghost" data-action="open-site-form" data-site-id="${escapeHtml(site.id)}" type="button">Edit</button></td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No sites yet", "Add your first site so workers can be assigned to a location and client managers can approve time by site.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderAssignmentsPage() {
+    const scoped = getScopedData();
+    const assignments = scoped.assignments;
+    return `
+      <section class="stack-lg">
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Assignments</p>
+              <h2 class="page-heading">Pay rate, bill rate, and spread</h2>
+            </div>
+          </div>
+          ${assignments.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Client</th>
+                    <th>Site</th>
+                    <th>Pay Rate</th>
+                    <th>Bill Rate</th>
+                    <th>Spread</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${assignments.map(assignment => `
+                    <tr>
+                      <td>${escapeHtml(getWorkerName(assignment.workerId))}</td>
+                      <td>${escapeHtml(getClientName(assignment.clientId))}</td>
+                      <td>${escapeHtml(getSiteName(assignment.siteId))}</td>
+                      <td>${escapeHtml(formatCurrency(assignment.payRate))}</td>
+                      <td>${escapeHtml(formatCurrency(assignment.billRate))}</td>
+                      <td>${escapeHtml(formatCurrency(Number(assignment.billRate || 0) - Number(assignment.payRate || 0)))}</td>
+                      <td>${renderInlineStatus(assignment.status)}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No assignments yet", "Assignments connect the worker, client, site, pay rate, and bill rate.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderLivePunchesPage() {
+    const scoped = getScopedData();
+    const rows = buildLivePunchRows(scoped).filter(row => {
+      if (state.filters.liveStatus === "missing-clock-out" && row.exception !== "Missing clock out") {
+        return false;
+      }
+      if (state.filters.liveStatus !== "all" && state.filters.liveStatus !== "missing-clock-out" && row.baseStatusKey !== state.filters.liveStatus) {
+        return false;
+      }
+      if (state.filters.liveClient !== "all" && row.clientId !== state.filters.liveClient) {
+        return false;
+      }
+      if (state.filters.liveSite !== "all" && row.siteId !== state.filters.liveSite) {
+        return false;
+      }
+      return true;
+    });
+
+    return `
+      <section class="stack-lg">
+        <div class="filter-card">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Live Punches</p>
+              <h2 class="page-heading">Today's punch activity</h2>
+            </div>
+          </div>
+          <div class="filter-group">
+            <div class="field-group" style="min-width: 200px;">
+              <label for="live-status">Status</label>
+              <select id="live-status" name="liveStatus">
+                <option value="all">All</option>
+                <option value="clocked-in" ${state.filters.liveStatus === "clocked-in" ? "selected" : ""}>Clocked In</option>
+                <option value="on-lunch" ${state.filters.liveStatus === "on-lunch" ? "selected" : ""}>On Lunch</option>
+                <option value="missing-clock-out" ${state.filters.liveStatus === "missing-clock-out" ? "selected" : ""}>Missing Clock Out</option>
+                <option value="clocked-out" ${state.filters.liveStatus === "clocked-out" ? "selected" : ""}>Clocked Out</option>
+              </select>
+            </div>
+            <div class="field-group" style="min-width: 200px;">
+              <label for="live-client">Client</label>
+              <select id="live-client" name="liveClient">
+                <option value="all">All clients</option>
+                ${scoped.clients.map(client => `<option value="${escapeHtml(client.id)}" ${state.filters.liveClient === client.id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field-group" style="min-width: 200px;">
+              <label for="live-site">Site</label>
+              <select id="live-site" name="liveSite">
+                <option value="all">All sites</option>
+                ${scoped.sites.map(site => `<option value="${escapeHtml(site.id)}" ${state.filters.liveSite === site.id ? "selected" : ""}>${escapeHtml(site.name)}</option>`).join("")}
+              </select>
+            </div>
           </div>
         </div>
 
-        <div class="feature-grid">
-          ${featureCard("QR", "QR worker punches", "Open the mobile punch flow in seconds and keep daily attendance visible.")}
-          ${featureCard("CA", "Client approvals", "Let client managers approve or reject labor hours with notes.")}
-          ${featureCard("PX", "Payroll exports", "Push approved hours into CSV, Excel-ready CSV, or print-to-PDF handoff.")}
-          ${featureCard("GM", "Gross margin visibility", "Model pay, bill, spread, and margin per worker or site.")}
-          ${featureCard("MS", "Multi-site tracking", "Run multiple warehouses and overflow locations in one agency workspace.")}
-          ${featureCard("AT", "Audit trail", "Keep visible notes for approvals, manual edits, exports, and settings changes.")}
+        <div class="table-shell">
+          ${rows.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Client</th>
+                    <th>Site</th>
+                    <th>Last Action</th>
+                    <th>Last Punch Time</th>
+                    <th>Current Status</th>
+                    <th>Hours Today</th>
+                    <th>Exception Flag</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows.map(row => `
+                    <tr>
+                      <td>${escapeHtml(row.workerName)}</td>
+                      <td>${escapeHtml(row.clientName)}</td>
+                      <td>${escapeHtml(row.siteName)}</td>
+                      <td>${escapeHtml(row.lastActionLabel)}</td>
+                      <td>${escapeHtml(row.lastPunchTime)}</td>
+                      <td>${renderInlineStatus(row.statusLabel)}</td>
+                      <td>${escapeHtml(row.hoursToday)}</td>
+                      <td>${row.exception ? `<span class="status-badge status-warning">${escapeHtml(row.exception)}</span>` : `<span class="status-badge status-success">Clear</span>`}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No punches match these filters", "Try clearing the filters or wait until workers start punching in today.")}
         </div>
-      </div>
+      </section>
+    `;
+  }
 
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Exceptions</p>
-            <h3>Attention items that payroll ops can’t miss</h3>
-            <p>These alerts come straight from punch activity, approval state, and manual edits stored in the demo data.</p>
+  function renderApprovalsPage() {
+    const scoped = getScopedData();
+    const approvals = scoped.approvals;
+    const pending = approvals.filter(approval => approval.status === "pending");
+    const history = approvals.filter(approval => approval.status !== "pending").slice().sort((left, right) => compareDates(right.reviewedAt || right.updatedAt, left.reviewedAt || left.updatedAt));
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Pending Approval Count", pending.length, "Submitted timesheets waiting right now", "AP")}
+          ${renderMetricCard("Approved History", approvals.filter(approval => approval.status === "approved").length, "Approved records in this view", "OK")}
+          ${renderMetricCard("Rejected History", approvals.filter(approval => approval.status === "rejected").length, "Rejected records with notes", "RJ")}
+          ${renderMetricCard("Submitted Hours", formatHours(sumNumbers(getApprovalTimesheets(pending).map(timesheet => timesheet.approvedHours))), "Hours currently awaiting approval", "HR")}
+        </div>
+
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Approvals</p>
+              <h2 class="page-heading">${state.session.role === "clientManager" ? "Approve hours for your site" : "Client approval queue"}</h2>
+            </div>
+          </div>
+          ${pending.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Client</th>
+                    <th>Site</th>
+                    <th>Hours Submitted</th>
+                    <th>Punch Details</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${pending.map(approval => {
+                    const timesheet = scoped.timesheets.find(item => item.id === approval.timesheetId);
+                    return `
+                      <tr>
+                        <td>${escapeHtml(getWorkerName(approval.workerId))}</td>
+                        <td>${escapeHtml(getClientName(approval.clientId))}</td>
+                        <td>${escapeHtml(getSiteName(approval.siteId))}</td>
+                        <td>${escapeHtml(formatHours(timesheet?.approvedHours || 0))}</td>
+                        <td>${escapeHtml(buildPunchSummaryText(approval.workerId, scoped.punches))}</td>
+                        <td>${renderInlineStatus(approval.status)}</td>
+                        <td>
+                          <div class="table-actions">
+                            <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Approve</button>
+                            <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(approval.timesheetId)}" type="button">Reject</button>
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No approvals are waiting", "Submitted hours for this client or agency will appear here when they are ready for review.")}
+        </div>
+
+        <div class="surface-card">
+          <div class="card-top">
+            <div>
+              <p class="eyebrow">History</p>
+              <h2 class="page-heading">Approved and rejected history</h2>
+            </div>
+          </div>
+          ${history.length ? `
+            <ul class="history-list" style="margin-top: 18px;">
+              ${history.map(approval => `
+                <li class="history-item">
+                  <div>
+                    <strong>${escapeHtml(getWorkerName(approval.workerId))} - ${escapeHtml(getSiteName(approval.siteId))}</strong>
+                    <p class="inline-note">${escapeHtml(approval.note || "No note added")} · ${escapeHtml(formatDateTime(approval.reviewedAt || approval.updatedAt))}</p>
+                  </div>
+                  ${renderInlineStatus(approval.status)}
+                </li>
+              `).join("")}
+            </ul>
+          ` : `<p class="helper-copy" style="margin-top: 16px;">Approved and rejected records will appear here.</p>`}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderPayrollPage() {
+    const scoped = getScopedData();
+    const payPeriods = getPayPeriods(scoped.timesheets);
+    if (!state.selectedPayPeriod && payPeriods.length) {
+      state.selectedPayPeriod = payPeriods[0].value;
+    }
+
+    const activePeriod = payPeriods.find(period => period.value === state.selectedPayPeriod) || payPeriods[0];
+    const periodTimesheets = activePeriod
+      ? scoped.timesheets.filter(timesheet => `${timesheet.payPeriodStart}|${timesheet.payPeriodEnd}` === activePeriod.value)
+      : scoped.timesheets;
+
+    const summary = buildPayrollSummary(periodTimesheets);
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Approved Hours", formatHours(summary.approvedHours), "Approved and submitted hours", "AH")}
+          ${renderMetricCard("Regular Hours", formatHours(summary.regularHours), "Straight-time hours", "RG")}
+          ${renderMetricCard("Overtime Hours", formatHours(summary.overtimeHours), "Overtime hours", "OT")}
+          ${renderMetricCard("Total Labor Cost", formatCurrency(summary.totalLaborCost), "Regular plus overtime labor cost", "LC")}
+        </div>
+
+        <div class="filter-card">
+          <div class="filter-row">
+            <div class="field-group" style="min-width: 260px;">
+              <label for="pay-period">Weekly pay period</label>
+              <select id="pay-period" name="payPeriod">
+                ${payPeriods.map(period => `<option value="${escapeHtml(period.value)}" ${period.value === state.selectedPayPeriod ? "selected" : ""}>${escapeHtml(period.label)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="page-actions">
+              <button class="button button-secondary" type="button" data-action="copy-payroll-csv">Export CSV</button>
+              <button class="button button-secondary" type="button" data-action="copy-payroll-excel">Export Excel-ready CSV</button>
+              <button class="button button-ghost" type="button" data-action="print-view">Export Weekly Timesheet PDF</button>
+            </div>
+          </div>
+          <p class="print-note">Copying the CSV is available in-browser. PDF export uses your browser print dialog.</p>
+        </div>
+
+        <div class="table-shell">
+          ${periodTimesheets.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Approved Hours</th>
+                    <th>Regular Hours</th>
+                    <th>OT Hours</th>
+                    <th>Pay Rate</th>
+                    <th>Total Labor Cost</th>
+                    <th>Status</th>
+                    <th>Notes</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${periodTimesheets.map(timesheet => {
+                    const payRate = Number(timesheet.payRate || getWorker(timesheet.workerId)?.payRate || 0);
+                    const totalCost = calculateLaborCost(timesheet.regularHours, timesheet.overtimeHours, payRate);
+                    return `
+                      <tr>
+                        <td>${escapeHtml(getWorkerName(timesheet.workerId))}</td>
+                        <td>${escapeHtml(formatHours(timesheet.approvedHours))}</td>
+                        <td>${escapeHtml(formatHours(timesheet.regularHours))}</td>
+                        <td>${escapeHtml(formatHours(timesheet.overtimeHours))}</td>
+                        <td>${escapeHtml(formatCurrency(payRate))}</td>
+                        <td>${escapeHtml(formatCurrency(totalCost))}</td>
+                        <td>${renderInlineStatus(timesheet.status)}</td>
+                        <td>${escapeHtml(timesheet.adminNotes || "-")}</td>
+                        <td>
+                          <div class="table-actions">
+                            <button class="button button-ghost" data-action="open-payroll-edit" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">Edit</button>
+                            <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">Approve</button>
+                            <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(timesheet.id)}" type="button">Reject</button>
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No timesheets in this pay period", "When workers submit time, their weekly payroll rows will appear here.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderMarginPage() {
+    const scoped = getScopedData();
+    const rows = buildMarginRows(scoped);
+    const summary = rows.reduce((accumulator, row) => {
+      accumulator.revenue += row.revenue;
+      accumulator.laborCost += row.laborCost;
+      accumulator.grossProfit += row.grossProfit;
+      return accumulator;
+    }, { revenue: 0, laborCost: 0, grossProfit: 0 });
+    const averageMargin = summary.revenue ? (summary.grossProfit / summary.revenue) * 100 : 0;
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Total Revenue", formatCurrency(summary.revenue), "Bill rate multiplied by hours", "RV")}
+          ${renderMetricCard("Total Labor Cost", formatCurrency(summary.laborCost), "Regular plus overtime labor cost", "LC")}
+          ${renderMetricCard("Gross Profit", formatCurrency(summary.grossProfit), "Revenue minus labor cost", "GP")}
+          ${renderMetricCard("Average Margin %", formatPercent(averageMargin), "Average margin across visible rows", "MG")}
+        </div>
+        <div class="table-shell">
+          ${rows.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Client</th>
+                    <th>Site</th>
+                    <th>Pay Rate</th>
+                    <th>Bill Rate</th>
+                    <th>Hours</th>
+                    <th>Revenue</th>
+                    <th>Labor Cost</th>
+                    <th>Gross Profit</th>
+                    <th>Margin %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows.map(row => `
+                    <tr>
+                      <td>${escapeHtml(row.workerName)}</td>
+                      <td>${escapeHtml(row.clientName)}</td>
+                      <td>${escapeHtml(row.siteName)}</td>
+                      <td>${escapeHtml(formatCurrency(row.payRate))}</td>
+                      <td>${escapeHtml(formatCurrency(row.billRate))}</td>
+                      <td>${escapeHtml(formatHours(row.hours))}</td>
+                      <td>${escapeHtml(formatCurrency(row.revenue))}</td>
+                      <td>${escapeHtml(formatCurrency(row.laborCost))}</td>
+                      <td>${escapeHtml(formatCurrency(row.grossProfit))}</td>
+                      <td>${escapeHtml(formatPercent(row.marginPercent))}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No margin rows available", "Assignments and timesheets need to be in place before margin can be calculated.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderExceptionsPage() {
+    const exceptions = buildExceptionItems(getScopedData());
+    return `
+      <section class="stack-lg">
+        <div class="surface-card">
+          <div class="card-top">
+            <div>
+              <p class="eyebrow">Problems to Fix</p>
+              <h2 class="page-heading">Exception alerts</h2>
+            </div>
+          </div>
+          ${exceptions.length ? `
+            <ul class="exception-list" style="margin-top: 18px;">
+              ${exceptions.map(exception => `
+                <li class="exception-item">
+                  <div>
+                    <strong>${escapeHtml(exception.title)}</strong>
+                    <p class="inline-note">${escapeHtml(exception.detail)}</p>
+                  </div>
+                  <span class="status-badge ${exception.tone}">${escapeHtml(exception.kind)}</span>
+                </li>
+              `).join("")}
+            </ul>
+          ` : renderEmptyState("No exception alerts", "Clock activity, approvals, and payroll rows look clear right now.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderQrCodesPage() {
+    const scoped = getScopedData();
+    const worker = scoped.workers[0];
+    const site = scoped.sites[0];
+    const workerLink = worker ? buildWorkerLink(worker.id) : "";
+    const siteLink = site ? buildSiteLink(site.id) : "";
+
+    return `
+      <section class="stack-lg">
+        <div class="split-grid">
+          <div class="link-card">
+            <p class="eyebrow">Generate Worker QR</p>
+            <h3>Worker punch link card</h3>
+            <p>Use worker-specific links for the safest punch experience. In Cloud Mode, the worker still has to sign in with the correct account.</p>
+            ${worker ? `
+              <div class="qr-preview">
+                ${renderQrBox()}
+              </div>
+              <div class="stack-sm" style="margin-top: 16px;">
+                <strong>${escapeHtml(getWorkerName(worker.id))}</strong>
+                <p class="helper-copy">${escapeHtml(workerLink)}</p>
+                <p class="helper-copy">Open this link on a phone or print the card for QR-ready worker access.</p>
+                <div class="page-actions">
+                  <button class="button button-secondary" data-action="copy-link" data-copy="${escapeHtml(workerLink)}" type="button">Copy Link</button>
+                  <button class="button button-ghost" data-action="print-view" type="button">Print QR Card</button>
+                </div>
+              </div>
+            ` : renderEmptyState("No workers to generate", "Add a worker first, then return here to create a QR-style link card.")}
+          </div>
+          <div class="link-card">
+            <p class="eyebrow">Generate Site QR</p>
+            <h3>Client / site punch link</h3>
+            <p>A site card can be printed on location today. For live agencies, pair site access with authenticated worker selection.</p>
+            ${site ? `
+              <div class="qr-preview">
+                ${renderQrBox()}
+              </div>
+              <div class="stack-sm" style="margin-top: 16px;">
+                <strong>${escapeHtml(site.name)}</strong>
+                <p class="helper-copy">${escapeHtml(siteLink)}</p>
+                <p class="helper-copy">Print this site card and place it where workers start their shift.</p>
+                <div class="page-actions">
+                  <button class="button button-secondary" data-action="copy-link" data-copy="${escapeHtml(siteLink)}" type="button">Copy Link</button>
+                  <button class="button button-ghost" data-action="print-view" type="button">Print QR Card</button>
+                </div>
+              </div>
+            ` : renderEmptyState("No sites to generate", "Add a site first so Portaly can generate a printable link card.")}
           </div>
         </div>
+      </section>
+    `;
+  }
 
-        <div class="exception-list">
-          ${exceptions.length ? exceptions.map(renderExceptionCard).join("") : emptyState("No exceptions in this agency view.")}
-        </div>
-      </div>
-    </section>
-
-    <section class="split-grid">
-      <div class="card">
-        <div class="section-heading">
+  function renderUsersPage() {
+    const users = getScopedData().users;
+    return `
+      <section class="stack-lg">
+        <div class="notice-card">
           <div>
-            <p class="eyebrow">Recent Activity</p>
-            <h3>Visible audit trail for demos and ops conversations</h3>
+            <strong>User profiles live in Firestore. Sign-in credentials live in Firebase Authentication.</strong>
+            <p>For Cloud Mode, pair each user profile with a matching Firebase Auth account. Demo Mode stays local and does not create real sign-ins.</p>
           </div>
         </div>
-
-        <div class="timeline">
-          ${recent.length ? recent.map(renderTimelineItem).join("") : emptyState("No recent audit events yet.")}
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Users</p>
+              <h2 class="page-heading">Role-based access profiles</h2>
+            </div>
+          </div>
+          ${users.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Agency</th>
+                    <th>Status</th>
+                    <th>Assigned Clients</th>
+                    <th>Assigned Sites</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${users.map(user => `
+                    <tr>
+                      <td>${escapeHtml(fullName(user) || user.email || user.id)}</td>
+                      <td>${escapeHtml(user.email || "-")}</td>
+                      <td>${escapeHtml(ROLE_META[user.role]?.label || user.role)}</td>
+                      <td>${escapeHtml(getAgencyName(user.agencyId))}</td>
+                      <td>${renderInlineStatus(user.status || "active")}</td>
+                      <td>${escapeHtml(String((user.assignedClientIds || []).length))}</td>
+                      <td>${escapeHtml(String((user.assignedSiteIds || []).length))}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No user profiles yet", "Create a Firebase Auth account, then add a matching Firestore profile to route people by role.")}
         </div>
-      </div>
+      </section>
+    `;
+  }
 
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Pricing Preview</p>
-            <h3>Simple packaging for staffing owners and investors</h3>
+  function renderBillingPage() {
+    const agency = getCurrentAgency();
+    const subscription = getCurrentSubscription();
+    const plan = getPlanDefinition(agency?.planId || state.selectedPlan || "agency");
+    const usage = getUsageStats(getScopedData(), agency?.id);
+    const nextBillingDate = subscription?.currentPeriodEnd || subscription?.trialEnd || agency?.trialEnd || addDays(new Date(), 14).toISOString();
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Current Plan", plan.label, "Monthly plan tier", "PL")}
+          ${renderMetricCard("Trial Days Remaining", Math.max(getTrialDaysRemaining(), 0), "Days left before billing starts", "TD")}
+          ${renderMetricCard("Subscription Status", formatStatusLabel(subscription?.status || agency?.subscriptionStatus || "trialing"), "Stripe and Firestore status", "SS")}
+          ${renderMetricCard("Worker / Site Usage", `${usage.activeWorkers}${plan.workerLimit ? ` / ${plan.workerLimit}` : ""} workers`, `${usage.activeSites}${plan.siteLimit ? ` / ${plan.siteLimit}` : ""} sites`, "US")}
+        </div>
+
+        ${["past_due", "unpaid", "expired_trial"].includes(subscription?.status || agency?.subscriptionStatus) ? `
+          <div class="notice-card danger">
+            <div>
+              <strong>Payment issue detected</strong>
+              <p>Payroll, worker, site, and punch management stay locked until billing is fixed. Owners can still use Billing and Settings.</p>
+            </div>
+          </div>
+        ` : ""}
+
+        <div class="summary-card">
+          <p class="eyebrow">Billing</p>
+          <h3>${escapeHtml(plan.label)} plan</h3>
+          <p class="helper-copy">Next billing date placeholder: ${escapeHtml(formatDate(nextBillingDate))}</p>
+          <div class="page-actions" style="margin-top: 18px;">
+            <button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">Start Paid Subscription</button>
+            <button class="button button-secondary" data-action="manage-billing" type="button">Manage Billing</button>
           </div>
         </div>
 
         <div class="pricing-grid">
-          ${pricingCard("Starter", "$99/month", ["Up to 25 workers", "1 client site", "QR punches", "Basic payroll export"])}
-          ${pricingCard("Agency", "$249/month", ["Up to 100 workers", "5 client sites", "Client approvals", "Payroll exports", "Exception alerts"])}
-          ${pricingCard("Growth", "$499/month", ["Unlimited clients", "Advanced reports", "White-label branding", "Priority setup"])}
-          ${pricingCard("Enterprise", "Custom", ["Multi-branch agencies", "Custom integrations", "Dedicated onboarding"])}
+          ${Object.values(PLAN_DEFINITIONS).map(item => renderPricingCard(item, item.id === (agency?.planId || state.selectedPlan))).join("")}
         </div>
-      </div>
-    </section>
-  `;
-}
-
-function agenciesView() {
-  const agencies = state.agencies;
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Agency Management</p>
-          <h3>Multi-agency staffing demo portfolio</h3>
-          <p>Show how Portaly supports multiple staffing brands while keeping payroll contacts, branding, and site operations distinct.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="content-grid">
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Agency directory</h3>
-            <p>Use the active agency selector in the sidebar to swap the full product context.</p>
-          </div>
-        </div>
-
-        <div class="site-grid">
-          ${agencies.map(agencyCard).join("")}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Add demo agency</h3>
-            <p>Keep the existing static app flexible for sales demos without adding a backend.</p>
-          </div>
-        </div>
-
-        <form id="agencyForm" class="form-grid">
-          <div>
-            <label>Agency name</label>
-            <input name="name" type="text" placeholder="Lakefront Staffing Group" required />
-          </div>
-          <div>
-            <label>Owner</label>
-            <input name="owner" type="text" placeholder="Jordan Blake" required />
-          </div>
-          <div>
-            <label>Payroll contact email</label>
-            <input name="payrollEmail" type="email" placeholder="payroll@agency.com" required />
-          </div>
-          <div>
-            <label>Support phone</label>
-            <input name="supportPhone" type="text" placeholder="(555) 555-0100" required />
-          </div>
-          <div>
-            <label>Plan</label>
-            <select name="plan">
-              <option>Starter</option>
-              <option selected>Agency</option>
-              <option>Growth</option>
-              <option>Enterprise</option>
-            </select>
-          </div>
-          <div>
-            <label>Primary color</label>
-            <input name="primaryColor" type="color" value="#1f6fff" />
-          </div>
-          <div class="form-span-2 form-actions">
-            <button class="button button-primary" type="submit">Add Agency</button>
-          </div>
-        </form>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="section-heading">
-        <div>
-          <h3>Agency operating snapshot</h3>
-          <p>Quick reference for plan level, client footprint, labor count, and payroll contact routing.</p>
-        </div>
-      </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Agency</th>
-              <th>Plan</th>
-              <th>Clients</th>
-              <th>Sites</th>
-              <th>Workers</th>
-              <th>Payroll Contact</th>
-              <th>Support</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${agencies.map(agencyRow).join("")}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
-}
-
-function clientsView() {
-  const clients = clientsForCurrentAgency();
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Client Accounts</p>
-          <h3>Client relationships tied directly to sites and approvals</h3>
-          <p>Each client account in the demo owns its own locations, assigned workers, and approval queue.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="content-grid">
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Client list</h3>
-            <p>Switch the client focus in the sidebar to preview the manager approval experience.</p>
-          </div>
-        </div>
-
-        <div class="site-grid">
-          ${clients.map(clientCard).join("")}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Add client account</h3>
-            <p>Create another warehouse or distribution customer for the active agency.</p>
-          </div>
-        </div>
-
-        <form id="clientForm" class="form-grid">
-          <div>
-            <label>Client name</label>
-            <input name="name" type="text" placeholder="Anchor Distribution" required />
-          </div>
-          <div>
-            <label>Contact name</label>
-            <input name="contactName" type="text" placeholder="Casey Miller" required />
-          </div>
-          <div>
-            <label>Contact title</label>
-            <input name="contactTitle" type="text" placeholder="Site Operations Manager" required />
-          </div>
-          <div>
-            <label>Email</label>
-            <input name="email" type="email" placeholder="casey@anchor.com" required />
-          </div>
-          <div class="form-span-2 form-actions">
-            <button class="button button-primary" type="submit">Add Client</button>
-          </div>
-        </form>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="section-heading">
-        <div>
-          <h3>Client approval readiness</h3>
-          <p>Count the current sites, assigned workers, and pending approvals per client account.</p>
-        </div>
-      </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Client</th>
-              <th>Primary Contact</th>
-              <th>Sites</th>
-              <th>Assigned Workers</th>
-              <th>Pending Approvals</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${clients.map(clientRow).join("")}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
-}
-
-function sitesView() {
-  const sites = sitesForCurrentAgency();
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Sites</p>
-          <h3>Warehouse locations with QR-ready punch entry points</h3>
-          <p>These site cards make the GitHub Pages demo feel closer to a real warehouse rollout with shareable worker punch links.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="content-grid">
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Active client sites</h3>
-            <p>Every site carries a direct worker punch route into the static demo.</p>
-          </div>
-        </div>
-
-        <div class="site-grid">
-          ${sites.map(siteCard).join("")}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Add site</h3>
-            <p>Create another warehouse, overflow yard, or cold-storage location for the active agency.</p>
-          </div>
-        </div>
-
-        <form id="siteForm" class="form-grid">
-          <div>
-            <label>Client</label>
-            <select name="clientId">
-              ${clientsForCurrentAgency().map(clientRecord => `<option value="${safe(clientRecord.id)}">${safe(clientRecord.name)}</option>`).join("")}
-            </select>
-          </div>
-          <div>
-            <label>Site name</label>
-            <input name="name" type="text" placeholder="NorthPeak West Annex" required />
-          </div>
-          <div>
-            <label>Site code</label>
-            <input name="code" type="text" placeholder="NPL-WEST" required />
-          </div>
-          <div>
-            <label>Shift profile</label>
-            <input name="shiftProfile" type="text" placeholder="Weekend shift" required />
-          </div>
-          <div class="form-span-2">
-            <label>Address</label>
-            <input name="address" type="text" placeholder="4200 Warehouse Blvd, Columbus, OH" required />
-          </div>
-          <div class="form-span-2 form-actions">
-            <button class="button button-primary" type="submit">Add Site</button>
-          </div>
-        </form>
-      </div>
-    </section>
-  `;
-}
-
-function workersView() {
-  const workers = workersForCurrentAgency();
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Workers</p>
-          <h3>Active staffing roster with assignment and contact context</h3>
-          <p>Use the worker selector for a clean mobile punch demo, or scan the table below for titles, sites, and status.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="content-grid">
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Worker roster</h3>
-            <p>Active assignments, sites, and titles stay visible for client and agency walkthroughs.</p>
-          </div>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Worker</th>
-                <th>Title</th>
-                <th>Email</th>
-                <th>Phone</th>
-                <th>Assignment</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${workers.map(workerRow).join("")}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Add worker</h3>
-            <p>New worker profiles save to localStorage and show up immediately in the punch flow.</p>
-          </div>
-        </div>
-
-        <form id="workerForm" class="form-grid">
-          <div>
-            <label>First name</label>
-            <input name="firstName" type="text" placeholder="Riley" required />
-          </div>
-          <div>
-            <label>Last name</label>
-            <input name="lastName" type="text" placeholder="Parker" required />
-          </div>
-          <div>
-            <label>Title</label>
-            <input name="title" type="text" placeholder="Picker / Packer" required />
-          </div>
-          <div>
-            <label>Phone</label>
-            <input name="phone" type="text" placeholder="(555) 555-0112" required />
-          </div>
-          <div class="form-span-2">
-            <label>Email</label>
-            <input name="email" type="email" placeholder="riley@agency-demo.com" required />
-          </div>
-          <div class="form-span-2 form-actions">
-            <button class="button button-primary" type="submit">Add Worker</button>
-          </div>
-        </form>
-      </div>
-    </section>
-  `;
-}
-
-function assignmentsView() {
-  const assignments = assignmentsForCurrentAgency();
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Assignments</p>
-          <h3>Pay rates, bill rates, shifts, and site placement</h3>
-          <p>This is the staffing economics layer that makes payroll and gross margin reporting feel real.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="content-grid">
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Assignment sheet</h3>
-            <p>Each assignment connects the worker, client, site, shift window, pay rate, and bill rate.</p>
-          </div>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Worker</th>
-                <th>Client</th>
-                <th>Site</th>
-                <th>Shift</th>
-                <th>Pay Rate</th>
-                <th>Bill Rate</th>
-                <th>Spread</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${assignments.map(assignmentRow).join("")}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Add assignment</h3>
-            <p>Update worker placement without leaving the static app.</p>
-          </div>
-        </div>
-
-        <form id="assignmentForm" class="form-grid">
-          <div>
-            <label>Worker</label>
-            <select name="workerId">
-              ${workersForCurrentAgency().map(workerRecord => `<option value="${safe(workerRecord.id)}">${safe(fullWorkerName(workerRecord.id))}</option>`).join("")}
-            </select>
-          </div>
-          <div>
-            <label>Client</label>
-            <select name="clientId">
-              ${clientsForCurrentAgency().map(clientRecord => `<option value="${safe(clientRecord.id)}">${safe(clientRecord.name)}</option>`).join("")}
-            </select>
-          </div>
-          <div>
-            <label>Site</label>
-            <select name="siteId">
-              ${sitesForCurrentAgency().map(siteRecord => `<option value="${safe(siteRecord.id)}">${safe(siteRecord.code)} - ${safe(siteRecord.name)}</option>`).join("")}
-            </select>
-          </div>
-          <div>
-            <label>Title</label>
-            <input name="title" type="text" placeholder="Forklift Operator" required />
-          </div>
-          <div>
-            <label>Shift start</label>
-            <input name="shiftStart" type="time" value="07:00" required />
-          </div>
-          <div>
-            <label>Shift end</label>
-            <input name="shiftEnd" type="time" value="15:30" required />
-          </div>
-          <div>
-            <label>Pay rate</label>
-            <input name="payRate" type="number" min="0" step="0.01" value="18.00" required />
-          </div>
-          <div>
-            <label>Bill rate</label>
-            <input name="billRate" type="number" min="0" step="0.01" value="29.00" required />
-          </div>
-          <div class="form-span-2 form-actions">
-            <button class="button button-primary" type="submit">Save Assignment</button>
-          </div>
-        </form>
-      </div>
-    </section>
-  `;
-}
-
-function timeclockView() {
-  const worker = currentWorker();
-  const assignment = activeAssignmentForWorker(worker?.id);
-  const site = state.sites.find(record => record.id === state.punchSiteId) || (assignment ? siteById(assignment.siteId) : sitesForCurrentAgency()[0]);
-  const workerHistory = punchesForWorker(worker?.id).slice(0, 8);
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Worker QR Punch</p>
-          <h3>Simple mobile-first punch flow</h3>
-          <p>Clean worker context, four large punch actions, instant confirmation, and a short recent history feed.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="timeclock-layout">
-      <div class="card timeclock-panel">
-        <div class="worker-banner">
-          <span class="eyebrow">Selected Worker</span>
-          <strong>${safe(worker ? fullWorkerName(worker.id) : "No worker selected")}</strong>
-          <span class="worker-meta">${safe(assignment?.title || worker?.title || "Unassigned worker")} · ${safe(clientById(assignment?.clientId)?.name || "No client")} · ${safe(site ? `${site.code} - ${site.name}` : "No site selected")}</span>
-        </div>
-
-        <div class="field-group">
-          <label for="timeclockSiteSelect">Punch site</label>
-          <select id="timeclockSiteSelect">
-            ${punchSiteOptions(worker?.id).map(siteRecord => `<option value="${safe(siteRecord.id)}" ${siteRecord.id === site?.id ? "selected" : ""}>${safe(siteRecord.code)} - ${safe(siteRecord.name)}</option>`).join("")}
-          </select>
-        </div>
-
-        <div class="punch-button-grid">
-          <button class="punch-button clock-in" data-punch="Clock In" type="button">Clock In</button>
-          <button class="punch-button lunch-start" data-punch="Start Lunch" type="button">Start Lunch</button>
-          <button class="punch-button lunch-end" data-punch="End Lunch" type="button">End Lunch</button>
-          <button class="punch-button clock-out" data-punch="Clock Out" type="button">Clock Out</button>
-        </div>
-
-        <div class="confirmation-banner">${safe(state.punchMessage)}</div>
-      </div>
-
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Recent punch history</h3>
-            <p>Show the last several actions for the selected worker, including the newest confirmation.</p>
-          </div>
-        </div>
-
-        <div class="history-list">
-          ${workerHistory.length ? workerHistory.map(renderHistoryItem).join("") : emptyState("No punch history yet for this worker.")}
-        </div>
-      </div>
-    </section>
-  `;
-}
-
-function approvalsView() {
-  const client = currentClient();
-  const timesheets = timesheetsForClient(state.currentClientId, state.selectedWeekStart);
-  const assignedWorkers = workersAssignedToClient(state.currentClientId);
-  const pendingCount = timesheets.filter(record => record.clientStatus === "pending").length;
-  const approvedCount = timesheets.filter(record => record.clientStatus === "approved").length;
-  const rejectedCount = timesheets.filter(record => record.clientStatus === "rejected").length;
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Client Approval Portal</p>
-          <h3>${safe(client?.name || "Client")} manager review view</h3>
-          <p>See assigned workers, review daily and weekly hours, approve clean time, or reject with notes before payroll export.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="summary-grid">
-        ${summaryCard("PD", "Pending approval count", String(pendingCount))}
-        ${summaryCard("OK", "Approved this week", String(approvedCount))}
-        ${summaryCard("RJ", "Rejected this week", String(rejectedCount))}
-        ${summaryCard("CR", "Assigned crew", String(assignedWorkers.length))}
-      </div>
-    </section>
-
-    <section class="split-grid">
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Workers assigned to this site group</h3>
-            <p>Client managers can quickly verify the crew attached to their warehouses.</p>
-          </div>
-        </div>
-
-        <div class="site-grid">
-          ${assignedWorkers.length ? assignedWorkers.map(clientWorkerCard).join("") : emptyState("No workers are assigned to this client yet.")}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Approval queue</h3>
-            <p>Approve timesheets, or reject them with a note that stays visible in the audit trail.</p>
-          </div>
-        </div>
-
-        <div class="approval-list">
-          ${timesheets.length ? timesheets.map(renderApprovalCard).join("") : emptyState("No timesheets exist for this client in the selected week.")}
-        </div>
-      </div>
-    </section>
-  `;
-}
-
-function payrollView() {
-  const weeks = availableWeeksForCurrentAgency();
-  const rows = payrollRows(state.selectedWeekStart);
-  const totals = payrollTotals(rows);
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Payroll Export Center</p>
-          <h3>Weekly payroll handoff without leaving the static demo</h3>
-          <p>Select a pay period, review approved and pending hours, then export CSV, Excel-ready CSV, or a print-to-PDF timesheet packet.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="toolbar">
-        <div class="field-group">
-          <label for="payrollWeekSelect">Weekly pay period</label>
-          <select id="payrollWeekSelect">
-            ${weeks.map(week => `<option value="${safe(week)}" ${week === state.selectedWeekStart ? "selected" : ""}>Week of ${safe(formatDate(week))}</option>`).join("")}
-          </select>
-        </div>
-
-        <div class="toolbar-actions">
-          <button class="button button-secondary" data-export="csv" type="button">Export CSV</button>
-          <button class="button button-ghost" data-export="excel" type="button">Export Excel-ready CSV</button>
-          <button class="button button-primary" data-export="pdf" type="button">Export Weekly Timesheet PDF</button>
-        </div>
-      </div>
-
-      <div class="metric-grid" style="margin-top: 18px;">
-        ${metricCard("AH", "Approved Hours", formatHours(totals.approvedHours), "Hours approved by the client.")}
-        ${metricCard("RG", "Regular Hours", formatHours(totals.regularHours), "Straight-time hours for the week.")}
-        ${metricCard("OT", "Overtime Hours", formatHours(totals.overtimeHours), "Hours above forty.")}
-        ${metricCard("PR", "Avg Pay Rate", formatCurrency(totals.averagePayRate), "Weighted average pay rate.")}
-        ${metricCard("LC", "Total Labor Cost", formatCurrency(totals.totalLaborCost), "Modeled payroll cost for this period.")}
-        ${metricCard("FA", "Final Approved", String(totals.finalApproved), "Timesheets ready to export.")}
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="section-heading">
-        <div>
-          <h3>Payroll detail</h3>
-          <p>Approved hours, regular, overtime, pay rate, and total labor cost per worker.</p>
-        </div>
-      </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Worker</th>
-              <th>Client</th>
-              <th>Site</th>
-              <th>Approved Hours</th>
-              <th>Regular</th>
-              <th>OT</th>
-              <th>Pay Rate</th>
-              <th>Total Labor Cost</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(payrollRow).join("")}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
-}
-
-function marginView() {
-  const rows = payrollRows(state.selectedWeekStart);
-  const totals = payrollTotals(rows);
-  const marginPercent = totals.totalRevenue ? (totals.totalGrossProfit / totals.totalRevenue) * 100 : 0;
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">Gross Margin Report</p>
-          <h3>See pay, bill, revenue, labor cost, and margin in one report</h3>
-          <p>Revenue = Bill Rate × Hours. Labor Cost = Pay Rate × Hours. Gross Profit = Revenue - Labor Cost. Margin % = Gross Profit / Revenue × 100.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="formula-grid">
-        ${formulaCard("Revenue", "Bill Rate × Hours")}
-        ${formulaCard("Labor Cost", "Pay Rate × Hours")}
-        ${formulaCard("Gross Profit", "Revenue - Labor Cost")}
-        ${formulaCard("Margin %", "Gross Profit / Revenue × 100")}
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="metric-grid">
-        ${metricCard("RV", "Revenue", formatCurrency(totals.totalRevenue), "Projected client billing for the selected week.")}
-        ${metricCard("LC", "Labor Cost", formatCurrency(totals.totalLaborCost), "Projected payroll cost for the selected week.")}
-        ${metricCard("GP", "Gross Profit", formatCurrency(totals.totalGrossProfit), "Revenue minus labor cost.")}
-        ${metricCard("M%", "Margin %", `${formatPercent(marginPercent)}`, "Gross profit divided by revenue.")}
-        ${metricCard("BR", "Avg Bill Rate", formatCurrency(totals.averageBillRate), "Weighted average bill rate.")}
-        ${metricCard("PR", "Avg Pay Rate", formatCurrency(totals.averagePayRate), "Weighted average pay rate.")}
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="section-heading">
-        <div>
-          <h3>Margin detail by worker</h3>
-          <p>Use this report to show staffing owners how Portaly surfaces spread and profitability before payroll leaves the system.</p>
-        </div>
-      </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Worker</th>
-              <th>Client</th>
-              <th>Hours Worked</th>
-              <th>Pay Rate</th>
-              <th>Bill Rate</th>
-              <th>Revenue</th>
-              <th>Labor Cost</th>
-              <th>Gross Profit</th>
-              <th>Margin %</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(marginRow).join("")}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
-}
-
-function settingsView() {
-  const settings = currentAgencySettings();
-
-  return `
-    <section class="page-intro card">
-      <div class="page-intro-header">
-        <div>
-          <p class="eyebrow">White-Label Settings</p>
-          <h3>Customize the agency-facing demo brand</h3>
-          <p>Save agency name, logo placeholder, primary color, payroll contact email, and support phone to localStorage.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="content-grid">
-      <div class="card">
-        <div class="section-heading">
-          <div>
-            <h3>Brand controls</h3>
-            <p>These changes update the active agency workspace instantly after saving.</p>
-          </div>
-        </div>
-
-        <form id="settingsForm" class="form-grid">
-          <div>
-            <label>Agency name</label>
-            <input name="agencyName" type="text" value="${safe(settings.agencyName)}" required />
-          </div>
-          <div>
-            <label>Logo placeholder</label>
-            <input name="logoText" type="text" value="${safe(settings.logoText)}" maxlength="3" required />
-          </div>
-          <div>
-            <label>Primary color</label>
-            <input name="primaryColor" type="color" value="${safe(settings.primaryColor)}" />
-          </div>
-          <div>
-            <label>Payroll contact email</label>
-            <input name="payrollContactEmail" type="email" value="${safe(settings.payrollContactEmail)}" required />
-          </div>
-          <div class="form-span-2">
-            <label>Support phone number</label>
-            <input name="supportPhone" type="text" value="${safe(settings.supportPhone)}" required />
-          </div>
-          <div class="form-span-2 form-actions">
-            <button class="button button-primary" type="submit">Save Settings</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="card settings-preview">
-        <div class="section-heading">
-          <div>
-            <h3>Brand preview</h3>
-            <p>Use this preview to sell the white-label angle of the staffing platform.</p>
-          </div>
-        </div>
-
-        <div class="brand-preview-shell">
-          <div class="brand-preview-header">
-            <div class="brand-mark">${safe(settings.logoText)}</div>
-            <div class="brand-preview-copy">
-              <h4>${safe(settings.agencyName)}</h4>
-              <p class="muted">Powered by Portaly</p>
+      </section>
+    `;
+  }
+
+  function renderSettingsPage() {
+    const settings = getCurrentSettings();
+    const agency = getCurrentAgency();
+    const applied = buildAgencySettings({
+      agencyName: settings?.agencyName || agency?.name || "Portaly Agency",
+      logoInitials: settings?.logoInitials || initials(settings?.agencyName || agency?.name || "Portaly"),
+      primaryColor: settings?.primaryColor || DEFAULT_BRAND,
+      supportEmail: settings?.supportEmail || DEFAULT_SUPPORT_EMAIL,
+      supportPhone: settings?.supportPhone || DEFAULT_SUPPORT_PHONE,
+      payrollContact: settings?.payrollContact || DEFAULT_SUPPORT_EMAIL,
+      defaultPayPeriod: settings?.defaultPayPeriod || "Weekly"
+    });
+
+    return `
+      <section class="stack-lg">
+        ${state.session.mode === "demo" ? `
+          <div class="notice-card warning">
+            <div>
+              <strong>Demo Mode warning</strong>
+              <p>These settings only save inside this browser. They do not sync to other devices until Cloud Mode is enabled.</p>
             </div>
           </div>
+        ` : ""}
+        <div class="setting-card">
+          <p class="eyebrow">White Label Settings</p>
+          <h3>Agency branding and support details</h3>
+          <form class="form-grid" data-form="settings-save" style="margin-top: 18px;">
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="settings-agency-name">Agency name</label>
+                <input id="settings-agency-name" name="agencyName" type="text" value="${escapeAttribute(applied.agencyName)}" />
+              </div>
+              <div class="field-group">
+                <label for="settings-logo-initials">Logo initials</label>
+                <input id="settings-logo-initials" name="logoInitials" type="text" value="${escapeAttribute(applied.logoInitials)}" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="settings-primary-color">Primary color</label>
+                <input id="settings-primary-color" name="primaryColor" type="color" value="${escapeAttribute(normalizeColor(applied.primaryColor))}" />
+              </div>
+              <div class="field-group">
+                <label for="settings-pay-period">Default pay period</label>
+                <select id="settings-pay-period" name="defaultPayPeriod">
+                  <option value="Weekly" ${applied.defaultPayPeriod === "Weekly" ? "selected" : ""}>Weekly</option>
+                  <option value="Biweekly" ${applied.defaultPayPeriod === "Biweekly" ? "selected" : ""}>Biweekly</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="settings-support-email">Support email</label>
+                <input id="settings-support-email" name="supportEmail" type="email" value="${escapeAttribute(applied.supportEmail)}" />
+              </div>
+              <div class="field-group">
+                <label for="settings-support-phone">Support phone</label>
+                <input id="settings-support-phone" name="supportPhone" type="text" value="${escapeAttribute(applied.supportPhone)}" />
+              </div>
+            </div>
+            <div class="field-group">
+              <label for="settings-payroll-contact">Payroll contact</label>
+              <input id="settings-payroll-contact" name="payrollContact" type="email" value="${escapeAttribute(applied.payrollContact)}" />
+            </div>
+            <div class="page-actions">
+              <button class="button button-primary" type="submit">Save Settings</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    `;
+  }
 
-          <div class="settings-list">
-            <div><span>Primary color</span><strong>${safe(settings.primaryColor)}</strong></div>
-            <div><span>Payroll contact</span><strong>${safe(settings.payrollContactEmail)}</strong></div>
-            <div><span>Support phone</span><strong>${safe(settings.supportPhone)}</strong></div>
+  function renderLockedAgencyView() {
+    return `
+      <section class="stack-lg">
+        <div class="notice-card danger">
+          <div>
+            <strong>Billing needs attention</strong>
+            <p>This agency can still access Billing and Settings. All other operations stay locked until the subscription returns to an active or trialing state.</p>
+          </div>
+        </div>
+        ${state.session.role === "agencyOwner" || state.session.role === "platformOwner" ? `
+          <div class="page-actions">
+            <button class="button button-primary" data-action="go-route" data-route="billing" type="button">Open Billing</button>
+            <button class="button button-secondary" data-action="go-route" data-route="settings" type="button">Open Settings</button>
+          </div>
+        ` : `
+          <div class="support-card">
+            <p class="eyebrow">Need help?</p>
+            <h3>Contact your agency owner</h3>
+            <p>Billing access is limited to the agency owner or platform owner.</p>
+          </div>
+        `}
+      </section>
+    `;
+  }
+
+  function renderWorkerPunchPage() {
+    const worker = getCurrentWorker();
+    const scoped = getScopedData();
+
+    if (!worker) {
+      return renderWorkerHelpPage();
+    }
+
+    const punchState = getWorkerPunchState(worker.id, scoped);
+    const recent = getWorkerPunchesForToday(worker.id, scoped.punches).slice().reverse().slice(0, 6);
+
+    return `
+      <div class="worker-layout">
+        <div class="worker-card primary">
+          <p class="eyebrow">Clock In / Clock Out</p>
+          <h2>Clock In / Clock Out</h2>
+          <p class="section-copy">Use the large buttons below. Portaly will only enable the next action that makes sense.</p>
+          <div class="worker-status-banner">
+            <strong>${escapeHtml(punchState.label)}</strong>
+            <p>${escapeHtml(getWorkerStatusMessage(punchState.key))}</p>
+          </div>
+          <div class="worker-meta-grid">
+            ${renderWorkerMeta("Worker name", fullName(worker))}
+            ${renderWorkerMeta("Agency", getCurrentAgency()?.name || getBrandName())}
+            ${renderWorkerMeta("Client", getClientName(worker.assignedClientId))}
+            ${renderWorkerMeta("Site / location", getSiteName(worker.assignedSiteId))}
+            ${renderWorkerMeta("Current date / time", formatDateTime(state.now.toISOString()))}
+            ${renderWorkerMeta("Current punch status", punchState.label)}
+          </div>
+          <div class="worker-buttons">
+            <button class="button button-primary button-large" data-action="punch-action" data-punch="clockIn" type="button" ${punchState.allowed.clockIn ? "" : "disabled"}>Clock In</button>
+            <button class="button button-secondary button-large" data-action="punch-action" data-punch="startLunch" type="button" ${punchState.allowed.startLunch ? "" : "disabled"}>Start Lunch</button>
+            <button class="button button-secondary button-large" data-action="punch-action" data-punch="endLunch" type="button" ${punchState.allowed.endLunch ? "" : "disabled"}>End Lunch</button>
+            <button class="button button-ghost button-large" data-action="punch-action" data-punch="clockOut" type="button" ${punchState.allowed.clockOut ? "" : "disabled"}>Clock Out</button>
+          </div>
+          ${state.notice ? `
+            <div class="worker-confirmation">
+              <strong>${escapeHtml(state.notice.includes("clocked out") ? "Your shift is complete" : "Punch saved")}</strong>
+              <p>${escapeHtml(state.notice)}</p>
+            </div>
+          ` : ""}
+        </div>
+
+        <div class="stack-md">
+          <div class="worker-card">
+            <p class="eyebrow">Recent Punch History</p>
+            <h3>Today</h3>
+            ${recent.length ? `
+              <div class="history-timeline" style="margin-top: 10px;">
+                ${recent.map(punch => `
+                  <div class="history-timeline-item">
+                    <strong>${escapeHtml(PUNCH_LABELS[punch.action] || punch.action)}</strong>
+                    <span class="helper-copy">${escapeHtml(formatDateTime(punch.timestamp))}</span>
+                  </div>
+                `).join("")}
+              </div>
+            ` : `<p class="helper-copy" style="margin-top: 12px;">No punches have been saved yet today.</p>`}
+          </div>
+
+          <div class="support-card">
+            <p class="eyebrow">Need help?</p>
+            <h3>Contact your supervisor or staffing agency</h3>
+            <p>If your punch is wrong, contact your supervisor or staffing agency.</p>
+            <ul class="list">
+              <li>${escapeHtml(getSupportPhone())}</li>
+              <li>${escapeHtml(getSupportEmail())}</li>
+            </ul>
           </div>
         </div>
       </div>
-    </section>
-  `;
-}
+    `;
+  }
 
-function agencyCard(agencyRecord) {
-  const settings = settingsForAgency(agencyRecord.id);
-  return `
-    <article class="site-card">
-      <header>
-        <div>
-          <h4>${safe(agencyRecord.name)}</h4>
-          <p class="site-meta">${safe(agencyRecord.code)} · ${safe(agencyRecord.plan)}</p>
+  function renderWorkerHistoryPage() {
+    const worker = getCurrentWorker();
+    const punches = worker ? getWorkerPunches(worker.id, getScopedData().punches).slice().reverse() : [];
+    return `
+      <div class="worker-layout">
+        <div class="worker-card primary">
+          <p class="eyebrow">My Punch History</p>
+          <h2>My Punch History</h2>
+          ${punches.length ? `
+            <div class="history-timeline" style="margin-top: 18px;">
+              ${punches.map(punch => `
+                <div class="history-timeline-item">
+                  <strong>${escapeHtml(PUNCH_LABELS[punch.action] || punch.action)}</strong>
+                  <span class="helper-copy">${escapeHtml(formatDateTime(punch.timestamp))}</span>
+                </div>
+              `).join("")}
+            </div>
+          ` : `<p class="helper-copy" style="margin-top: 16px;">Your punch history will appear here after you start using the timeclock.</p>`}
         </div>
-        ${statusBadge(agencyRecord.id === state.currentAgencyId ? "Active Workspace" : "Available", agencyRecord.id === state.currentAgencyId ? "status-approved" : "status-neutral")}
-      </header>
-      <p>${safe(agencyRecord.owner)} leads this branch with ${safe(countLabel(clientsForAgency(agencyRecord.id).length, "client"))} and ${safe(countLabel(workersForAgency(agencyRecord.id).length, "worker"))}.</p>
-      <div class="site-tags">
-        <span class="tiny-pill">${safe(settings.payrollContactEmail)}</span>
-        <span class="tiny-pill">${safe(settings.supportPhone)}</span>
-      </div>
-    </article>
-  `;
-}
-
-function agencyRow(agencyRecord) {
-  const settings = settingsForAgency(agencyRecord.id);
-  return `
-    <tr>
-      <td>${safe(agencyRecord.code)} - ${safe(agencyRecord.name)}</td>
-      <td>${safe(agencyRecord.plan)}</td>
-      <td>${clientsForAgency(agencyRecord.id).length}</td>
-      <td>${sitesForAgency(agencyRecord.id).length}</td>
-      <td>${workersForAgency(agencyRecord.id).length}</td>
-      <td>${safe(settings.payrollContactEmail)}</td>
-      <td>${safe(settings.supportPhone)}</td>
-    </tr>
-  `;
-}
-
-function clientCard(clientRecord) {
-  return `
-    <article class="site-card">
-      <header>
-        <div>
-          <h4>${safe(clientRecord.name)}</h4>
-          <p class="site-meta">${safe(clientRecord.contactName)} · ${safe(clientRecord.contactTitle)}</p>
-        </div>
-        ${statusBadge(`${timesheetsForClient(clientRecord.id, state.selectedWeekStart).filter(record => record.clientStatus === "pending").length} pending`, "status-warning")}
-      </header>
-      <p>${safe(clientRecord.email)}</p>
-      <div class="site-tags">
-        <span class="tiny-pill">${safe(countLabel(sitesForClient(clientRecord.id).length, "site"))}</span>
-        <span class="tiny-pill">${safe(countLabel(workersAssignedToClient(clientRecord.id).length, "assigned worker"))}</span>
-      </div>
-    </article>
-  `;
-}
-
-function clientRow(clientRecord) {
-  return `
-    <tr>
-      <td>${safe(clientRecord.name)}</td>
-      <td>${safe(clientRecord.contactName)} - ${safe(clientRecord.contactTitle)}</td>
-      <td>${sitesForClient(clientRecord.id).length}</td>
-      <td>${workersAssignedToClient(clientRecord.id).length}</td>
-      <td>${timesheetsForClient(clientRecord.id, state.selectedWeekStart).filter(record => record.clientStatus === "pending").length}</td>
-    </tr>
-  `;
-}
-
-function siteCard(siteRecord) {
-  const link = timeclockUrlForSite(siteRecord);
-  return `
-    <article class="site-card">
-      <header>
-        <div>
-          <h4>${safe(siteRecord.name)}</h4>
-          <p class="site-meta">${safe(siteRecord.code)} · ${safe(clientById(siteRecord.clientId)?.name || "No client")}</p>
-        </div>
-        ${statusBadge("QR ready", "status-approved")}
-      </header>
-      <p>${safe(siteRecord.address)}</p>
-      <div class="site-tags">
-        <span class="tiny-pill">${safe(siteRecord.shiftProfile)}</span>
-        <span class="tiny-pill">${safe(countLabel(workersAssignedToSite(siteRecord.id).length, "worker"))}</span>
-      </div>
-      <div class="table-actions">
-        <a class="button button-secondary" href="${safe(link)}">Open Punch Link</a>
-        <button class="button button-ghost" data-copy-link="${safe(link)}" type="button">Copy Link</button>
-      </div>
-    </article>
-  `;
-}
-
-function workerRow(workerRecord) {
-  const assignment = activeAssignmentForWorker(workerRecord.id);
-  return `
-    <tr>
-      <td>${safe(fullWorkerName(workerRecord.id))}</td>
-      <td>${safe(workerRecord.title)}</td>
-      <td>${safe(workerRecord.email)}</td>
-      <td>${safe(workerRecord.phone)}</td>
-      <td>${safe(assignment ? `${clientById(assignment.clientId)?.name || ""} · ${siteById(assignment.siteId)?.code || ""}` : "Unassigned")}</td>
-      <td>${statusBadge(workerRecord.status, "status-approved")}</td>
-    </tr>
-  `;
-}
-
-function assignmentRow(record) {
-  return `
-    <tr>
-      <td>${safe(fullWorkerName(record.workerId))}</td>
-      <td>${safe(clientById(record.clientId)?.name || "No client")}</td>
-      <td>${safe(siteById(record.siteId)?.code || "")}</td>
-      <td>${safe(record.shiftStart)} - ${safe(record.shiftEnd)}</td>
-      <td>${safe(formatCurrency(record.payRate))}</td>
-      <td>${safe(formatCurrency(record.billRate))}</td>
-      <td>${safe(formatCurrency(record.billRate - record.payRate))}</td>
-    </tr>
-  `;
-}
-
-function renderApprovalCard(timesheet) {
-  const statusClass = approvalStatusClass(timesheet);
-  const noteValue = timesheet.clientStatus === "rejected" ? timesheet.rejectionNote : timesheet.approvalNote;
-  return `
-    <article class="approval-card">
-      <header>
-        <div>
-          <h4>${safe(fullWorkerName(timesheet.workerId))}</h4>
-          <p class="approval-meta">${safe(siteById(timesheet.siteId)?.code || "")} · ${safe(clientById(timesheet.clientId)?.name || "")}</p>
-        </div>
-        ${statusBadge(approvalStatusLabel(timesheet), statusClass)}
-      </header>
-
-      <div class="hours-strip">
-        ${timesheet.days.map(day => `<div class="hours-chip">${safe(day.label)}<strong>${safe(formatHours(day.hours))}</strong></div>`).join("")}
-      </div>
-
-      <div class="compact-stats">
-        <span>Weekly hours: ${safe(formatHours(timesheet.totalHours))}</span>
-        <span>Regular: ${safe(formatHours(timesheet.regularHours))}</span>
-        <span>OT: ${safe(formatHours(timesheet.overtimeHours))}</span>
-        <span>Approved: ${safe(formatHours(timesheet.approvedHours))}</span>
-      </div>
-
-      <div class="field-group">
-        <label for="note_${safe(timesheet.id)}">Approval notes</label>
-        <textarea id="note_${safe(timesheet.id)}" data-note-input="${safe(timesheet.id)}" placeholder="Approve with a note, or explain why this timesheet needs to be rejected.">${safe(noteValue)}</textarea>
-      </div>
-
-      <div class="approval-footer">
-        <div class="inline-pills">
-          ${timesheet.manualEdited ? `<span class="tiny-pill">Manual edit: ${safe(timesheet.manualNote || "Yes")}</span>` : ""}
-        </div>
-        <div class="approval-actions">
-          <button class="button button-secondary" data-approve-timesheet="${safe(timesheet.id)}" type="button">Approve Timesheet</button>
-          <button class="button button-danger" data-reject-timesheet="${safe(timesheet.id)}" type="button">Reject with Note</button>
+        <div class="support-card">
+          <p class="eyebrow">Help</p>
+          <h3>Need a correction?</h3>
+          <p>If a punch is missing or wrong, reach out to your agency so they can correct the record and keep payroll accurate.</p>
         </div>
       </div>
-    </article>
-  `;
-}
+    `;
+  }
 
-function payrollRow(row) {
-  const timesheet = row.timesheet;
-  const showFinalize = timesheet.clientStatus === "approved" && timesheet.agencyStatus !== "finalized";
-  return `
-    <tr>
-      <td>${safe(row.workerName)}</td>
-      <td>${safe(row.clientName)}</td>
-      <td>${safe(row.siteName)}</td>
-      <td>${safe(formatHours(row.approvedHours))}</td>
-      <td>${safe(formatHours(row.regularHours))}</td>
-      <td>${safe(formatHours(row.overtimeHours))}</td>
-      <td>${safe(formatCurrency(row.payRate))}</td>
-      <td>${safe(formatCurrency(row.laborCost))}</td>
-      <td>${statusBadge(approvalStatusLabel(timesheet), approvalStatusClass(timesheet))}</td>
-      <td>
-        ${showFinalize
-          ? `<button class="button button-ghost" data-finalize-timesheet="${safe(timesheet.id)}" type="button">Finalize</button>`
-          : `<span class="help-text">${safe(timesheet.agencyStatus === "finalized" ? "Ready" : "Waiting")}</span>`}
-      </td>
-    </tr>
-  `;
-}
-
-function marginRow(row) {
-  return `
-    <tr>
-      <td>${safe(row.workerName)}</td>
-      <td>${safe(row.clientName)}</td>
-      <td>${safe(formatHours(row.totalHours))}</td>
-      <td>${safe(formatCurrency(row.payRate))}</td>
-      <td>${safe(formatCurrency(row.billRate))}</td>
-      <td>${safe(formatCurrency(row.revenue))}</td>
-      <td>${safe(formatCurrency(row.laborCost))}</td>
-      <td>${safe(formatCurrency(row.grossProfit))}</td>
-      <td>${safe(formatPercent(row.marginPercent))}</td>
-    </tr>
-  `;
-}
-
-function clientWorkerCard(workerRecord) {
-  const assignment = activeAssignmentForWorker(workerRecord.id);
-  return `
-    <article class="worker-card">
-      <header>
-        <div>
-          <h4>${safe(fullWorkerName(workerRecord.id))}</h4>
-          <p class="worker-meta">${safe(workerRecord.title)}</p>
+  function renderWorkerHelpPage() {
+    return `
+      <div class="worker-layout">
+        <div class="worker-card primary">
+          <p class="eyebrow">Help</p>
+          <h2>Need punch help?</h2>
+          <p class="section-copy">If your punch is wrong, contact your supervisor or staffing agency before payroll is processed.</p>
+          <div class="worker-meta-grid">
+            ${renderWorkerMeta("Support email", getSupportEmail())}
+            ${renderWorkerMeta("Support phone", getSupportPhone())}
+          </div>
         </div>
-        ${statusBadge("Assigned", "status-approved")}
-      </header>
-      <p>${safe(siteById(assignment?.siteId)?.code || "No site")} · ${safe(siteById(assignment?.siteId)?.name || "")}</p>
-      <div class="worker-tags">
-        <span class="tiny-pill">${safe(assignment?.shiftStart || "--:--")} - ${safe(assignment?.shiftEnd || "--:--")}</span>
-        <span class="tiny-pill">${safe(formatCurrency(assignment?.billRate || 0))} bill</span>
+        <div class="support-card">
+          <p class="eyebrow">Tips</p>
+          <h3>Quick reminders</h3>
+          <ul class="list">
+            <li>Clock in when you start working.</li>
+            <li>Start lunch when you leave for lunch.</li>
+            <li>End lunch when you come back.</li>
+            <li>Clock out before you leave the site.</li>
+          </ul>
+        </div>
       </div>
-    </article>
-  `;
-}
+    `;
+  }
 
-function renderExceptionCard(item) {
-  const severityClass = item.severity === "high" ? "status-danger" : item.severity === "medium" ? "status-warning" : "status-neutral";
-  return `
-    <article class="exception-item">
-      <header>
-        <div>
-          <h4>${safe(item.title)}</h4>
-          <p class="exception-meta">${safe(item.meta)}</p>
-        </div>
-        ${statusBadge(item.category, severityClass)}
-      </header>
-      <p>${safe(item.note)}</p>
-    </article>
-  `;
-}
-
-function renderTimelineItem(item) {
-  return `
-    <article class="timeline-item">
-      <div class="timeline-icon">AT</div>
-      <div>
-        <div class="timeline-time">${safe(formatDateTime(item.timestamp))} · ${safe(item.actor)}</div>
-        <h4>${safe(item.title)}</h4>
-        <p class="timeline-note">${safe(item.note)}</p>
-      </div>
-    </article>
-  `;
-}
-
-function renderHistoryItem(punch) {
-  return `
-    <article class="history-item">
-      <header>
-        <div>
-          <h4>${safe(punch.type)}</h4>
-          <p class="history-meta">${safe(siteById(punch.siteId)?.code || "")} · ${safe(formatDateTime(punch.timestamp))}</p>
-        </div>
-        ${statusBadge(punchStatus(punch), punchStatus(punch) === "Late" ? "status-warning" : "status-approved")}
-      </header>
-    </article>
-  `;
-}
-
-function heroStat(label, value, copy) {
-  return `
-    <div class="hero-stat">
-      <span>${safe(label)}</span>
-      <strong>${safe(value)}</strong>
-      <p>${safe(copy)}</p>
-    </div>
-  `;
-}
-
-function metricCard(icon, label, value, note) {
-  return `
-    <article class="metric-card">
-      <div class="metric-header">
-        <div>
-          <div class="metric-label">${safe(label)}</div>
-          <div class="metric-value">${safe(value)}</div>
-        </div>
-        <span class="metric-icon">${safe(icon)}</span>
-      </div>
-      <div class="metric-note">${safe(note)}</div>
-    </article>
-  `;
-}
-
-function featureCard(icon, title, copy) {
-  return `
-    <article class="feature-card">
-      <span class="feature-icon">${safe(icon)}</span>
-      <h4>${safe(title)}</h4>
-      <p>${safe(copy)}</p>
-    </article>
-  `;
-}
-
-function pricingCard(name, price, items) {
-  return `
-    <article class="pricing-card">
-      <h4>${safe(name)}</h4>
-      <div class="pricing-price">${safe(price)}</div>
-      <ul>
-        ${items.map(item => `<li>${safe(item)}</li>`).join("")}
-      </ul>
-    </article>
-  `;
-}
-
-function formulaCard(title, formula) {
-  return `
-    <article class="formula-card">
-      <span class="eyebrow eyebrow-tight">${safe(title)}</span>
-      <code>${safe(formula)}</code>
-    </article>
-  `;
-}
-
-function summaryCard(icon, label, value) {
-  return `
-    <article class="summary-card">
-      <div class="summary-top">
-        <div>
-          <div class="summary-label">${safe(label)}</div>
-          <div class="summary-value">${safe(value)}</div>
-        </div>
-        <span class="summary-icon">${safe(icon)}</span>
-      </div>
-    </article>
-  `;
-}
-
-function dashboardMetrics() {
-  const currentWeekTimesheets = timesheetsForAgencyWeek(state.currentAgencyId, state.currentWeek);
-  const todayPunches = punchesForAgency(state.currentAgencyId).filter(record => isTodayTimestamp(record.timestamp));
-  const workersClockedInToday = new Set(todayPunches.filter(record => record.type === "Clock In").map(record => record.workerId)).size;
-  const pendingApprovals = currentWeekTimesheets.filter(record => record.clientStatus === "pending").length;
-  const exceptions = buildExceptions();
-  const missingPunches = exceptions.filter(item => item.key === "missing_clock_out" || item.key === "open_lunch").length;
-  const payrollHours = currentWeekTimesheets.reduce((sum, record) => sum + record.totalHours, 0);
-  const grossMargin = payrollRows(state.currentWeek).reduce((sum, row) => sum + row.grossProfit, 0);
-  const activeSites = sitesForAgency(state.currentAgencyId).length;
-  const readyHours = currentWeekTimesheets.filter(record => record.agencyStatus === "finalized").reduce((sum, record) => sum + record.totalHours, 0);
-
-  return {
-    workersClockedInToday,
-    pendingApprovals,
-    missingPunches,
-    payrollHours,
-    grossMargin,
-    activeSites,
-    activeSitesLabel: `${activeSites} active client sites`,
-    readyHoursLabel: `${formatHours(readyHours)} ready payroll hours`
-  };
-}
-
-function buildExceptions() {
-  const exceptions = [];
-  const todayPunches = punchesForAgency(state.currentAgencyId)
-    .filter(record => isTodayTimestamp(record.timestamp))
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-  const byWorker = new Map();
-
-  todayPunches.forEach(record => {
-    if (!byWorker.has(record.workerId)) {
-      byWorker.set(record.workerId, []);
+  function renderModal() {
+    if (!state.modal) {
+      return "";
     }
-    byWorker.get(record.workerId).push(record);
-  });
 
-  byWorker.forEach((records, workerId) => {
-    const assignment = activeAssignmentForWorker(workerId);
-    const firstClockIn = records.find(record => record.type === "Clock In");
+    switch (state.modal.type) {
+      case "worker-form":
+        return renderWorkerFormModal();
+      case "worker-view":
+        return renderWorkerViewModal();
+      case "worker-history":
+        return renderWorkerHistoryModal();
+      case "client-form":
+        return renderClientFormModal();
+      case "site-form":
+        return renderSiteFormModal();
+      case "payroll-edit":
+        return renderPayrollEditModal();
+      case "reject-note":
+        return renderRejectNoteModal();
+      default:
+        return "";
+    }
+  }
 
-    const latestLunchStart = [...records].reverse().find(record => record.type === "Start Lunch");
-    const latestLunchEnd = [...records].reverse().find(record => record.type === "End Lunch");
-    const lunchOpen = latestLunchStart && (!latestLunchEnd || new Date(latestLunchStart.timestamp) > new Date(latestLunchEnd.timestamp));
+  function renderWorkerFormModal() {
+    const worker = state.modal.workerId ? getScopedData().workers.find(item => item.id === state.modal.workerId) : null;
+    const scoped = getScopedData();
+    return `
+      <div class="modal">
+        <div class="modal-card">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">${worker ? "Edit Worker" : "Add Worker"}</p>
+              <h3>${worker ? "Update worker details" : "Create a new worker"}</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          <form class="form-grid" data-form="worker-save">
+            <input name="id" type="hidden" value="${escapeAttribute(worker?.id || "")}" />
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-first-name">First name</label>
+                <input id="worker-first-name" name="firstName" type="text" value="${escapeAttribute(worker?.firstName || "")}" />
+              </div>
+              <div class="field-group">
+                <label for="worker-last-name">Last name</label>
+                <input id="worker-last-name" name="lastName" type="text" value="${escapeAttribute(worker?.lastName || "")}" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-phone">Phone</label>
+                <input id="worker-phone" name="phone" type="text" value="${escapeAttribute(worker?.phone || "")}" />
+              </div>
+              <div class="field-group">
+                <label for="worker-email">Email</label>
+                <input id="worker-email" name="email" type="email" value="${escapeAttribute(worker?.email || "")}" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-client">Client</label>
+                <select id="worker-client" name="assignedClientId">
+                  ${scoped.clients.map(client => `<option value="${escapeHtml(client.id)}" ${worker?.assignedClientId === client.id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="worker-site">Site</label>
+                <select id="worker-site" name="assignedSiteId">
+                  ${scoped.sites.map(site => `<option value="${escapeHtml(site.id)}" ${worker?.assignedSiteId === site.id ? "selected" : ""}>${escapeHtml(site.name)}</option>`).join("")}
+                </select>
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-pay-rate">Pay rate</label>
+                <input id="worker-pay-rate" name="payRate" type="number" step="0.01" value="${escapeAttribute(String(worker?.payRate || 0))}" />
+              </div>
+              <div class="field-group">
+                <label for="worker-status">Status</label>
+                <select id="worker-status" name="status">
+                  <option value="active" ${worker?.status !== "inactive" ? "selected" : ""}>Active</option>
+                  <option value="inactive" ${worker?.status === "inactive" ? "selected" : ""}>Inactive</option>
+                </select>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button class="button button-primary" type="submit">Save Worker</button>
+              <button class="button button-ghost" data-action="close-modal" type="button">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
 
-    if (lunchOpen) {
-      exceptions.push({
-        key: "open_lunch",
-        category: "Lunch started but not ended",
-        severity: "high",
-        title: fullWorkerName(workerId),
-        meta: `${siteById(records[0].siteId)?.code || "Site"} · ${clientById(assignment?.clientId)?.name || "Client"}`,
-        note: "Lunch was started and never ended on today's punch flow."
-      });
-    } else {
-      const latestClockIn = [...records].reverse().find(record => record.type === "Clock In");
-      const latestClockOut = [...records].reverse().find(record => record.type === "Clock Out");
-      if (latestClockIn && !latestClockOut) {
-        exceptions.push({
-          key: "missing_clock_out",
-          category: "Clocked in but no clock out",
-          severity: "high",
-          title: fullWorkerName(workerId),
-          meta: `${siteById(records[0].siteId)?.code || "Site"} · ${clientById(assignment?.clientId)?.name || "Client"}`,
-          note: "The worker has a live clock-in today with no matching clock-out."
+  function renderWorkerViewModal() {
+    const worker = getScopedData().workers.find(item => item.id === state.modal.workerId);
+    if (!worker) {
+      return "";
+    }
+    const punchState = getWorkerPunchState(worker.id, getScopedData());
+    return `
+      <div class="modal">
+        <div class="modal-card small">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Worker</p>
+              <h3>${escapeHtml(fullName(worker))}</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          <div class="detail-grid">
+            ${renderDetailBox("Status", punchState.label)}
+            ${renderDetailBox("Client", getClientName(worker.assignedClientId))}
+            ${renderDetailBox("Site", getSiteName(worker.assignedSiteId))}
+            ${renderDetailBox("Pay rate", formatCurrency(worker.payRate))}
+            ${renderDetailBox("Phone", worker.phone || "-")}
+            ${renderDetailBox("Email", worker.email || "-")}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderWorkerHistoryModal() {
+    const worker = getScopedData().workers.find(item => item.id === state.modal.workerId);
+    if (!worker) {
+      return "";
+    }
+    const punches = getWorkerPunches(worker.id, getScopedData().punches).slice().reverse();
+    return `
+      <div class="modal">
+        <div class="modal-card">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Punch History</p>
+              <h3>${escapeHtml(fullName(worker))}</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          ${punches.length ? `
+            <div class="history-timeline">
+              ${punches.map(punch => `
+                <div class="history-timeline-item">
+                  <strong>${escapeHtml(PUNCH_LABELS[punch.action] || punch.action)}</strong>
+                  <span class="helper-copy">${escapeHtml(formatDateTime(punch.timestamp))}</span>
+                </div>
+              `).join("")}
+            </div>
+          ` : `<p class="helper-copy">No punch history is available yet.</p>`}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderClientFormModal() {
+    const client = state.modal.clientId ? getScopedData().clients.find(item => item.id === state.modal.clientId) : null;
+    return `
+      <div class="modal">
+        <div class="modal-card">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">${client ? "Edit Client" : "Add Client"}</p>
+              <h3>${client ? "Update client details" : "Create a new client"}</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          <form class="form-grid" data-form="client-save">
+            <input name="id" type="hidden" value="${escapeAttribute(client?.id || "")}" />
+            <div class="field-group">
+              <label for="client-name">Client name</label>
+              <input id="client-name" name="name" type="text" value="${escapeAttribute(client?.name || "")}" />
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="client-contact-name">Contact name</label>
+                <input id="client-contact-name" name="contactName" type="text" value="${escapeAttribute(client?.contactName || "")}" />
+              </div>
+              <div class="field-group">
+                <label for="client-phone">Phone</label>
+                <input id="client-phone" name="phone" type="text" value="${escapeAttribute(client?.phone || "")}" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="client-email">Contact email</label>
+                <input id="client-email" name="contactEmail" type="email" value="${escapeAttribute(client?.contactEmail || "")}" />
+              </div>
+              <div class="field-group">
+                <label for="client-status">Status</label>
+                <select id="client-status" name="status">
+                  <option value="active" ${client?.status !== "inactive" ? "selected" : ""}>Active</option>
+                  <option value="inactive" ${client?.status === "inactive" ? "selected" : ""}>Inactive</option>
+                </select>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button class="button button-primary" type="submit">Save Client</button>
+              <button class="button button-ghost" data-action="close-modal" type="button">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSiteFormModal() {
+    const site = state.modal.siteId ? getScopedData().sites.find(item => item.id === state.modal.siteId) : null;
+    const clients = getScopedData().clients;
+    return `
+      <div class="modal">
+        <div class="modal-card">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">${site ? "Edit Site" : "Add Site"}</p>
+              <h3>${site ? "Update site details" : "Create a new site"}</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          <form class="form-grid" data-form="site-save">
+            <input name="id" type="hidden" value="${escapeAttribute(site?.id || "")}" />
+            <div class="field-group">
+              <label for="site-client">Client</label>
+              <select id="site-client" name="clientId">
+                ${clients.map(client => `<option value="${escapeHtml(client.id)}" ${site?.clientId === client.id ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="site-name">Site name</label>
+              <input id="site-name" name="name" type="text" value="${escapeAttribute(site?.name || "")}" />
+            </div>
+            <div class="field-group">
+              <label for="site-address">Address</label>
+              <input id="site-address" name="address" type="text" value="${escapeAttribute(site?.address || "")}" />
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="site-status">Status</label>
+                <select id="site-status" name="status">
+                  <option value="active" ${site?.status !== "inactive" ? "selected" : ""}>Active</option>
+                  <option value="inactive" ${site?.status === "inactive" ? "selected" : ""}>Inactive</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="site-qr-url">QR link override</label>
+                <input id="site-qr-url" name="qrCodeUrl" type="text" value="${escapeAttribute(site?.qrCodeUrl || "")}" placeholder="${escapeAttribute(buildSiteLink(site?.id || "site_example"))}" />
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button class="button button-primary" type="submit">Save Site</button>
+              <button class="button button-ghost" data-action="close-modal" type="button">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPayrollEditModal() {
+    const timesheet = getScopedData().timesheets.find(item => item.id === state.modal.timesheetId);
+    if (!timesheet) {
+      return "";
+    }
+    const payRate = Number(timesheet.payRate || getWorker(timesheet.workerId)?.payRate || 0);
+    return `
+      <div class="modal">
+        <div class="modal-card">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Edit Payroll</p>
+              <h3>${escapeHtml(getWorkerName(timesheet.workerId))}</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          <form class="form-grid" data-form="payroll-save">
+            <input name="id" type="hidden" value="${escapeAttribute(timesheet.id)}" />
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="timesheet-approved-hours">Approved hours</label>
+                <input id="timesheet-approved-hours" name="approvedHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.approvedHours || 0))}" />
+              </div>
+              <div class="field-group">
+                <label for="timesheet-status">Status</label>
+                <select id="timesheet-status" name="status">
+                  <option value="pending" ${timesheet.status === "pending" ? "selected" : ""}>Pending</option>
+                  <option value="approved" ${timesheet.status === "approved" ? "selected" : ""}>Approved</option>
+                  <option value="rejected" ${timesheet.status === "rejected" ? "selected" : ""}>Rejected</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="timesheet-regular-hours">Regular hours</label>
+                <input id="timesheet-regular-hours" name="regularHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.regularHours || 0))}" />
+              </div>
+              <div class="field-group">
+                <label for="timesheet-overtime-hours">Overtime hours</label>
+                <input id="timesheet-overtime-hours" name="overtimeHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.overtimeHours || 0))}" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="timesheet-pay-rate">Pay rate</label>
+                <input id="timesheet-pay-rate" name="payRate" type="number" step="0.01" value="${escapeAttribute(String(payRate))}" />
+              </div>
+              <div class="field-group">
+                <label for="timesheet-admin-notes">Admin notes</label>
+                <textarea id="timesheet-admin-notes" name="adminNotes">${escapeHtml(timesheet.adminNotes || "")}</textarea>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button class="button button-primary" type="submit">Save Row</button>
+              <button class="button button-ghost" data-action="close-modal" type="button">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderRejectNoteModal() {
+    return `
+      <div class="modal">
+        <div class="modal-card small">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Reject Timesheet</p>
+              <h3>Add a note for the rejection</h3>
+            </div>
+            <button class="modal-close" data-action="close-modal" type="button">Close</button>
+          </div>
+          <form class="form-grid" data-form="reject-note">
+            <div class="field-group">
+              <label for="reject-note">Note</label>
+              <textarea id="reject-note" name="note" placeholder="Tell the worker or agency what needs to be fixed."></textarea>
+            </div>
+            <div class="modal-actions">
+              <button class="button button-danger" type="submit">Reject with Note</button>
+              <button class="button button-ghost" data-action="close-modal" type="button">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSidebarNav() {
+    const allowed = getAllowedRoutes();
+    return NAV_ITEMS
+      .filter(item => item.roles.includes(state.session.role) && allowed.has(item.id))
+      .map(item => `
+        <button class="nav-item ${state.route === item.id ? "is-active" : ""}" data-action="go-route" data-route="${escapeHtml(item.id)}" type="button">
+          <span class="nav-badge">${escapeHtml(item.badge)}</span>
+          <span>${escapeHtml(item.label)}</span>
+        </button>
+      `)
+      .join("");
+  }
+
+  function renderTopbarButtons() {
+    if (state.route === "dashboard" && (state.session.role === "agencyOwner" || state.session.role === "agencyAdmin")) {
+      return `
+        <button class="button button-secondary" data-action="go-route" data-route="approvals" type="button">Review Timesheets</button>
+        <button class="button button-ghost" data-action="go-route" data-route="payroll" type="button">Export Payroll</button>
+      `;
+    }
+
+    if (state.route === "billing" && state.session.mode === "cloud") {
+      return `<button class="button button-secondary" data-action="manage-billing" type="button">Manage Billing</button>`;
+    }
+
+    return "";
+  }
+
+  function renderNoticeBanner() {
+    if (!state.notice) {
+      return "";
+    }
+    return `
+      <div class="notice-card">
+        <div>
+          <strong>Update</strong>
+          <p>${escapeHtml(state.notice)}</p>
+        </div>
+        <button class="button button-ghost" data-action="dismiss-notice" type="button">Dismiss</button>
+      </div>
+    `;
+  }
+
+  function renderModeWarnings() {
+    if (state.session.mode === "demo") {
+      return `
+        <div class="notice-card warning">
+          <div>
+            <strong>Demo Mode: data only saves in this browser</strong>
+            <p>Use Cloud Mode with Firebase Authentication and Firestore when you want live agency data that syncs across devices.</p>
+          </div>
+        </div>
+      `;
+    }
+
+    if (state.session.mode === "cloud") {
+      const agency = getCurrentAgency();
+      const trialNotice = agency?.subscriptionStatus === "trialing"
+        ? `
+          <div class="notice-card warning">
+            <div>
+              <strong>You have ${Math.max(getTrialDaysRemaining(), 0)} days left in your free trial.</strong>
+              <p>Upgrade to a paid subscription before the trial ends to keep worker, payroll, and approval workflows live.</p>
+            </div>
+            ${state.session.role === "agencyOwner" ? `<button class="button button-secondary" data-action="go-route" data-route="billing" type="button">Open Billing</button>` : ""}
+          </div>
+        `
+        : "";
+
+      return `
+        ${trialNotice}
+        <div class="notice-card">
+          <div>
+            <strong>Cloud Mode: data syncs across devices</strong>
+            <p>Real users, live agency records, and subscription status now come from Firebase and Stripe-ready backend endpoints.</p>
+          </div>
+        </div>
+      `;
+    }
+
+    return "";
+  }
+
+  function buildAgencyDashboardMetrics(scoped) {
+    const marginRows = buildMarginRows(scoped);
+    const grossProfit = sumNumbers(marginRows.map(row => row.grossProfit));
+    const revenue = sumNumbers(marginRows.map(row => row.revenue));
+    const agency = getCurrentAgency();
+    const subscription = getCurrentSubscription();
+    return {
+      activeWorkers: scoped.workers.filter(worker => worker.status !== "inactive").length,
+      clockedInNow: buildLivePunchRows(scoped).filter(row => row.baseStatusKey === "clocked-in").length,
+      onLunch: buildLivePunchRows(scoped).filter(row => row.baseStatusKey === "on-lunch").length,
+      missingClockOuts: buildLivePunchRows(scoped).filter(row => row.exception === "Missing clock out").length,
+      pendingApprovals: scoped.approvals.filter(approval => approval.status === "pending").length,
+      payrollHours: sumNumbers(scoped.timesheets.map(timesheet => timesheet.approvedHours || 0)),
+      grossProfit,
+      marginPercent: revenue ? (grossProfit / revenue) * 100 : 0,
+      activeClients: scoped.clients.filter(client => client.status !== "inactive").length,
+      activeSites: scoped.sites.filter(site => site.status !== "inactive").length,
+      subscriptionStatus: subscription?.status || agency?.subscriptionStatus || "trialing"
+    };
+  }
+
+  function buildLivePunchRows(scoped) {
+    return scoped.workers.map(worker => {
+      const punchState = getWorkerPunchState(worker.id, scoped);
+      const lastPunch = getWorkerLatestPunch(worker.id, scoped.punches);
+      const hoursToday = calculateHoursFromPunches(getWorkerPunchesForToday(worker.id, scoped.punches), state.now);
+      const exception = buildWorkerException(worker.id, scoped);
+      return {
+        workerId: worker.id,
+        workerName: fullName(worker),
+        clientId: worker.assignedClientId,
+        clientName: getClientName(worker.assignedClientId),
+        siteId: worker.assignedSiteId,
+        siteName: getSiteName(worker.assignedSiteId),
+        lastActionLabel: lastPunch ? PUNCH_LABELS[lastPunch.action] || lastPunch.action : "No punch yet",
+        lastPunchTime: lastPunch ? formatDateTime(lastPunch.timestamp) : "-",
+        statusLabel: punchState.label,
+        statusKey: exception === "Missing clock out" ? "missing-clock-out" : punchState.statusKey,
+        baseStatusKey: punchState.statusKey,
+        hoursToday: formatHours(hoursToday),
+        exception
+      };
+    });
+  }
+
+  function buildMarginRows(scoped) {
+    return scoped.timesheets.map(timesheet => {
+      const assignment = scoped.assignments.find(item => item.workerId === timesheet.workerId) || null;
+      const worker = scoped.workers.find(item => item.id === timesheet.workerId) || null;
+      const payRate = Number(timesheet.payRate || assignment?.payRate || worker?.payRate || 0);
+      const billRate = Number(assignment?.billRate || 0);
+      const regularHours = Number(timesheet.regularHours || 0);
+      const overtimeHours = Number(timesheet.overtimeHours || 0);
+      const hours = regularHours + overtimeHours;
+      const revenue = billRate * hours;
+      const laborCost = calculateLaborCost(regularHours, overtimeHours, payRate);
+      const grossProfit = revenue - laborCost;
+      const marginPercent = revenue ? (grossProfit / revenue) * 100 : 0;
+      return {
+        workerName: getWorkerName(timesheet.workerId),
+        clientName: getClientName(timesheet.clientId),
+        siteName: getSiteName(timesheet.siteId),
+        payRate,
+        billRate,
+        hours,
+        revenue,
+        laborCost,
+        grossProfit,
+        marginPercent
+      };
+    });
+  }
+
+  function buildPayrollSummary(timesheets) {
+    return {
+      approvedHours: sumNumbers(timesheets.map(timesheet => timesheet.approvedHours || 0)),
+      regularHours: sumNumbers(timesheets.map(timesheet => timesheet.regularHours || 0)),
+      overtimeHours: sumNumbers(timesheets.map(timesheet => timesheet.overtimeHours || 0)),
+      totalLaborCost: sumNumbers(timesheets.map(timesheet => calculateLaborCost(
+        timesheet.regularHours,
+        timesheet.overtimeHours,
+        Number(timesheet.payRate || getWorker(timesheet.workerId)?.payRate || 0)
+      )))
+    };
+  }
+
+  function buildAttentionItems(scoped) {
+    return buildExceptionItems(scoped).map(exception => ({
+      title: exception.title,
+      detail: exception.detail,
+      label: exception.kind,
+      tone: exception.tone
+    }));
+  }
+
+  function buildExceptionItems(scoped) {
+    const items = [];
+    const liveRows = buildLivePunchRows(scoped);
+
+    liveRows.forEach(row => {
+      if (row.statusKey === "missing-clock-out") {
+        items.push({
+          title: `${row.workerName} is still open on the clock`,
+          detail: `${row.siteName} has a worker with no clock out on file yet.`,
+          kind: "Missing clock out",
+          tone: "status-warning"
         });
+      }
+
+      if (row.statusKey === "on-lunch") {
+        items.push({
+          title: `${row.workerName} started lunch but never ended it`,
+          detail: `Review the lunch punch on ${row.siteName}.`,
+          kind: "Lunch started but not ended",
+          tone: "status-warning"
+        });
+      }
+
+      if (row.exception === "Late punch") {
+        items.push({
+          title: `${row.workerName} clocked in late`,
+          detail: `The first punch today came in after the scheduled start time.`,
+          kind: "Late punch",
+          tone: "status-warning"
+        });
+      }
+
+      if (row.exception === "Duplicate punch") {
+        items.push({
+          title: `${row.workerName} has a duplicate punch`,
+          detail: `Two matching actions were captured too close together.`,
+          kind: "Duplicate punch",
+          tone: "status-danger"
+        });
+      }
+    });
+
+    scoped.timesheets.filter(timesheet => timesheet.status === "pending").forEach(timesheet => {
+      items.push({
+        title: `${getWorkerName(timesheet.workerId)} is still waiting on approval`,
+        detail: `${getClientName(timesheet.clientId)} has not approved this timesheet yet.`,
+        kind: "Pending approval",
+        tone: "status-warning"
+      });
+    });
+
+    scoped.timesheets.filter(timesheet => timesheet.status === "rejected").forEach(timesheet => {
+      items.push({
+        title: `${getWorkerName(timesheet.workerId)} timesheet was rejected`,
+        detail: timesheet.adminNotes || "Review the rejection note before payroll.",
+        kind: "Rejected timesheet",
+        tone: "status-danger"
+      });
+    });
+
+    scoped.punches.filter(punch => punch.edited).forEach(punch => {
+      items.push({
+        title: `${getWorkerName(punch.workerId)} has a manual edit`,
+        detail: punch.notes || "A punch was manually adjusted and should be reviewed.",
+        kind: "Manual edit made",
+        tone: "status-warning"
+      });
+    });
+
+    return items;
+  }
+
+  function buildWorkerException(workerId, scoped) {
+    const punches = getWorkerPunchesForToday(workerId, scoped.punches);
+    const hasDuplicate = punches.some((punch, index) => {
+      const next = punches[index + 1];
+      return next && next.action === punch.action && Math.abs(new Date(next.timestamp) - new Date(punch.timestamp)) <= 5 * 60 * 1000;
+    });
+    if (hasDuplicate) {
+      return "Duplicate punch";
+    }
+
+    const firstClockIn = punches.find(punch => punch.action === "clockIn");
+    if (firstClockIn) {
+      const start = new Date(firstClockIn.timestamp);
+      if (start.getHours() > 7 || (start.getHours() === 7 && start.getMinutes() > 5)) {
+        return "Late punch";
       }
     }
 
-    if (firstClockIn && assignment) {
-      const scheduled = parseTimestampOnSameDay(firstClockIn.timestamp, assignment.shiftStart);
-      const minutesLate = Math.round((new Date(firstClockIn.timestamp) - scheduled) / 60000);
-      if (minutesLate > 5) {
-        exceptions.push({
-          key: "late_punch",
-          category: "Late punch",
-          severity: "medium",
-          title: fullWorkerName(workerId),
-          meta: `${siteById(records[0].siteId)?.code || "Site"} · ${minutesLate} minutes late`,
-          note: `Clock-in landed after the scheduled ${assignment.shiftStart} start time.`
+    const status = getWorkerPunchState(workerId, scoped);
+    if (status.key === "clocked-in") {
+      return "Missing clock out";
+    }
+    if (status.statusKey === "on-lunch") {
+      return "No lunch recorded";
+    }
+    return "";
+  }
+
+  function getScopedData() {
+    const source = state.session.mode === "demo" ? state.demoStore : state.cache;
+    if (state.session.mode === "public" || !state.session.role) {
+      return emptyStore();
+    }
+
+    if (state.session.role === "platformOwner") {
+      return deepClone(source);
+    }
+
+    const agencyId = state.session.agencyId;
+    const filterAgency = rows => (rows || []).filter(row => !row.agencyId || row.agencyId === agencyId);
+    const scoped = {
+      agencies: (source.agencies || []).filter(agency => agency.id === agencyId),
+      users: filterAgency(source.users),
+      clients: filterAgency(source.clients),
+      sites: filterAgency(source.sites),
+      workers: filterAgency(source.workers),
+      assignments: filterAgency(source.assignments),
+      punches: filterAgency(source.punches),
+      timesheets: filterAgency(source.timesheets),
+      approvals: filterAgency(source.approvals),
+      payrollRuns: filterAgency(source.payrollRuns),
+      subscriptions: filterAgency(source.subscriptions),
+      auditLogs: filterAgency(source.auditLogs),
+      settings: filterAgency(source.settings)
+    };
+
+    if (state.session.role === "worker") {
+      return {
+        ...scoped,
+        users: scoped.users.filter(user => user.id === state.session.userId),
+        workers: scoped.workers.filter(worker => worker.id === state.session.workerId),
+        punches: scoped.punches.filter(punch => punch.workerId === state.session.workerId),
+        timesheets: scoped.timesheets.filter(timesheet => timesheet.workerId === state.session.workerId),
+        approvals: scoped.approvals.filter(approval => approval.workerId === state.session.workerId),
+        clients: scoped.clients.filter(client => client.id === getCurrentWorkerFrom(scoped)?.assignedClientId),
+        sites: scoped.sites.filter(site => site.id === getCurrentWorkerFrom(scoped)?.assignedSiteId),
+        assignments: [],
+        subscriptions: []
+      };
+    }
+
+    if (state.session.role === "clientManager") {
+      const clientIds = state.session.assignedClientIds || [];
+      const siteIds = state.session.assignedSiteIds || [];
+      const filterAssigned = rows => rows.filter(row => clientIds.includes(row.clientId || row.assignedClientId) || siteIds.includes(row.siteId || row.assignedSiteId));
+      return {
+        ...scoped,
+        users: scoped.users.filter(user => user.id === state.session.userId),
+        clients: scoped.clients.filter(client => clientIds.includes(client.id)),
+        sites: scoped.sites.filter(site => siteIds.includes(site.id)),
+        workers: filterAssigned(scoped.workers),
+        punches: filterAssigned(scoped.punches),
+        timesheets: filterAssigned(scoped.timesheets),
+        approvals: filterAssigned(scoped.approvals),
+        assignments: [],
+        payrollRuns: [],
+        subscriptions: [],
+        auditLogs: []
+      };
+    }
+
+    return scoped;
+  }
+
+  function getCurrentAgency() {
+    const scoped = getScopedData();
+    return scoped.agencies[0] || state.demoStore.agencies.find(agency => agency.id === state.session.agencyId) || null;
+  }
+
+  function getCurrentSubscription() {
+    const scoped = getScopedData();
+    return (scoped.subscriptions || []).find(subscription => subscription.agencyId === state.session.agencyId) || null;
+  }
+
+  function getCurrentSettings() {
+    const scoped = getScopedData();
+    return scoped.settings[0] || null;
+  }
+
+  function getCurrentWorker() {
+    return getCurrentWorkerFrom(getScopedData());
+  }
+
+  function getCurrentWorkerFrom(scoped) {
+    return scoped.workers.find(worker => worker.id === state.session.workerId) || scoped.workers[0] || null;
+  }
+
+  function getWorker(workerId) {
+    const scoped = getScopedData();
+    return scoped.workers.find(worker => worker.id === workerId) || state.demoStore.workers.find(worker => worker.id === workerId) || null;
+  }
+
+  function getAssignmentsForWorker(workerId) {
+    return getScopedData().assignments.filter(assignment => assignment.workerId === workerId && assignment.status !== "inactive");
+  }
+
+  function getWorkerName(workerId) {
+    const worker = getWorker(workerId);
+    if (worker) {
+      return fullName(worker);
+    }
+
+    const scoped = getScopedData();
+    const embedded = []
+      .concat(scoped.timesheets || [], scoped.approvals || [], scoped.punches || [])
+      .find(row => row.workerId === workerId && (row.workerName || row.workerDisplayName));
+
+    return embedded?.workerName || embedded?.workerDisplayName || "Unknown Worker";
+  }
+
+  function getClientName(clientId) {
+    const scoped = getScopedData();
+    const client = scoped.clients.find(item => item.id === clientId)
+      || state.demoStore.clients.find(item => item.id === clientId)
+      || state.cache.clients.find(item => item.id === clientId);
+    return client ? client.name : "Unknown Client";
+  }
+
+  function getSiteName(siteId) {
+    const scoped = getScopedData();
+    const site = scoped.sites.find(item => item.id === siteId)
+      || state.demoStore.sites.find(item => item.id === siteId)
+      || state.cache.sites.find(item => item.id === siteId);
+    return site ? site.name : "Unknown Site";
+  }
+
+  function getAgencyName(agencyId) {
+    const agency = state.cache.agencies.find(item => item.id === agencyId)
+      || state.demoStore.agencies.find(item => item.id === agencyId);
+    return agency ? agency.name : "";
+  }
+
+  function getWorkerPunchState(workerId, scoped) {
+    const punches = getWorkerPunchesForToday(workerId, scoped.punches);
+    const lastPunch = punches[punches.length - 1];
+    const allowed = {
+      clockIn: false,
+      startLunch: false,
+      endLunch: false,
+      clockOut: false
+    };
+
+    if (!lastPunch) {
+      allowed.clockIn = true;
+      return { key: "not-started", statusKey: "not-started", label: "Not Clocked In", allowed };
+    }
+
+    switch (lastPunch.action) {
+      case "clockIn":
+      case "endLunch":
+        allowed.startLunch = true;
+        allowed.clockOut = true;
+        return { key: "clocked-in", statusKey: "clocked-in", label: "Clocked In", allowed };
+      case "startLunch":
+        allowed.endLunch = true;
+        return { key: "on-lunch", statusKey: "on-lunch", label: "On Lunch", allowed };
+      case "clockOut":
+        return { key: "clocked-out", statusKey: "clocked-out", label: "Clocked Out", allowed };
+      default:
+        allowed.clockIn = true;
+        return { key: "not-started", statusKey: "not-started", label: "Not Clocked In", allowed };
+    }
+  }
+
+  function getWorkerLatestPunch(workerId, punches) {
+    const todayPunches = getWorkerPunchesForToday(workerId, punches);
+    return todayPunches[todayPunches.length - 1] || null;
+  }
+
+  function getWorkerPunches(workerId, punches) {
+    return punches
+      .filter(punch => punch.workerId === workerId)
+      .slice()
+      .sort((left, right) => compareDates(left.timestamp, right.timestamp));
+  }
+
+  function getWorkerPunchesForToday(workerId, punches) {
+    const today = formatDateInput(state.now);
+    return getWorkerPunches(workerId, punches).filter(punch => formatDateInput(new Date(punch.timestamp)) === today);
+  }
+
+  function calculateHoursFromPunches(punches, now) {
+    let hours = 0;
+    let clockAnchor = null;
+
+    punches.forEach(punch => {
+      const timestamp = new Date(punch.timestamp);
+      if (punch.action === "clockIn") {
+        clockAnchor = timestamp;
+      }
+      if (punch.action === "startLunch" && clockAnchor) {
+        hours += (timestamp - clockAnchor) / 36e5;
+        clockAnchor = null;
+      }
+      if (punch.action === "endLunch") {
+        clockAnchor = timestamp;
+      }
+      if (punch.action === "clockOut" && clockAnchor) {
+        hours += (timestamp - clockAnchor) / 36e5;
+        clockAnchor = null;
+      }
+    });
+
+    if (clockAnchor) {
+      hours += (now - clockAnchor) / 36e5;
+    }
+
+    return Math.max(hours, 0);
+  }
+
+  function getApprovalTimesheets(approvals) {
+    const timesheets = getScopedData().timesheets;
+    return approvals.map(approval => timesheets.find(timesheet => timesheet.id === approval.timesheetId)).filter(Boolean);
+  }
+
+  function buildPunchSummaryText(workerId, punches) {
+    const todayPunches = getWorkerPunchesForToday(workerId, punches);
+    if (!todayPunches.length) {
+      return "No punches today";
+    }
+    return todayPunches.map(punch => `${PUNCH_LABELS[punch.action]} ${formatTime(punch.timestamp)}`).join(", ");
+  }
+
+  function getUsageStats(scoped, agencyId) {
+    const activeWorkers = scoped.workers.filter(worker => worker.status !== "inactive" && (!agencyId || worker.agencyId === agencyId)).length;
+    const activeSites = scoped.sites.filter(site => site.status !== "inactive" && (!agencyId || site.agencyId === agencyId)).length;
+    return { activeWorkers, activeSites };
+  }
+
+  function getPayPeriods(timesheets) {
+    const map = new Map();
+    timesheets.forEach(timesheet => {
+      const key = `${timesheet.payPeriodStart}|${timesheet.payPeriodEnd}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          value: key,
+          label: `${formatDate(timesheet.payPeriodStart)} to ${formatDate(timesheet.payPeriodEnd)}`
         });
       }
+    });
+    return Array.from(map.values()).sort((left, right) => right.value.localeCompare(left.value));
+  }
+
+  function normalizeFilters() {
+    const payPeriods = getPayPeriods(getScopedData().timesheets);
+    if (!payPeriods.some(period => period.value === state.selectedPayPeriod)) {
+      state.selectedPayPeriod = payPeriods[0]?.value || "";
+    }
+  }
+
+  function getPlanDefinition(planId) {
+    return PLAN_DEFINITIONS[planId] || PLAN_DEFINITIONS.agency;
+  }
+
+  function getTrialDaysRemaining() {
+    const agency = getCurrentAgency();
+    const subscription = getCurrentSubscription();
+    const trialEnd = subscription?.trialEnd || agency?.trialEnd;
+    if (!trialEnd) {
+      return 0;
+    }
+    const difference = Math.ceil((new Date(trialEnd) - state.now) / 86400000);
+    return Math.max(difference, 0);
+  }
+
+  function isBillingLocked() {
+    return BILLING_LOCK_STATUSES.has(state.session.subscriptionStatus || getCurrentSubscription()?.status || getCurrentAgency()?.subscriptionStatus);
+  }
+
+  function getPageTitle() {
+    const titles = {
+      dashboard: "Dashboard",
+      workers: "Workers",
+      clients: "Clients",
+      sites: "Sites",
+      assignments: "Assignments",
+      "live-punches": "Live Punches",
+      approvals: "Approvals",
+      payroll: "Payroll",
+      margin: "Margin",
+      exceptions: "Problems to Fix",
+      "qr-codes": "QR Codes",
+      users: "Users",
+      billing: "Billing",
+      settings: "Settings"
+    };
+    return titles[state.route] || "Portaly";
+  }
+
+  function getModeBadgeText() {
+    if (state.session.mode === "cloud") {
+      return "Cloud Mode";
+    }
+    if (state.session.mode === "demo") {
+      return "Demo Mode";
+    }
+    return "Public Site";
+  }
+
+  function getModeBadgeCopy() {
+    if (state.session.mode === "cloud") {
+      return "Cloud Mode: data syncs across devices";
+    }
+    if (state.session.mode === "demo") {
+      return "Demo Mode: data only saves in this browser";
+    }
+    return "Public marketing site";
+  }
+
+  function getSubscriptionSummaryLine() {
+    const agency = getCurrentAgency();
+    if (!agency) {
+      return "No agency selected";
+    }
+    if (agency.subscriptionStatus === "trialing") {
+      return `Trialing · ${getTrialDaysRemaining()} days left`;
+    }
+    return `${formatStatusLabel(agency.subscriptionStatus)} · ${getPlanDefinition(agency.planId).label}`;
+  }
+
+  function getBrandName() {
+    return getCurrentSettings()?.agencyName || getCurrentAgency()?.name || "Portaly";
+  }
+
+  function getBrandInitials() {
+    return getCurrentSettings()?.logoInitials || initials(getBrandName());
+  }
+
+  function getSupportEmail() {
+    return getCurrentSettings()?.supportEmail || DEFAULT_SUPPORT_EMAIL;
+  }
+
+  function getSupportPhone() {
+    return getCurrentSettings()?.supportPhone || DEFAULT_SUPPORT_PHONE;
+  }
+
+  function applyTheme(color) {
+    const appliedColor = normalizeColor(color || getCurrentSettings()?.primaryColor || getCurrentAgency()?.settings?.primaryColor || DEFAULT_BRAND);
+    const rgb = hexToRgb(appliedColor);
+    document.documentElement.style.setProperty("--brand", appliedColor);
+    document.documentElement.style.setProperty("--brand-rgb", `${rgb.r}, ${rgb.g}, ${rgb.b}`);
+  }
+
+  function getWorkerStatusMessage(statusKey) {
+    switch (statusKey) {
+      case "clocked-in":
+        return "You are clocked in";
+      case "on-lunch":
+        return "Lunch started";
+      case "clocked-out":
+        return "Your shift is complete";
+      default:
+        return "You are not clocked in";
+    }
+  }
+
+  function buildAgencySettings(input) {
+    return {
+      agencyName: input.agencyName || "Portaly Agency",
+      logoInitials: input.logoInitials || initials(input.agencyName || "Portaly"),
+      primaryColor: normalizeColor(input.primaryColor || DEFAULT_BRAND),
+      supportEmail: input.supportEmail || DEFAULT_SUPPORT_EMAIL,
+      supportPhone: input.supportPhone || DEFAULT_SUPPORT_PHONE,
+      payrollContact: input.payrollContact || input.supportEmail || DEFAULT_SUPPORT_EMAIL,
+      defaultPayPeriod: input.defaultPayPeriod || "Weekly"
+    };
+  }
+
+  function renderMetricCard(label, value, foot, badge) {
+    return `
+      <div class="metric-card">
+        <div class="metric-top">
+          <div>
+            <span class="metric-label">${escapeHtml(label)}</span>
+            <strong class="metric-value">${escapeHtml(String(value))}</strong>
+            <p class="metric-foot">${escapeHtml(foot)}</p>
+          </div>
+          <span class="metric-icon">${escapeHtml(badge)}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderFeatureCard(title, copy) {
+    return `
+      <div class="feature-card">
+        <div class="card-icon">${escapeHtml(initials(title).slice(0, 2))}</div>
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderPricingCard(plan, highlight) {
+    const label = plan.price === null ? "Custom" : `$${plan.price}/month`;
+    const action = plan.id === "enterprise"
+      ? `<a class="button button-ghost" href="mailto:sales@portaly-demo.com?subject=Portaly%20Enterprise">Contact Sales</a>`
+      : `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="select-plan" data-plan="${escapeHtml(plan.id)}" type="button">${highlight ? "Selected Plan" : "Choose Plan"}</button>`;
+
+    return `
+      <div class="pricing-card ${highlight ? "is-highlighted" : ""}">
+        <p class="eyebrow">${escapeHtml(plan.label)}</p>
+        <h3>${escapeHtml(plan.label)}</h3>
+        <span class="pricing-price">${escapeHtml(label)}</span>
+        <ul class="list">
+          ${plan.features.map(feature => `<li>${escapeHtml(feature)}</li>`).join("")}
+        </ul>
+        <div class="page-actions" style="margin-top: 18px;">
+          ${action}
+          ${plan.id !== "enterprise" ? `<button class="button button-ghost" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>` : ""}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderFaq(title, copy) {
+    return `
+      <div class="faq-item">
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderHeroStat(value, copy) {
+    return `
+      <div class="hero-stat">
+        <strong class="hero-stat-value">${escapeHtml(value)}</strong>
+        <p>${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderFlowStep(number, title, copy) {
+    return `
+      <div class="flow-step">
+        <div class="flow-number">${number}</div>
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <p class="helper-copy">${escapeHtml(copy)}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderDemoRoleCard(title, copy, role) {
+    return `
+      <div class="auth-card">
+        <p class="eyebrow">${escapeHtml(title)}</p>
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(copy)}</p>
+        <div class="page-actions" style="margin-top: 16px;">
+          <button class="button button-primary" data-action="demo-login" data-role="${escapeHtml(role)}" type="button">Demo as ${escapeHtml(title)}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderEmptyState(title, copy) {
+    return `
+      <div class="empty-state">
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderInlineStatus(value) {
+    const label = formatStatusLabel(value);
+    const tone = getStatusTone(value);
+    return `<span class="status-badge ${tone}">${escapeHtml(label)}</span>`;
+  }
+
+  function renderUsageRow(label, count, limit) {
+    const percent = limit ? Math.min((count / limit) * 100, 100) : 28;
+    return `
+      <div class="stack-sm">
+        <div class="info-row">
+          <strong>${escapeHtml(label)}</strong>
+          <span class="helper-copy">${escapeHtml(limit === null ? `${count} used` : `${count} of ${limit}`)}</span>
+        </div>
+        <div class="usage-bar">
+          <div class="usage-fill" style="width: ${percent}%"></div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderWorkerMeta(label, value) {
+    return `
+      <div class="worker-meta">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+      </div>
+    `;
+  }
+
+  function renderDetailBox(label, value) {
+    return `
+      <div class="detail-box">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+      </div>
+    `;
+  }
+
+  function renderQrBox() {
+    return `
+      <div class="qr-box">
+        ${QR_PATTERN.map(value => `<span class="${value ? "filled" : ""}"></span>`).join("")}
+      </div>
+    `;
+  }
+
+  function buildWorkerLink(workerId) {
+    return `${state.firebase.config.appUrl || DEFAULT_APP_URL}?mode=worker&workerId=${encodeURIComponent(workerId)}`;
+  }
+
+  function buildSiteLink(siteId) {
+    return `${state.firebase.config.appUrl || DEFAULT_APP_URL}?mode=site&siteId=${encodeURIComponent(siteId)}`;
+  }
+
+  function buildPayrollCsv(timesheets, excelReady) {
+    const rows = [
+      ["Worker", "Client", "Site", "Approved Hours", "Regular Hours", "OT Hours", "Pay Rate", "Total Labor Cost", "Status"]
+    ];
+
+    timesheets.forEach(timesheet => {
+      const payRate = Number(timesheet.payRate || getWorker(timesheet.workerId)?.payRate || 0);
+      rows.push([
+        getWorkerName(timesheet.workerId),
+        getClientName(timesheet.clientId),
+        getSiteName(timesheet.siteId),
+        Number(timesheet.approvedHours || 0).toFixed(2),
+        Number(timesheet.regularHours || 0).toFixed(2),
+        Number(timesheet.overtimeHours || 0).toFixed(2),
+        payRate.toFixed(2),
+        calculateLaborCost(timesheet.regularHours, timesheet.overtimeHours, payRate).toFixed(2),
+        formatStatusLabel(timesheet.status)
+      ]);
+    });
+
+    const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
+    return excelReady ? `\ufeff${csv}` : csv;
+  }
+
+  async function copyPayrollCsv(excelReady) {
+    const scoped = getScopedData();
+    const payPeriods = getPayPeriods(scoped.timesheets);
+    const activePeriod = payPeriods.find(period => period.value === state.selectedPayPeriod) || payPeriods[0];
+    const rows = activePeriod
+      ? scoped.timesheets.filter(timesheet => `${timesheet.payPeriodStart}|${timesheet.payPeriodEnd}` === activePeriod.value)
+      : scoped.timesheets;
+    await copyText(buildPayrollCsv(rows, excelReady));
+  }
+
+  function calculateLaborCost(regularHours, overtimeHours, payRate) {
+    const regular = Number(regularHours || 0) * Number(payRate || 0);
+    const overtime = Number(overtimeHours || 0) * Number(payRate || 0) * 1.5;
+    return regular + overtime;
+  }
+
+  function readFormValues(form) {
+    const formData = new FormData(form);
+    const values = {};
+    for (const [key, value] of formData.entries()) {
+      values[key] = value;
+    }
+    return values;
+  }
+
+  function mapSnapshot(snapshot) {
+    return snapshot.docs.map(documentSnapshot => ({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+  }
+
+  function renderToasts() {
+    const root = document.getElementById("toastRoot");
+    if (!root) {
+      return;
+    }
+    root.innerHTML = state.toasts.map(toast => `<div class="toast ${toast.type}">${escapeHtml(toast.message)}</div>`).join("");
+  }
+
+  function pushToast(message, type = "success") {
+    const id = createId("toast");
+    state.toasts = [...state.toasts, { id, message, type }].slice(-4);
+    renderToasts();
+    window.setTimeout(() => {
+      state.toasts = state.toasts.filter(toast => toast.id !== id);
+      renderToasts();
+    }, 2800);
+  }
+
+  async function copyText(value) {
+    if (!value) {
+      throw new Error("There was nothing to copy.");
     }
 
-    for (let index = 1; index < records.length; index += 1) {
-      const current = records[index];
-      const previous = records[index - 1];
-      const deltaMinutes = Math.round((new Date(current.timestamp) - new Date(previous.timestamp)) / 60000);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(value);
+      pushToast("Copied to clipboard.", "success");
+      return;
+    }
 
-      if (current.type === previous.type && deltaMinutes <= 10) {
-        exceptions.push({
-          key: "duplicate_punch",
-          category: "Duplicate punch",
-          severity: "low",
-          title: fullWorkerName(workerId),
-          meta: `${siteById(current.siteId)?.code || "Site"} · ${current.type}`,
-          note: "Two identical punch actions were recorded within ten minutes."
-        });
-        break;
+    window.prompt("Copy this text:", value);
+  }
+
+  function storeNotice(value) {
+    window.localStorage.setItem(STORAGE_KEYS.routeNotice, value || "");
+  }
+
+  function loadStoredNotice() {
+    return window.localStorage.getItem(STORAGE_KEYS.routeNotice) || "";
+  }
+
+  function startClock() {
+    window.setInterval(() => {
+      state.now = new Date();
+      if (state.session.role === "worker" && state.initialized) {
+        renderApp();
       }
+    }, 1000);
+  }
+
+  function buildDemoSeed() {
+    const now = new Date();
+    const payPeriodStart = startOfWeek(now);
+    const payPeriodEnd = addDays(payPeriodStart, 6);
+
+    const agencies = [
+      {
+        id: "agency_harbor",
+        name: "Harbor Staffing Group",
+        ownerUserId: "demo_agency_owner",
+        planId: "agency",
+        subscriptionStatus: "trialing",
+        trialStart: addDays(now, -4).toISOString(),
+        trialEnd: addDays(now, 10).toISOString(),
+        stripeCustomerId: "",
+        stripeSubscriptionId: "",
+        createdAt: addDays(now, -22).toISOString(),
+        updatedAt: now.toISOString(),
+        settings: buildAgencySettings({
+          agencyName: "Harbor Staffing Group",
+          logoInitials: "HS",
+          primaryColor: "#1f6fff",
+          supportEmail: "ops@harborstaffing.com",
+          supportPhone: "(214) 555-0188",
+          payrollContact: "payroll@harborstaffing.com",
+          defaultPayPeriod: "Weekly"
+        })
+      },
+      {
+        id: "agency_summit",
+        name: "Summit Workforce Partners",
+        ownerUserId: "summit_owner",
+        planId: "growth",
+        subscriptionStatus: "active",
+        trialStart: addDays(now, -90).toISOString(),
+        trialEnd: addDays(now, -76).toISOString(),
+        stripeCustomerId: "cus_demo_summit",
+        stripeSubscriptionId: "sub_demo_summit",
+        createdAt: addDays(now, -120).toISOString(),
+        updatedAt: addDays(now, -2).toISOString(),
+        settings: buildAgencySettings({
+          agencyName: "Summit Workforce Partners",
+          logoInitials: "SW",
+          primaryColor: "#1877f2",
+          supportEmail: "support@summitworkforce.com",
+          supportPhone: "(817) 555-0140",
+          payrollContact: "payroll@summitworkforce.com",
+          defaultPayPeriod: "Weekly"
+        })
+      }
+    ];
+
+    const users = [
+      { id: "demo_platform_owner", role: "platformOwner", agencyId: "", firstName: "Paula", lastName: "North", email: "platform@portaly-demo.com", phone: "(800) 555-0100", status: "active", assignedClientIds: [], assignedSiteIds: [], workerId: "", createdAt: addDays(now, -120).toISOString() },
+      { id: "demo_agency_owner", role: "agencyOwner", agencyId: "agency_harbor", firstName: "Hannah", lastName: "Cole", email: "owner@harborstaffing.com", phone: "(214) 555-0133", status: "active", assignedClientIds: [], assignedSiteIds: [], workerId: "", createdAt: addDays(now, -90).toISOString() },
+      { id: "demo_agency_admin", role: "agencyAdmin", agencyId: "agency_harbor", firstName: "Marcus", lastName: "Reed", email: "admin@harborstaffing.com", phone: "(214) 555-0120", status: "active", assignedClientIds: [], assignedSiteIds: [], workerId: "", createdAt: addDays(now, -70).toISOString() },
+      { id: "demo_client_manager", role: "clientManager", agencyId: "agency_harbor", firstName: "Diane", lastName: "Turner", email: "manager@northstar.com", phone: "(972) 555-0109", status: "active", assignedClientIds: ["client_northstar"], assignedSiteIds: ["site_dallas_dock_1", "site_dallas_dock_2"], workerId: "", createdAt: addDays(now, -40).toISOString() },
+      { id: "demo_worker", role: "worker", agencyId: "agency_harbor", firstName: "Maria", lastName: "Ortiz", email: "maria.ortiz@worker-demo.com", phone: "(469) 555-0105", status: "active", assignedClientIds: ["client_northstar"], assignedSiteIds: ["site_dallas_dock_1"], workerId: "worker_maria_ortiz", createdAt: addDays(now, -40).toISOString() },
+      { id: "summit_owner", role: "agencyOwner", agencyId: "agency_summit", firstName: "Devon", lastName: "Miles", email: "owner@summitworkforce.com", phone: "(817) 555-0168", status: "active", assignedClientIds: [], assignedSiteIds: [], workerId: "", createdAt: addDays(now, -100).toISOString() }
+    ];
+
+    const clients = [
+      { id: "client_northstar", agencyId: "agency_harbor", name: "Northstar Fulfillment", contactName: "Diane Turner", contactEmail: "manager@northstar.com", phone: "(972) 555-0109", status: "active" },
+      { id: "client_apex", agencyId: "agency_harbor", name: "Apex Cold Storage", contactName: "Will Sanders", contactEmail: "ops@apexcold.com", phone: "(817) 555-0146", status: "active" },
+      { id: "client_blueline", agencyId: "agency_summit", name: "BlueLine Logistics", contactName: "Erin Flores", contactEmail: "sitelead@blueline.com", phone: "(682) 555-0112", status: "active" }
+    ];
+
+    const sites = [
+      { id: "site_dallas_dock_1", agencyId: "agency_harbor", clientId: "client_northstar", name: "Dallas Dock 1", address: "2400 River Yard Rd, Dallas, TX", qrCodeUrl: "", status: "active" },
+      { id: "site_dallas_dock_2", agencyId: "agency_harbor", clientId: "client_northstar", name: "Dallas Dock 2", address: "2410 River Yard Rd, Dallas, TX", qrCodeUrl: "", status: "active" },
+      { id: "site_fort_worth_cold_hub", agencyId: "agency_harbor", clientId: "client_apex", name: "Fort Worth Cold Hub", address: "8900 Freezer Pkwy, Fort Worth, TX", qrCodeUrl: "", status: "active" },
+      { id: "site_arlington_crossdock", agencyId: "agency_summit", clientId: "client_blueline", name: "Arlington Crossdock", address: "1550 Transfer Loop, Arlington, TX", qrCodeUrl: "", status: "active" }
+    ];
+
+    const workers = [
+      buildWorker("worker_maria_ortiz", "agency_harbor", "Maria", "Ortiz", 18.5, "client_northstar", "site_dallas_dock_1", "demo_worker"),
+      buildWorker("worker_james_carter", "agency_harbor", "James", "Carter", 19.25, "client_northstar", "site_dallas_dock_2"),
+      buildWorker("worker_alana_nguyen", "agency_harbor", "Alana", "Nguyen", 20.0, "client_apex", "site_fort_worth_cold_hub"),
+      buildWorker("worker_eric_johnson", "agency_harbor", "Eric", "Johnson", 18.0, "client_apex", "site_fort_worth_cold_hub"),
+      buildWorker("worker_tasha_brown", "agency_harbor", "Tasha", "Brown", 17.75, "client_northstar", "site_dallas_dock_1"),
+      buildWorker("worker_leo_martinez", "agency_harbor", "Leo", "Martinez", 19.5, "client_northstar", "site_dallas_dock_2"),
+      buildWorker("worker_nina_patel", "agency_summit", "Nina", "Patel", 21.0, "client_blueline", "site_arlington_crossdock"),
+      buildWorker("worker_andre_lewis", "agency_summit", "Andre", "Lewis", 20.25, "client_blueline", "site_arlington_crossdock"),
+      buildWorker("worker_sofia_ramirez", "agency_summit", "Sofia", "Ramirez", 22.0, "client_blueline", "site_arlington_crossdock"),
+      buildWorker("worker_omar_hassan", "agency_summit", "Omar", "Hassan", 21.5, "client_blueline", "site_arlington_crossdock")
+    ];
+
+    const assignments = [
+      buildAssignment("assignment_maria", "agency_harbor", "worker_maria_ortiz", "client_northstar", "site_dallas_dock_1", 18.5, 30.0, payPeriodStart),
+      buildAssignment("assignment_james", "agency_harbor", "worker_james_carter", "client_northstar", "site_dallas_dock_2", 19.25, 31.0, payPeriodStart),
+      buildAssignment("assignment_alana", "agency_harbor", "worker_alana_nguyen", "client_apex", "site_fort_worth_cold_hub", 20.0, 34.0, payPeriodStart),
+      buildAssignment("assignment_eric", "agency_harbor", "worker_eric_johnson", "client_apex", "site_fort_worth_cold_hub", 18.0, 29.0, payPeriodStart),
+      buildAssignment("assignment_tasha", "agency_harbor", "worker_tasha_brown", "client_northstar", "site_dallas_dock_1", 17.75, 29.5, payPeriodStart),
+      buildAssignment("assignment_leo", "agency_harbor", "worker_leo_martinez", "client_northstar", "site_dallas_dock_2", 19.5, 32.0, payPeriodStart),
+      buildAssignment("assignment_nina", "agency_summit", "worker_nina_patel", "client_blueline", "site_arlington_crossdock", 21.0, 34.5, payPeriodStart),
+      buildAssignment("assignment_andre", "agency_summit", "worker_andre_lewis", "client_blueline", "site_arlington_crossdock", 20.25, 33.5, payPeriodStart),
+      buildAssignment("assignment_sofia", "agency_summit", "worker_sofia_ramirez", "client_blueline", "site_arlington_crossdock", 22.0, 36.0, payPeriodStart),
+      buildAssignment("assignment_omar", "agency_summit", "worker_omar_hassan", "client_blueline", "site_arlington_crossdock", 21.5, 35.5, payPeriodStart)
+    ];
+
+    const punches = [
+      ...todayPunches(now, "agency_harbor", "worker_maria_ortiz", "assignment_maria", "client_northstar", "site_dallas_dock_1", [
+        ["clockIn", 6, 58],
+        ["startLunch", 11, 58],
+        ["endLunch", 12, 27]
+      ]),
+      ...todayPunches(now, "agency_harbor", "worker_james_carter", "assignment_james", "client_northstar", "site_dallas_dock_2", [
+        ["clockIn", 7, 12]
+      ]),
+      ...todayPunches(now, "agency_harbor", "worker_alana_nguyen", "assignment_alana", "client_apex", "site_fort_worth_cold_hub", [
+        ["clockIn", 6, 49],
+        ["startLunch", 12, 4]
+      ]),
+      ...todayPunches(now, "agency_harbor", "worker_eric_johnson", "assignment_eric", "client_apex", "site_fort_worth_cold_hub", [
+        ["clockIn", 7, 1],
+        ["startLunch", 11, 59],
+        ["endLunch", 12, 29],
+        ["clockOut", 16, 17]
+      ]),
+      ...todayPunches(now, "agency_harbor", "worker_leo_martinez", "assignment_leo", "client_northstar", "site_dallas_dock_2", [
+        ["clockIn", 7, 2],
+        ["clockIn", 7, 4]
+      ]),
+      ...todayPunches(now, "agency_summit", "worker_nina_patel", "assignment_nina", "client_blueline", "site_arlington_crossdock", [
+        ["clockIn", 6, 55],
+        ["startLunch", 12, 10],
+        ["endLunch", 12, 38]
+      ]),
+      ...recentHistoryPunches(now, "agency_harbor", "worker_maria_ortiz", "assignment_maria", "client_northstar", "site_dallas_dock_1", 3),
+      ...recentHistoryPunches(now, "agency_harbor", "worker_james_carter", "assignment_james", "client_northstar", "site_dallas_dock_2", 2),
+      ...recentHistoryPunches(now, "agency_summit", "worker_nina_patel", "assignment_nina", "client_blueline", "site_arlington_crossdock", 2)
+    ];
+
+    if (punches[0]) {
+      punches[0].edited = true;
+      punches[0].notes = "Manual edit made by admin for corrected clock-in time.";
     }
-  });
 
-  timesheetsForAgencyWeek(state.currentAgencyId, state.currentWeek).forEach(record => {
-    if (record.clientStatus === "pending") {
-      exceptions.push({
-        key: "missing_approval",
-        category: "Missing approval",
-        severity: "medium",
-        title: fullWorkerName(record.workerId),
-        meta: `${clientById(record.clientId)?.name || "Client"} · Week of ${formatDate(record.weekStart)}`,
-        note: "This timecard still needs client review before payroll export."
-      });
-    }
+    const timesheets = [
+      buildTimesheet("timesheet_maria", "agency_harbor", "worker_maria_ortiz", "assignment_maria", "client_northstar", "site_dallas_dock_1", payPeriodStart, payPeriodEnd, 38, 2, 40, "pending", 18.5),
+      buildTimesheet("timesheet_james", "agency_harbor", "worker_james_carter", "assignment_james", "client_northstar", "site_dallas_dock_2", payPeriodStart, payPeriodEnd, 36, 5, 41, "pending", 19.25),
+      buildTimesheet("timesheet_alana", "agency_harbor", "worker_alana_nguyen", "assignment_alana", "client_apex", "site_fort_worth_cold_hub", payPeriodStart, payPeriodEnd, 40, 4, 44, "approved", 20.0),
+      buildTimesheet("timesheet_eric", "agency_harbor", "worker_eric_johnson", "assignment_eric", "client_apex", "site_fort_worth_cold_hub", payPeriodStart, payPeriodEnd, 39, 0, 39, "rejected", 18.0, "Missing meal break attestation."),
+      buildTimesheet("timesheet_tasha", "agency_harbor", "worker_tasha_brown", "assignment_tasha", "client_northstar", "site_dallas_dock_1", payPeriodStart, payPeriodEnd, 24, 0, 24, "approved", 17.75),
+      buildTimesheet("timesheet_leo", "agency_harbor", "worker_leo_martinez", "assignment_leo", "client_northstar", "site_dallas_dock_2", payPeriodStart, payPeriodEnd, 32, 3, 35, "approved", 19.5),
+      buildTimesheet("timesheet_nina", "agency_summit", "worker_nina_patel", "assignment_nina", "client_blueline", "site_arlington_crossdock", payPeriodStart, payPeriodEnd, 40, 3, 43, "approved", 21.0),
+      buildTimesheet("timesheet_andre", "agency_summit", "worker_andre_lewis", "assignment_andre", "client_blueline", "site_arlington_crossdock", payPeriodStart, payPeriodEnd, 37, 2, 39, "approved", 20.25),
+      buildTimesheet("timesheet_sofia", "agency_summit", "worker_sofia_ramirez", "assignment_sofia", "client_blueline", "site_arlington_crossdock", payPeriodStart, payPeriodEnd, 38, 1, 39, "approved", 22.0),
+      buildTimesheet("timesheet_omar", "agency_summit", "worker_omar_hassan", "assignment_omar", "client_blueline", "site_arlington_crossdock", payPeriodStart, payPeriodEnd, 40, 0, 40, "approved", 21.5)
+    ];
 
-    if (record.manualEdited) {
-      exceptions.push({
-        key: "manual_edit",
-        category: "Manual edit made",
-        severity: "low",
-        title: fullWorkerName(record.workerId),
-        meta: `${clientById(record.clientId)?.name || "Client"} · Week of ${formatDate(record.weekStart)}`,
-        note: record.manualNote || "The timesheet was adjusted manually and should be reviewed."
-      });
-    }
-  });
+    const approvals = [
+      buildApproval("approval_maria", "agency_harbor", "timesheet_maria", "worker_maria_ortiz", "client_northstar", "site_dallas_dock_1", "pending"),
+      buildApproval("approval_james", "agency_harbor", "timesheet_james", "worker_james_carter", "client_northstar", "site_dallas_dock_2", "pending"),
+      buildApproval("approval_alana", "agency_harbor", "timesheet_alana", "worker_alana_nguyen", "client_apex", "site_fort_worth_cold_hub", "approved", "Reviewed and approved by site lead."),
+      buildApproval("approval_eric", "agency_harbor", "timesheet_eric", "worker_eric_johnson", "client_apex", "site_fort_worth_cold_hub", "rejected", "Missing meal break attestation.")
+    ];
 
-  return exceptions;
-}
+    const payrollRuns = [
+      {
+        id: "payroll_run_2026_week_1",
+        agencyId: "agency_harbor",
+        payPeriodStart: payPeriodStart.toISOString(),
+        payPeriodEnd: payPeriodEnd.toISOString(),
+        status: "draft",
+        totalHours: 223,
+        totalLaborCost: 4448.38,
+        exportedAt: "",
+        exportedBy: "demo_agency_admin"
+      }
+    ];
 
-function recentActivity() {
-  return auditTrailForAgency(state.currentAgencyId)
-    .slice()
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-}
+    const subscriptions = [
+      {
+        id: "subscription_harbor",
+        agencyId: "agency_harbor",
+        stripeCustomerId: "",
+        stripeSubscriptionId: "",
+        planId: "agency",
+        status: "trialing",
+        currentPeriodStart: "",
+        currentPeriodEnd: "",
+        trialStart: addDays(now, -4).toISOString(),
+        trialEnd: addDays(now, 10).toISOString(),
+        createdAt: addDays(now, -22).toISOString(),
+        updatedAt: now.toISOString()
+      },
+      {
+        id: "subscription_summit",
+        agencyId: "agency_summit",
+        stripeCustomerId: "cus_demo_summit",
+        stripeSubscriptionId: "sub_demo_summit",
+        planId: "growth",
+        status: "active",
+        currentPeriodStart: addDays(now, -14).toISOString(),
+        currentPeriodEnd: addDays(now, 16).toISOString(),
+        trialStart: addDays(now, -90).toISOString(),
+        trialEnd: addDays(now, -76).toISOString(),
+        createdAt: addDays(now, -120).toISOString(),
+        updatedAt: addDays(now, -2).toISOString()
+      }
+    ];
 
-function approveTimesheet(id) {
-  if (state.currentRole === "worker") {
-    toast("Workers cannot approve timesheets.");
-    return;
+    const auditLogs = [
+      {
+        id: "audit_manual_edit",
+        agencyId: "agency_harbor",
+        userId: "demo_agency_admin",
+        role: "agencyAdmin",
+        action: "manual_edit_made",
+        entityType: "punches",
+        entityId: punches[0]?.id || "",
+        oldValue: null,
+        newValue: { note: "Clock-in time corrected to 6:58 AM." },
+        timestamp: now.toISOString()
+      }
+    ];
+
+    const settings = [
+      { id: "settings_harbor", agencyId: "agency_harbor", ...agencies[0].settings, createdAt: addDays(now, -22).toISOString(), updatedAt: now.toISOString() },
+      { id: "settings_summit", agencyId: "agency_summit", ...agencies[1].settings, createdAt: addDays(now, -120).toISOString(), updatedAt: addDays(now, -2).toISOString() }
+    ];
+
+    const workerNames = Object.fromEntries(workers.map(worker => [worker.id, fullName(worker)]));
+    const clientNames = Object.fromEntries(clients.map(client => [client.id, client.name]));
+    const siteNames = Object.fromEntries(sites.map(site => [site.id, site.name]));
+
+    [
+      users,
+      clients,
+      sites,
+      workers,
+      assignments,
+      punches,
+      timesheets,
+      approvals,
+      payrollRuns,
+      subscriptions,
+      auditLogs,
+      settings
+    ].forEach(rows => ensureCollectionTimestamps(rows, now.toISOString()));
+
+    punches.forEach(punch => {
+      punch.workerName = workerNames[punch.workerId] || punch.workerName || "Unknown Worker";
+      punch.clientName = clientNames[punch.clientId] || punch.clientName || "Unknown Client";
+      punch.siteName = siteNames[punch.siteId] || punch.siteName || "Unknown Site";
+    });
+
+    timesheets.forEach(timesheet => {
+      timesheet.workerName = workerNames[timesheet.workerId] || timesheet.workerName || "Unknown Worker";
+      timesheet.clientName = clientNames[timesheet.clientId] || timesheet.clientName || "Unknown Client";
+      timesheet.siteName = siteNames[timesheet.siteId] || timesheet.siteName || "Unknown Site";
+    });
+
+    approvals.forEach(approval => {
+      approval.workerName = workerNames[approval.workerId] || approval.workerName || "Unknown Worker";
+      approval.clientName = clientNames[approval.clientId] || approval.clientName || "Unknown Client";
+      approval.siteName = siteNames[approval.siteId] || approval.siteName || "Unknown Site";
+    });
+
+    return {
+      agencies,
+      users,
+      clients,
+      sites,
+      workers,
+      assignments,
+      punches,
+      timesheets,
+      approvals,
+      payrollRuns,
+      subscriptions,
+      auditLogs,
+      settings
+    };
   }
 
-  const timesheet = state.timesheets.find(record => record.id === id);
-  if (!timesheet) return;
+  function buildCloudSampleBundle({ agencyId, ownerUserId, agencyName, planId }) {
+    const seed = buildDemoSeed();
+    const baseAgency = seed.agencies[0];
+    const baseSettings = seed.settings[0];
 
-  const noteInput = document.querySelector(`[data-note-input="${id}"]`);
-  const note = String(noteInput?.value || "").trim();
+    const agencies = [{
+      id: agencyId,
+      name: agencyName,
+      ownerUserId,
+      planId,
+      subscriptionStatus: "trialing",
+      trialStart: addDays(new Date(), 0).toISOString(),
+      trialEnd: addDays(new Date(), 14).toISOString(),
+      stripeCustomerId: "",
+      stripeSubscriptionId: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      settings: {
+        ...baseAgency.settings,
+        agencyName
+      }
+    }];
 
-  timesheet.clientStatus = "approved";
-  timesheet.agencyStatus = timesheet.agencyStatus === "hold" ? "ready" : timesheet.agencyStatus;
-  timesheet.approvedHours = timesheet.totalHours;
-  timesheet.rejectionNote = "";
-  timesheet.approvalNote = note || "Approved in the client approval portal.";
-  timesheet.updatedAt = new Date().toISOString();
-  syncTimesheet(timesheet);
+    const clients = seed.clients
+      .filter(client => client.agencyId === baseAgency.id)
+      .map(client => ({ ...client, agencyId, id: `${client.id}_${agencyId}` }));
 
-  addAudit("Timesheet approved", `${fullWorkerName(timesheet.workerId)} was approved for ${clientById(timesheet.clientId)?.name || "the client"}.`, state.currentAgencyId);
+    const clientIdMap = mapIds(seed.clients.filter(client => client.agencyId === baseAgency.id), clients);
+    const sites = seed.sites
+      .filter(site => site.agencyId === baseAgency.id)
+      .map(site => ({ ...site, agencyId, id: `${site.id}_${agencyId}`, clientId: clientIdMap[site.clientId] }));
+    const siteIdMap = mapIds(seed.sites.filter(site => site.agencyId === baseAgency.id), sites);
+    const workers = seed.workers
+      .filter(worker => worker.agencyId === baseAgency.id)
+      .map(worker => ({
+        ...worker,
+        agencyId,
+        id: `${worker.id}_${agencyId}`,
+        assignedClientId: clientIdMap[worker.assignedClientId],
+        assignedSiteId: siteIdMap[worker.assignedSiteId],
+        userId: ""
+      }));
+    const workerIdMap = mapIds(seed.workers.filter(worker => worker.agencyId === baseAgency.id), workers);
+    const assignments = seed.assignments
+      .filter(assignment => assignment.agencyId === baseAgency.id)
+      .map(assignment => ({
+        ...assignment,
+        agencyId,
+        id: `${assignment.id}_${agencyId}`,
+        workerId: workerIdMap[assignment.workerId],
+        clientId: clientIdMap[assignment.clientId],
+        siteId: siteIdMap[assignment.siteId]
+      }));
+    const assignmentIdMap = mapIds(seed.assignments.filter(assignment => assignment.agencyId === baseAgency.id), assignments);
+    const punches = seed.punches
+      .filter(punch => punch.agencyId === baseAgency.id)
+      .map(punch => ({
+        ...punch,
+        agencyId,
+        id: `${punch.id}_${agencyId}`,
+        workerId: workerIdMap[punch.workerId],
+        assignmentId: assignmentIdMap[punch.assignmentId],
+        clientId: clientIdMap[punch.clientId],
+        siteId: siteIdMap[punch.siteId]
+      }));
+    const timesheets = seed.timesheets
+      .filter(timesheet => timesheet.agencyId === baseAgency.id)
+      .map(timesheet => ({
+        ...timesheet,
+        agencyId,
+        id: `${timesheet.id}_${agencyId}`,
+        workerId: workerIdMap[timesheet.workerId],
+        assignmentId: assignmentIdMap[timesheet.assignmentId],
+        clientId: clientIdMap[timesheet.clientId],
+        siteId: siteIdMap[timesheet.siteId]
+      }));
+    const timesheetIdMap = mapIds(seed.timesheets.filter(timesheet => timesheet.agencyId === baseAgency.id), timesheets);
+    const approvals = seed.approvals
+      .filter(approval => approval.agencyId === baseAgency.id)
+      .map(approval => ({
+        ...approval,
+        agencyId,
+        id: `${approval.id}_${agencyId}`,
+        timesheetId: timesheetIdMap[approval.timesheetId],
+        workerId: workerIdMap[approval.workerId],
+        clientId: clientIdMap[approval.clientId],
+        siteId: siteIdMap[approval.siteId]
+      }));
+    const payrollRuns = seed.payrollRuns
+      .filter(run => run.agencyId === baseAgency.id)
+      .map(run => ({ ...run, agencyId, id: `${run.id}_${agencyId}` }));
+    const subscriptions = [{
+      id: `subscription_${agencyId}`,
+      agencyId,
+      stripeCustomerId: "",
+      stripeSubscriptionId: "",
+      planId,
+      status: "trialing",
+      currentPeriodStart: "",
+      currentPeriodEnd: "",
+      trialStart: addDays(new Date(), 0).toISOString(),
+      trialEnd: addDays(new Date(), 14).toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }];
+    const auditLogs = seed.auditLogs
+      .filter(log => log.agencyId === baseAgency.id)
+      .map(log => ({ ...log, agencyId, id: `${log.id}_${agencyId}` }));
+    const settings = [{
+      ...baseSettings,
+      agencyId,
+      agencyName,
+      id: `${baseSettings.id}_${agencyId}`
+    }];
 
-  saveState();
-  renderView();
-  toast("Timesheet approved.");
-}
-
-function rejectTimesheet(id) {
-  if (state.currentRole === "worker") {
-    toast("Workers cannot reject timesheets.");
-    return;
+    return {
+      agencies,
+      clients,
+      sites,
+      workers,
+      assignments,
+      punches,
+      timesheets,
+      approvals,
+      payrollRuns,
+      subscriptions,
+      auditLogs,
+      settings
+    };
   }
 
-  const timesheet = state.timesheets.find(record => record.id === id);
-  if (!timesheet) return;
-
-  const noteInput = document.querySelector(`[data-note-input="${id}"]`);
-  const note = String(noteInput?.value || "").trim();
-
-  if (!note) {
-    toast("Add a rejection note before rejecting this timesheet.");
-    return;
+  function mapIds(sourceRows, targetRows) {
+    return sourceRows.reduce((accumulator, row, index) => {
+      accumulator[row.id] = targetRows[index].id;
+      return accumulator;
+    }, {});
   }
 
-  timesheet.clientStatus = "rejected";
-  timesheet.agencyStatus = "hold";
-  timesheet.approvedHours = 0;
-  timesheet.rejectionNote = note;
-  timesheet.approvalNote = "";
-  timesheet.updatedAt = new Date().toISOString();
-  syncTimesheet(timesheet);
-
-  addAudit("Timesheet rejected", `${fullWorkerName(timesheet.workerId)} was sent back with a client note.`, state.currentAgencyId);
-
-  saveState();
-  renderView();
-  toast("Timesheet rejected with note.");
-}
-
-function finalizeTimesheet(id) {
-  if (state.currentRole === "worker") {
-    toast("Workers cannot finalize payroll.");
-    return;
+  function buildWorker(id, agencyId, firstName, lastName, payRate, clientId, siteId, userId = "") {
+    return {
+      id,
+      agencyId,
+      firstName,
+      lastName,
+      phone: `(555) ${String(Math.floor(Math.random() * 9000) + 1000).padStart(4, "0")}-01${String(Math.floor(Math.random() * 90) + 10)}`,
+      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.com`,
+      payRate,
+      status: "active",
+      assignedClientId: clientId,
+      assignedSiteId: siteId,
+      userId
+    };
   }
 
-  const timesheet = state.timesheets.find(record => record.id === id);
-  if (!timesheet) return;
-
-  if (timesheet.clientStatus !== "approved") {
-    toast("The client must approve this timesheet before payroll finalization.");
-    return;
-  }
-
-  timesheet.agencyStatus = "finalized";
-  timesheet.updatedAt = new Date().toISOString();
-  syncTimesheet(timesheet);
-
-  addAudit("Payroll finalized", `${fullWorkerName(timesheet.workerId)} moved into the final approved payroll queue.`, state.currentAgencyId);
-
-  saveState();
-  renderView();
-  toast("Timesheet finalized for payroll.");
-}
-
-function createPunch(type) {
-  const worker = currentWorker();
-  if (!worker) {
-    toast("Select a worker first.");
-    return;
-  }
-
-  const site = siteById(state.punchSiteId) || siteById(activeAssignmentForWorker(worker.id)?.siteId);
-  if (!site) {
-    toast("Select a punch site first.");
-    return;
-  }
-
-  const record = {
-    id: uid("punch"),
-    agencyId: state.currentAgencyId,
-    workerId: worker.id,
-    siteId: site.id,
-    type,
-    timestamp: new Date().toISOString()
-  };
-
-  state.punches.push(record);
-  state.punchMessage = `${type} saved for ${fullWorkerName(worker.id)} at ${site.code} on ${formatDateTime(record.timestamp)}.`;
-
-  addAudit("Worker punch captured", `${fullWorkerName(worker.id)} recorded ${type.toLowerCase()} at ${site.code}.`, state.currentAgencyId);
-
-  saveState();
-  renderView();
-  toast(`${type} recorded.`);
-}
-
-function saveSettings(data) {
-  const currentAgencyRecord = currentAgency();
-  if (!currentAgencyRecord) return;
-
-  const agencyName = String(data.get("agencyName") || "").trim();
-  const logoText = String(data.get("logoText") || "").trim().slice(0, 3).toUpperCase();
-  const primaryColor = String(data.get("primaryColor") || "#1f6fff");
-  const payrollContactEmail = String(data.get("payrollContactEmail") || "").trim();
-  const supportPhone = String(data.get("supportPhone") || "").trim();
-
-  currentAgencyRecord.name = agencyName;
-  currentAgencyRecord.payrollEmail = payrollContactEmail;
-  currentAgencyRecord.supportPhone = supportPhone;
-
-  state.settingsByAgency[state.currentAgencyId] = {
-    agencyName,
-    logoText: logoText || initials(agencyName, 2),
-    primaryColor,
-    payrollContactEmail,
-    supportPhone
-  };
-
-  addAudit("White-label settings updated", `${agencyName} branding and support details were saved in the demo.`, state.currentAgencyId);
-
-  applyTheme();
-  saveState();
-  renderShell();
-  renderView();
-  toast("Settings saved.");
-}
-
-function addAgency(data) {
-  const nextId = uid("agency");
-  const name = String(data.get("name") || "").trim();
-  const owner = String(data.get("owner") || "").trim();
-  const payrollEmail = String(data.get("payrollEmail") || "").trim();
-  const supportPhone = String(data.get("supportPhone") || "").trim();
-  const plan = String(data.get("plan") || "Agency");
-  const primaryColor = String(data.get("primaryColor") || "#1f6fff");
-
-  const agencyRecord = {
-    id: nextId,
-    code: buildAgencyCode(name, state.agencies.length + 1),
-    name,
-    owner,
-    plan,
-    payrollEmail,
-    supportPhone
-  };
-
-  state.agencies.push(agencyRecord);
-  state.settingsByAgency[nextId] = {
-    agencyName: name,
-    logoText: initials(name, 2),
-    primaryColor,
-    payrollContactEmail: payrollEmail,
-    supportPhone
-  };
-
-  state.currentAgencyId = nextId;
-  normalizeSelections(state);
-  applyTheme();
-  addAudit("Agency created", `${name} was added to the staffing demo workspace.`, nextId);
-  saveState();
-  renderShell();
-  renderView();
-  toast("Agency added.");
-}
-
-function addClient(data) {
-  const clientRecord = {
-    id: uid("client"),
-    agencyId: state.currentAgencyId,
-    name: String(data.get("name") || "").trim(),
-    contactName: String(data.get("contactName") || "").trim(),
-    contactTitle: String(data.get("contactTitle") || "").trim(),
-    email: String(data.get("email") || "").trim()
-  };
-
-  state.clients.push(clientRecord);
-  state.currentClientId = clientRecord.id;
-  addAudit("Client added", `${clientRecord.name} was added to the agency client list.`, state.currentAgencyId);
-  saveState();
-  renderShell();
-  renderView();
-  toast("Client added.");
-}
-
-function addSite(data) {
-  const siteRecord = {
-    id: uid("site"),
-    agencyId: state.currentAgencyId,
-    clientId: String(data.get("clientId") || state.currentClientId),
-    name: String(data.get("name") || "").trim(),
-    code: String(data.get("code") || "").trim().toUpperCase(),
-    address: String(data.get("address") || "").trim(),
-    shiftProfile: String(data.get("shiftProfile") || "").trim()
-  };
-
-  state.sites.push(siteRecord);
-  state.punchSiteId = siteRecord.id;
-  addAudit("Site added", `${siteRecord.name} was added to the demo site list.`, state.currentAgencyId);
-  saveState();
-  renderView();
-  toast("Site added.");
-}
-
-function addWorker(data) {
-  const workerRecord = {
-    id: uid("worker"),
-    agencyId: state.currentAgencyId,
-    firstName: String(data.get("firstName") || "").trim(),
-    lastName: String(data.get("lastName") || "").trim(),
-    title: String(data.get("title") || "").trim(),
-    email: String(data.get("email") || "").trim(),
-    phone: String(data.get("phone") || "").trim(),
-    status: "Active"
-  };
-
-  state.workers.push(workerRecord);
-  state.currentWorkerId = workerRecord.id;
-  addAudit("Worker added", `${fullWorkerName(workerRecord.id)} was added to the roster.`, state.currentAgencyId);
-  saveState();
-  renderShell();
-  renderView();
-  toast("Worker added.");
-}
-
-function addAssignment(data) {
-  const workerId = String(data.get("workerId") || "");
-  const clientId = String(data.get("clientId") || "");
-  const siteId = String(data.get("siteId") || "");
-
-  if (!workerId || !clientId || !siteId) {
-    toast("Choose a worker, client, and site.");
-    return;
-  }
-
-  state.assignments = state.assignments.map(record => (
-    record.workerId === workerId ? { ...record, active: false } : record
-  ));
-
-  const assignment = {
-    id: uid("assignment"),
-    agencyId: state.currentAgencyId,
-    workerId,
-    clientId,
-    siteId,
-    title: String(data.get("title") || "").trim(),
-    shiftStart: String(data.get("shiftStart") || "07:00"),
-    shiftEnd: String(data.get("shiftEnd") || "15:30"),
-    payRate: Number(data.get("payRate") || 0),
-    billRate: Number(data.get("billRate") || 0),
-    active: true
-  };
-
-  state.assignments.push(assignment);
-  state.currentWorkerId = workerId;
-  state.currentClientId = clientId;
-  state.punchSiteId = siteId;
-
-  const existingCurrentWeekTimesheet = state.timesheets.find(record => (
-    record.workerId === workerId &&
-    record.weekStart === state.currentWeek &&
-    record.agencyId === state.currentAgencyId
-  ));
-
-  if (!existingCurrentWeekTimesheet) {
-    state.timesheets.push(createTimesheet(
-      uid("timesheet"),
-      state.currentAgencyId,
+  function buildAssignment(id, agencyId, workerId, clientId, siteId, payRate, billRate, startDate) {
+    return {
+      id,
+      agencyId,
       workerId,
       clientId,
       siteId,
-      assignment.id,
-      state.currentWeek,
-      [0, 0, 0, 0, 0],
-      "pending",
-      "ready",
-      {}
-    ));
-  }
-
-  addAudit("Assignment saved", `${fullWorkerName(workerId)} was assigned to ${siteById(siteId)?.name || "the selected site"}.`, state.currentAgencyId);
-
-  saveState();
-  renderShell();
-  renderView();
-  toast("Assignment saved.");
-}
-
-function exportPayrollCsv(excelMode) {
-  const rows = payrollRows(state.selectedWeekStart);
-  if (!rows.length) {
-    toast("No payroll rows are available for export.");
-    return;
-  }
-
-  const payload = rows.map(row => ({
-    agency: currentAgency()?.name || "",
-    week_start: row.weekStart,
-    worker: row.workerName,
-    client: row.clientName,
-    site: row.siteName,
-    approved_hours: formatHours(row.approvedHours),
-    regular_hours: formatHours(row.regularHours),
-    overtime_hours: formatHours(row.overtimeHours),
-    pay_rate: row.payRate.toFixed(2),
-    total_labor_cost: row.laborCost.toFixed(2),
-    bill_rate: row.billRate.toFixed(2),
-    revenue: row.revenue.toFixed(2),
-    gross_profit: row.grossProfit.toFixed(2),
-    margin_percent: formatPercent(row.marginPercent),
-    status: approvalStatusLabel(row.timesheet)
-  }));
-
-  const csv = toCsv(payload);
-  const prefix = excelMode ? "\uFEFF" : "";
-  const fileName = `${slugify(currentAgency()?.name || "portaly")}-${state.selectedWeekStart}-${excelMode ? "excel" : "payroll"}.csv`;
-  downloadFile(fileName, prefix + csv, "text/csv;charset=utf-8;");
-
-  addAudit("Payroll exported", `${excelMode ? "Excel-ready CSV" : "CSV"} payroll export generated for ${state.selectedWeekStart}.`, state.currentAgencyId);
-  saveState();
-  toast(excelMode ? "Excel-ready CSV exported." : "CSV exported.");
-}
-
-function exportPayrollPdf() {
-  const rows = payrollRows(state.selectedWeekStart);
-  if (!rows.length) {
-    toast("No payroll rows are available for PDF export.");
-    return;
-  }
-
-  const printable = window.open("", "_blank");
-  if (!printable) {
-    toast("Allow pop-ups to export the PDF print view.");
-    return;
-  }
-
-  printable.document.write(`
-    <html>
-      <head>
-        <title>Portaly Weekly Timesheet</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 32px; color: #17324d; }
-          h1 { margin-bottom: 4px; }
-          p { color: #5f738a; margin-top: 0; }
-          table { width: 100%; border-collapse: collapse; margin-top: 24px; }
-          th, td { border: 1px solid #d9e5f2; padding: 10px 12px; text-align: left; font-size: 13px; }
-          th { background: #f3f8ff; text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; }
-        </style>
-      </head>
-      <body>
-        <h1>${safe(currentAgency()?.name || "Portaly")}</h1>
-        <p>Weekly Timesheet Report · Week of ${safe(formatDate(state.selectedWeekStart))}</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Worker</th>
-              <th>Client</th>
-              <th>Site</th>
-              <th>Approved Hours</th>
-              <th>Regular</th>
-              <th>OT</th>
-              <th>Pay Rate</th>
-              <th>Total Labor Cost</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(row => `
-              <tr>
-                <td>${safe(row.workerName)}</td>
-                <td>${safe(row.clientName)}</td>
-                <td>${safe(row.siteName)}</td>
-                <td>${safe(formatHours(row.approvedHours))}</td>
-                <td>${safe(formatHours(row.regularHours))}</td>
-                <td>${safe(formatHours(row.overtimeHours))}</td>
-                <td>${safe(formatCurrency(row.payRate))}</td>
-                <td>${safe(formatCurrency(row.laborCost))}</td>
-                <td>${safe(approvalStatusLabel(row.timesheet))}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </body>
-    </html>
-  `);
-  printable.document.close();
-  printable.focus();
-  printable.print();
-
-  addAudit("PDF print view opened", `Weekly timesheet print view opened for ${state.selectedWeekStart}.`, state.currentAgencyId);
-  saveState();
-  toast("Weekly timesheet PDF view opened.");
-}
-
-function payrollRows(weekStart) {
-  return timesheetsForAgencyWeek(state.currentAgencyId, weekStart).map(timesheet => {
-    const assignment = state.assignments.find(record => record.id === timesheet.assignmentId) || activeAssignmentForWorker(timesheet.workerId);
-    const payRate = Number(assignment?.payRate || 0);
-    const billRate = Number(assignment?.billRate || 0);
-    const laborCost = round2(payRate * timesheet.totalHours);
-    const revenue = round2(billRate * timesheet.totalHours);
-    const grossProfit = round2(revenue - laborCost);
-    const marginPercent = revenue ? (grossProfit / revenue) * 100 : 0;
-
-    return {
-      timesheet,
-      weekStart: timesheet.weekStart,
-      workerName: fullWorkerName(timesheet.workerId),
-      clientName: clientById(timesheet.clientId)?.name || "",
-      siteName: siteById(timesheet.siteId)?.name || "",
-      approvedHours: timesheet.approvedHours,
-      regularHours: timesheet.regularHours,
-      overtimeHours: timesheet.overtimeHours,
-      totalHours: timesheet.totalHours,
       payRate,
       billRate,
-      laborCost,
-      revenue,
-      grossProfit,
-      marginPercent
+      startDate: startDate.toISOString(),
+      endDate: "",
+      status: "active"
     };
-  });
-}
-
-function payrollTotals(rows) {
-  const totals = rows.reduce((accumulator, row) => {
-    accumulator.approvedHours += row.approvedHours;
-    accumulator.regularHours += row.regularHours;
-    accumulator.overtimeHours += row.overtimeHours;
-    accumulator.totalLaborCost += row.laborCost;
-    accumulator.totalRevenue += row.revenue;
-    accumulator.totalGrossProfit += row.grossProfit;
-    accumulator.weightedPayRate += row.payRate * row.totalHours;
-    accumulator.weightedBillRate += row.billRate * row.totalHours;
-    accumulator.totalHours += row.totalHours;
-    accumulator.finalApproved += row.timesheet.agencyStatus === "finalized" ? 1 : 0;
-    return accumulator;
-  }, {
-    approvedHours: 0,
-    regularHours: 0,
-    overtimeHours: 0,
-    totalLaborCost: 0,
-    totalRevenue: 0,
-    totalGrossProfit: 0,
-    weightedPayRate: 0,
-    weightedBillRate: 0,
-    totalHours: 0,
-    finalApproved: 0
-  });
-
-  totals.averagePayRate = totals.totalHours ? totals.weightedPayRate / totals.totalHours : 0;
-  totals.averageBillRate = totals.totalHours ? totals.weightedBillRate / totals.totalHours : 0;
-  return totals;
-}
-
-function settingsForAgency(agencyId) {
-  const agencyRecord = state.agencies.find(record => record.id === agencyId);
-  const stored = state.settingsByAgency[agencyId] || {};
-  return {
-    agencyName: stored.agencyName || agencyRecord?.name || "Agency",
-    logoText: stored.logoText || initials(stored.agencyName || agencyRecord?.name || "Agency", 2),
-    primaryColor: stored.primaryColor || "#1f6fff",
-    payrollContactEmail: stored.payrollContactEmail || agencyRecord?.payrollEmail || "",
-    supportPhone: stored.supportPhone || agencyRecord?.supportPhone || ""
-  };
-}
-
-function currentAgencySettings() {
-  return settingsForAgency(state.currentAgencyId);
-}
-
-function applyTheme() {
-  const settings = currentAgencySettings();
-  const hex = settings.primaryColor || "#1f6fff";
-  const rgb = hexToRgb(hex);
-
-  document.documentElement.style.setProperty("--brand", hex);
-  document.documentElement.style.setProperty("--brand-rgb", `${rgb.r}, ${rgb.g}, ${rgb.b}`);
-
-  const themeMeta = document.querySelector('meta[name="theme-color"]');
-  if (themeMeta) {
-    themeMeta.setAttribute("content", hex);
-  }
-}
-
-function addAudit(title, note, agencyId) {
-  state.auditTrail.push({
-    id: uid("audit"),
-    agencyId,
-    title,
-    note,
-    timestamp: new Date().toISOString(),
-    actor: ROLE_LABELS[state.currentRole]
-  });
-}
-
-function normalizeSelections(targetState) {
-  if (!targetState.agencies.some(record => record.id === targetState.currentAgencyId)) {
-    targetState.currentAgencyId = targetState.agencies[0]?.id || "";
   }
 
-  const clients = targetState.clients.filter(record => record.agencyId === targetState.currentAgencyId);
-  if (!clients.some(record => record.id === targetState.currentClientId)) {
-    targetState.currentClientId = clients[0]?.id || "";
+  function buildTimesheet(id, agencyId, workerId, assignmentId, clientId, siteId, payPeriodStart, payPeriodEnd, regularHours, overtimeHours, approvedHours, status, payRate, adminNotes = "") {
+    return {
+      id,
+      agencyId,
+      workerId,
+      assignmentId,
+      clientId,
+      siteId,
+      payPeriodStart: payPeriodStart.toISOString(),
+      payPeriodEnd: payPeriodEnd.toISOString(),
+      regularHours,
+      overtimeHours,
+      approvedHours,
+      status,
+      approvedBy: "",
+      approvedAt: "",
+      adminNotes,
+      payRate
+    };
   }
 
-  const workers = targetState.workers.filter(record => record.agencyId === targetState.currentAgencyId);
-  if (!workers.some(record => record.id === targetState.currentWorkerId)) {
-    targetState.currentWorkerId = workers[0]?.id || "";
+  function buildApproval(id, agencyId, timesheetId, workerId, clientId, siteId, status, note = "") {
+    return {
+      id,
+      agencyId,
+      timesheetId,
+      workerId,
+      clientId,
+      siteId,
+      status,
+      submittedAt: addDays(new Date(), -1).toISOString(),
+      reviewedBy: "",
+      reviewedAt: "",
+      note
+    };
   }
 
-  const workerAssignment = targetState.assignments.find(record => record.workerId === targetState.currentWorkerId && record.active !== false) || null;
-  const agencySites = targetState.sites.filter(record => record.agencyId === targetState.currentAgencyId);
-  const sameClientSites = workerAssignment
-    ? agencySites.filter(record => record.clientId === workerAssignment.clientId)
-    : agencySites;
-  const punchSiteIds = sameClientSites.length ? sameClientSites.map(record => record.id) : agencySites.map(record => record.id);
-
-  if (!punchSiteIds.includes(targetState.punchSiteId)) {
-    targetState.punchSiteId = workerAssignment?.siteId || punchSiteIds[0] || agencySites[0]?.id || "";
+  function todayPunches(now, agencyId, workerId, assignmentId, clientId, siteId, entries) {
+    return entries.map(([action, hour, minute], index) => ({
+      id: `punch_${workerId}_${action}_${index}_${hour}${minute}`,
+      agencyId,
+      workerId,
+      assignmentId,
+      clientId,
+      siteId,
+      action,
+      timestamp: new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute).toISOString(),
+      source: "demo",
+      createdBy: "demo_agency_admin",
+      edited: false,
+      notes: ""
+    }));
   }
 
-  const weeks = [...new Set(targetState.timesheets.filter(record => record.agencyId === targetState.currentAgencyId).map(record => record.weekStart))]
-    .sort((a, b) => new Date(b) - new Date(a));
-
-  if (!weeks.includes(targetState.selectedWeekStart)) {
-    targetState.selectedWeekStart = weeks[0] || targetState.currentWeek;
-  }
-}
-
-function syncTimesheet(timesheet) {
-  const totalHours = round2(timesheet.days.reduce((sum, day) => sum + Number(day.hours || 0), 0));
-  timesheet.totalHours = totalHours;
-  timesheet.regularHours = round2(Math.min(totalHours, 40));
-  timesheet.overtimeHours = round2(Math.max(totalHours - 40, 0));
-  if (timesheet.clientStatus === "approved" && Number(timesheet.approvedHours || 0) === 0) {
-    timesheet.approvedHours = totalHours;
-  }
-  if (timesheet.clientStatus !== "approved") {
-    timesheet.approvedHours = 0;
-  }
-  return timesheet;
-}
-
-function currentAgency() {
-  return state.agencies.find(record => record.id === state.currentAgencyId) || null;
-}
-
-function currentClient() {
-  return state.clients.find(record => record.id === state.currentClientId) || clientsForCurrentAgency()[0] || null;
-}
-
-function currentWorker() {
-  return state.workers.find(record => record.id === state.currentWorkerId) || workersForCurrentAgency()[0] || null;
-}
-
-function agencies() {
-  return state.agencies;
-}
-
-function clientsForAgency(agencyId) {
-  return state.clients.filter(record => record.agencyId === agencyId);
-}
-
-function clientsForCurrentAgency() {
-  return clientsForAgency(state.currentAgencyId);
-}
-
-function sitesForAgency(agencyId) {
-  return state.sites.filter(record => record.agencyId === agencyId);
-}
-
-function sitesForCurrentAgency() {
-  return sitesForAgency(state.currentAgencyId);
-}
-
-function workersForAgency(agencyId) {
-  return state.workers.filter(record => record.agencyId === agencyId);
-}
-
-function workersForCurrentAgency() {
-  return workersForAgency(state.currentAgencyId);
-}
-
-function assignmentsForCurrentAgency() {
-  return assignmentsForAgency(state.currentAgencyId);
-}
-
-function assignmentsForAgency(agencyId) {
-  return state.assignments.filter(record => record.agencyId === agencyId && record.active !== false);
-}
-
-function punchesForAgency(agencyId) {
-  return state.punches.filter(record => record.agencyId === agencyId);
-}
-
-function auditTrailForAgency(agencyId) {
-  return state.auditTrail.filter(record => record.agencyId === agencyId);
-}
-
-function clientById(id) {
-  return state.clients.find(record => record.id === id) || null;
-}
-
-function siteById(id) {
-  return state.sites.find(record => record.id === id) || null;
-}
-
-function activeAssignmentForWorker(workerId) {
-  return state.assignments.find(record => record.workerId === workerId && record.active !== false) || null;
-}
-
-function punchesForWorker(workerId) {
-  return state.punches
-    .filter(record => record.workerId === workerId)
-    .slice()
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-}
-
-function timesheetsForAgencyWeek(agencyId, weekStart) {
-  return state.timesheets.filter(record => record.agencyId === agencyId && record.weekStart === weekStart);
-}
-
-function timesheetsForClient(clientId, weekStart) {
-  return state.timesheets.filter(record => record.clientId === clientId && record.weekStart === weekStart);
-}
-
-function workersAssignedToClient(clientId) {
-  const ids = new Set(state.assignments.filter(record => record.clientId === clientId && record.active !== false).map(record => record.workerId));
-  return state.workers.filter(record => ids.has(record.id));
-}
-
-function workersAssignedToSite(siteId) {
-  const ids = new Set(state.assignments.filter(record => record.siteId === siteId && record.active !== false).map(record => record.workerId));
-  return state.workers.filter(record => ids.has(record.id));
-}
-
-function sitesForClient(clientId) {
-  return state.sites.filter(record => record.clientId === clientId);
-}
-
-function availableWeeksForCurrentAgency() {
-  return [...new Set(state.timesheets.filter(record => record.agencyId === state.currentAgencyId).map(record => record.weekStart))]
-    .sort((a, b) => new Date(b) - new Date(a));
-}
-
-function renderContextLabel() {
-  const roleLabel = ROLE_LABELS[state.currentRole] || "Demo Role";
-  const agencyName = currentAgencySettings().agencyName || currentAgency()?.name || "Agency";
-
-  if (state.currentRole === "client_manager") {
-    return `${roleLabel} · ${agencyName} · ${currentClient()?.name || "Client Focus"}`;
+  function recentHistoryPunches(now, agencyId, workerId, assignmentId, clientId, siteId, daysBack) {
+    const rows = [];
+    for (let index = 1; index <= daysBack; index += 1) {
+      const baseDate = addDays(now, -index);
+      rows.push(
+        {
+          id: `punch_hist_${workerId}_${index}_in`,
+          agencyId,
+          workerId,
+          assignmentId,
+          clientId,
+          siteId,
+          action: "clockIn",
+          timestamp: new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 7, 0).toISOString(),
+          source: "demo",
+          createdBy: "demo_agency_admin",
+          edited: false,
+          notes: ""
+        },
+        {
+          id: `punch_hist_${workerId}_${index}_lunch_start`,
+          agencyId,
+          workerId,
+          assignmentId,
+          clientId,
+          siteId,
+          action: "startLunch",
+          timestamp: new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 12, 0).toISOString(),
+          source: "demo",
+          createdBy: "demo_agency_admin",
+          edited: false,
+          notes: ""
+        },
+        {
+          id: `punch_hist_${workerId}_${index}_lunch_end`,
+          agencyId,
+          workerId,
+          assignmentId,
+          clientId,
+          siteId,
+          action: "endLunch",
+          timestamp: new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 12, 30).toISOString(),
+          source: "demo",
+          createdBy: "demo_agency_admin",
+          edited: false,
+          notes: ""
+        },
+        {
+          id: `punch_hist_${workerId}_${index}_out`,
+          agencyId,
+          workerId,
+          assignmentId,
+          clientId,
+          siteId,
+          action: "clockOut",
+          timestamp: new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), 16, 30).toISOString(),
+          source: "demo",
+          createdBy: "demo_agency_admin",
+          edited: false,
+          notes: ""
+        }
+      );
+    }
+    return rows;
   }
 
-  if (state.currentRole === "worker") {
-    return `${roleLabel} · ${agencyName} · ${fullWorkerName(state.currentWorkerId)}`;
+  function startOfWeek(date) {
+    const clone = new Date(date);
+    const day = clone.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    clone.setDate(clone.getDate() + diff);
+    clone.setHours(0, 0, 0, 0);
+    return clone;
   }
 
-  return `${roleLabel} · ${agencyName}`;
-}
-
-function timeclockUrlForSite(siteRecord) {
-  const url = new URL(window.location.href);
-  url.search = "";
-  url.searchParams.set("view", "timeclock");
-  url.searchParams.set("agency", siteRecord.agencyId);
-  url.searchParams.set("site", siteRecord.id);
-  url.searchParams.set("role", "worker");
-  return url.toString();
-}
-
-function punchSiteOptions(workerId, agencyId = state.currentAgencyId) {
-  const assignment = activeAssignmentForWorker(workerId);
-  const allSites = sitesForAgency(agencyId);
-
-  if (!assignment) {
-    return allSites;
+  function addDays(date, amount) {
+    const clone = new Date(date);
+    clone.setDate(clone.getDate() + amount);
+    return clone;
   }
 
-  const assignedSite = siteById(assignment.siteId);
-  if (!assignedSite) {
-    return allSites;
+  function formatDateInput(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   }
 
-  const sameClientSites = allSites.filter(record => record.clientId === assignment.clientId);
-  const deduped = new Map([[assignedSite.id, assignedSite]]);
-  sameClientSites.forEach(record => deduped.set(record.id, record));
-  return [...deduped.values()];
-}
-
-function approvalStatusLabel(timesheet) {
-  if (timesheet.clientStatus === "rejected") return "Rejected";
-  if (timesheet.clientStatus === "approved" && timesheet.agencyStatus === "finalized") return "Final Approved";
-  if (timesheet.clientStatus === "approved") return "Client Approved";
-  return "Pending Approval";
-}
-
-function approvalStatusClass(timesheet) {
-  if (timesheet.clientStatus === "rejected") return "status-danger";
-  if (timesheet.clientStatus === "approved" && timesheet.agencyStatus === "finalized") return "status-final";
-  if (timesheet.clientStatus === "approved") return "status-approved";
-  return "status-warning";
-}
-
-function punchStatus(punch) {
-  const assignment = activeAssignmentForWorker(punch.workerId);
-  if (punch.type !== "Clock In" || !assignment) {
-    return "Saved";
+  function formatDate(value) {
+    if (!value) {
+      return "-";
+    }
+    return new Date(value).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    });
   }
 
-  const scheduled = parseTimestampOnSameDay(punch.timestamp, assignment.shiftStart);
-  const minutesLate = Math.round((new Date(punch.timestamp) - scheduled) / 60000);
-  return minutesLate > 5 ? "Late" : "Saved";
-}
-
-function applyUrlParams() {
-  const params = new URLSearchParams(window.location.search);
-  const agencyId = params.get("agency");
-  const clientId = params.get("client");
-  const workerId = params.get("worker");
-  const siteId = params.get("site");
-  const view = params.get("view");
-  const role = params.get("role");
-
-  if (role && ROLE_LABELS[role]) {
-    state.currentRole = role;
+  function formatTime(value) {
+    return new Date(value).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit"
+    });
   }
 
-  if (agencyId && state.agencies.some(record => record.id === agencyId)) {
-    state.currentAgencyId = agencyId;
+  function formatDateTime(value) {
+    if (!value) {
+      return "-";
+    }
+    return new Date(value).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    });
   }
 
-  if (clientId && state.clients.some(record => record.id === clientId)) {
-    state.currentClientId = clientId;
+  function formatCurrency(value) {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2
+    }).format(Number(value || 0));
   }
 
-  if (workerId && state.workers.some(record => record.id === workerId)) {
-    state.currentWorkerId = workerId;
+  function formatHours(value) {
+    return `${Number(value || 0).toFixed(2)} hrs`;
   }
 
-  if (siteId && state.sites.some(record => record.id === siteId)) {
-    state.punchSiteId = siteId;
+  function formatPercent(value) {
+    return `${Number(value || 0).toFixed(1)}%`;
   }
 
-  if (view && NAV_ITEMS.some(item => item.id === view)) {
-    state.currentView = view;
+  function formatStatusLabel(value) {
+    return String(value || "")
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, character => character.toUpperCase());
   }
 
-  saveState();
-}
-
-function toggleMobileMenu() {
-  document.body.classList.toggle("sidebar-open");
-}
-
-function closeMobileMenu() {
-  document.body.classList.remove("sidebar-open");
-}
-
-function copyText(value, message) {
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(value)
-      .then(() => toast(message))
-      .catch(() => toast("Copy failed. You can copy the link manually."));
-    return;
+  function getStatusTone(value) {
+    const normalized = String(value || "").toLowerCase();
+    if (["approved", "active", "trialing", "clocked in", "clocked-in", "clear"].includes(normalized)) {
+      return "status-success";
+    }
+    if (["rejected", "past_due", "past due", "unpaid", "expired_trial", "canceled", "duplicate punch"].includes(normalized)) {
+      return "status-danger";
+    }
+    if (["pending", "warning", "on lunch", "on-lunch", "missing clock out"].includes(normalized)) {
+      return "status-warning";
+    }
+    return "status-neutral";
   }
 
-  toast("Copy failed. You can copy the link manually.");
-}
+  function fullName(record) {
+    if (!record) {
+      return "";
+    }
+    return [record.firstName, record.lastName].filter(Boolean).join(" ").trim();
+  }
 
-function toCsv(rows) {
-  const keys = Object.keys(rows[0]);
-  return [
-    keys.join(","),
-    ...rows.map(row => keys.map(key => JSON.stringify(row[key] ?? "")).join(","))
-  ].join("\n");
-}
+  function initials(value) {
+    return String(value || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map(part => part[0].toUpperCase())
+      .join("") || "PT";
+  }
 
-function downloadFile(fileName, content, mimeType) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
+  function sumNumbers(values) {
+    return values.reduce((total, value) => total + Number(value || 0), 0);
+  }
 
-function toast(message) {
-  const el = document.getElementById("toast");
-  el.textContent = message;
-  el.classList.add("show");
+  function compareDates(left, right) {
+    return new Date(left) - new Date(right);
+  }
 
-  clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => {
-    el.classList.remove("show");
-  }, 2400);
-}
+  function createId(prefix) {
+    return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+  }
 
-function emptyState(message) {
-  return `<div class="empty-state">${safe(message)}</div>`;
-}
+  function deepClone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
 
-function statusBadge(label, className) {
-  return `<span class="status-badge ${className}">${safe(label)}</span>`;
-}
+  function safeJsonParse(value) {
+    try {
+      return value ? JSON.parse(value) : null;
+    } catch (_error) {
+      return null;
+    }
+  }
 
-function fullWorkerName(workerId) {
-  const worker = state.workers.find(record => record.id === workerId);
-  return worker ? `${worker.firstName} ${worker.lastName}` : "Unknown Worker";
-}
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
 
-function countLabel(count, singular) {
-  return `${count} ${singular}${count === 1 ? "" : "s"}`;
-}
+  function escapeAttribute(value) {
+    return escapeHtml(value).replace(/`/g, "&#96;");
+  }
 
-function formatCurrency(value) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(Number(value || 0));
-}
+  function normalizeColor(value) {
+    const raw = String(value || "").trim();
+    if (/^#[0-9a-f]{6}$/i.test(raw)) {
+      return raw;
+    }
+    return DEFAULT_BRAND;
+  }
 
-function formatHours(value) {
-  return Number(value || 0).toFixed(2);
-}
+  function isLocalFilePreview() {
+    return window.location.protocol === "file:";
+  }
 
-function formatPercent(value) {
-  return `${Number(value || 0).toFixed(1)}%`;
-}
+  function ensureCollectionTimestamps(rows, fallbackIso) {
+    rows.forEach(row => {
+      const created = row.createdAt || row.timestamp || row.submittedAt || row.reviewedAt || fallbackIso;
+      row.createdAt = created;
+      row.updatedAt = row.updatedAt || created;
+    });
+  }
 
-function formatDate(isoDate) {
-  return parseISODate(isoDate).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric"
-  });
-}
+  function hexToRgb(hex) {
+    const normalized = normalizeColor(hex).replace("#", "");
+    return {
+      r: parseInt(normalized.slice(0, 2), 16),
+      g: parseInt(normalized.slice(2, 4), 16),
+      b: parseInt(normalized.slice(4, 6), 16)
+    };
+  }
 
-function formatDateTime(timestamp) {
-  return new Date(timestamp).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  });
-}
-
-function toISODate(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function parseISODate(value) {
-  const [year, month, day] = String(value).split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function addDays(date, amount) {
-  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds());
-  next.setDate(next.getDate() + amount);
-  return next;
-}
-
-function startOfWeek(date) {
-  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const day = next.getDay();
-  const shift = day === 0 ? -6 : 1 - day;
-  next.setDate(next.getDate() + shift);
-  return next;
-}
-
-function makeTimestamp(dayOffset, time) {
-  const base = addDays(new Date(), dayOffset);
-  const [hours, minutes] = String(time).split(":").map(Number);
-  const local = new Date(base.getFullYear(), base.getMonth(), base.getDate(), hours, minutes, 0, 0);
-  return local.toISOString();
-}
-
-function parseTimestampOnSameDay(timestamp, time) {
-  const date = new Date(timestamp);
-  const [hours, minutes] = String(time).split(":").map(Number);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes, 0, 0);
-}
-
-function pad(value) {
-  return String(value).padStart(2, "0");
-}
-
-function round2(value) {
-  return Math.round(Number(value || 0) * 100) / 100;
-}
-
-function safe(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function initials(value, maxLength) {
-  const parts = String(value || "")
-    .split(/\s+/)
-    .filter(Boolean);
-
-  if (!parts.length) return "PT";
-  return parts.map(part => part[0]).join("").slice(0, maxLength || 2).toUpperCase();
-}
-
-function slugify(value) {
-  return String(value || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function buildAgencyCode(name, index) {
-  const initialsValue = initials(name, 3) || "AGY";
-  return `${initialsValue}-${String(1200 + index).padStart(4, "0")}`;
-}
-
-function uid(prefix) {
-  const fallback = `${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
-  const base = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, "") : fallback;
-  return `${prefix}_${base.slice(0, 12)}`;
-}
-
-function hexToRgb(hex) {
-  const normalized = String(hex || "#1f6fff").replace("#", "");
-  const full = normalized.length === 3
-    ? normalized.split("").map(char => char + char).join("")
-    : normalized;
-
-  const int = parseInt(full, 16);
-  return {
-    r: (int >> 16) & 255,
-    g: (int >> 8) & 255,
-    b: int & 255
-  };
-}
-
-function isTodayTimestamp(timestamp) {
-  return toISODate(new Date(timestamp)) === toISODate(new Date());
-}
+  function renderFatalError(error) {
+    const root = document.getElementById("app");
+    if (!root) {
+      return;
+    }
+    root.innerHTML = `
+      <div class="loading-card">
+        <div class="surface-card">
+          <p class="eyebrow">Portaly</p>
+          <h2>Something failed while starting the app</h2>
+          <p>${escapeHtml(error.message || "Unknown startup error")}</p>
+        </div>
+      </div>
+    `;
+  }
+})();

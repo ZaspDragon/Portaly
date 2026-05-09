@@ -1,0 +1,329 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function userExists() {
+      return signedIn() && exists(userPath());
+    }
+
+    function currentUser() {
+      return get(userPath()).data;
+    }
+
+    function role() {
+      return userExists() ? currentUser().role : null;
+    }
+
+    function agencyId() {
+      return userExists() ? currentUser().agencyId : null;
+    }
+
+    function workerId() {
+      return userExists() ? currentUser().workerId : null;
+    }
+
+    function assignedClientIds() {
+      return userExists() && currentUser().assignedClientIds != null ? currentUser().assignedClientIds : [];
+    }
+
+    function assignedSiteIds() {
+      return userExists() && currentUser().assignedSiteIds != null ? currentUser().assignedSiteIds : [];
+    }
+
+    function isPlatformOwner() {
+      return role() == 'platformOwner';
+    }
+
+    function isAgencyOwner() {
+      return role() == 'agencyOwner';
+    }
+
+    function isAgencyAdmin() {
+      return role() == 'agencyAdmin';
+    }
+
+    function isAgencyStaff() {
+      return isAgencyOwner() || isAgencyAdmin();
+    }
+
+    function isClientManager() {
+      return role() == 'clientManager';
+    }
+
+    function isWorker() {
+      return role() == 'worker';
+    }
+
+    function sameAgency(targetAgencyId) {
+      return signedIn() && (isPlatformOwner() || agencyId() == targetAgencyId);
+    }
+
+    function sameAgencyResource() {
+      return sameAgency(resource.data.agencyId);
+    }
+
+    function sameAgencyRequest() {
+      return sameAgency(request.resource.data.agencyId);
+    }
+
+    function assignedClient(clientId) {
+      return clientId != null && assignedClientIds().hasAny([clientId]);
+    }
+
+    function assignedSite(siteId) {
+      return siteId != null && assignedSiteIds().hasAny([siteId]);
+    }
+
+    function canReadClientScoped(clientId, siteId) {
+      return isPlatformOwner()
+        || (isAgencyStaff() && sameAgency(agencyId()))
+        || (isClientManager() && sameAgency(agencyId()) && (assignedClient(clientId) || assignedSite(siteId)))
+        || (isWorker() && sameAgency(agencyId()) && (assignedClient(clientId) || assignedSite(siteId)));
+    }
+
+    function workerOwnsRecord(targetWorkerId) {
+      return isWorker() && workerId() == targetWorkerId;
+    }
+
+    function clientApprovalFieldSet() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        'status',
+        'approvedBy',
+        'approvedAt',
+        'adminNotes',
+        'updatedAt'
+      ]);
+    }
+
+    function approvalFieldSet() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        'status',
+        'reviewedBy',
+        'reviewedAt',
+        'note',
+        'updatedAt'
+      ]);
+    }
+
+    match /agencies/{agencyDocId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || ((isAgencyStaff() || isWorker()) && agencyId() == agencyDocId)
+      );
+      allow create: if signedIn() && request.resource.data.ownerUserId == request.auth.uid;
+      allow update: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && agencyId() == agencyDocId)
+      );
+      allow delete: if signedIn() && isPlatformOwner();
+    }
+
+    match /users/{userIdDoc} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || request.auth.uid == userIdDoc
+        || (isAgencyStaff() && resource.data.agencyId == agencyId())
+      );
+
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (
+          request.auth.uid == userIdDoc
+          && request.resource.data.role == 'agencyOwner'
+          && request.resource.data.agencyId is string
+          && existsAfter(/databases/$(database)/documents/agencies/$(request.resource.data.agencyId))
+          && getAfter(/databases/$(database)/documents/agencies/$(request.resource.data.agencyId)).data.ownerUserId == request.auth.uid
+        )
+      );
+
+      allow update: if signedIn() && (
+        isPlatformOwner()
+        || request.auth.uid == userIdDoc
+        || (isAgencyOwner() && resource.data.agencyId == agencyId())
+      );
+
+      allow delete: if signedIn() && isPlatformOwner();
+    }
+
+    match /clients/{clientId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+        || (isClientManager() && sameAgencyResource() && assignedClient(clientId))
+        || (isWorker() && sameAgencyResource() && assignedClient(clientId))
+      );
+      allow create, update, delete: if signedIn() && (isPlatformOwner() || (isAgencyStaff() && sameAgencyRequest()));
+    }
+
+    match /sites/{siteId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+        || (isClientManager() && sameAgencyResource() && assignedSite(siteId))
+        || (isWorker() && sameAgencyResource() && assignedSite(siteId))
+      );
+      allow create, update, delete: if signedIn() && (isPlatformOwner() || (isAgencyStaff() && sameAgencyRequest()));
+    }
+
+    match /workers/{workerDocId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+        || (workerOwnsRecord(workerDocId) && sameAgencyResource())
+      );
+      allow create, update, delete: if signedIn() && (isPlatformOwner() || (isAgencyStaff() && sameAgencyRequest()));
+    }
+
+    match /assignments/{assignmentId} {
+      allow read, create, update, delete: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+      );
+    }
+
+    match /punches/{punchId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+        || (isClientManager() && sameAgencyResource() && (assignedClient(resource.data.clientId) || assignedSite(resource.data.siteId)))
+        || (workerOwnsRecord(resource.data.workerId) && sameAgencyResource())
+      );
+
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyRequest())
+        || (
+          isWorker()
+          && sameAgencyRequest()
+          && request.resource.data.workerId == workerId()
+          && request.resource.data.createdBy == request.auth.uid
+        )
+      );
+
+      allow update, delete: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+      );
+    }
+
+    match /timesheets/{timesheetId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+        || (isClientManager() && sameAgencyResource() && (assignedClient(resource.data.clientId) || assignedSite(resource.data.siteId)))
+        || (workerOwnsRecord(resource.data.workerId) && sameAgencyResource())
+      );
+
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyRequest())
+      );
+
+      allow update: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyRequest())
+        || (
+          isClientManager()
+          && sameAgencyResource()
+          && (assignedClient(resource.data.clientId) || assignedSite(resource.data.siteId))
+          && clientApprovalFieldSet()
+        )
+      );
+
+      allow delete: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+      );
+    }
+
+    match /approvals/{approvalId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+        || (isClientManager() && sameAgencyResource() && (assignedClient(resource.data.clientId) || assignedSite(resource.data.siteId)))
+        || (workerOwnsRecord(resource.data.workerId) && sameAgencyResource())
+      );
+
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyRequest())
+      );
+
+      allow update: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyRequest())
+        || (
+          isClientManager()
+          && sameAgencyResource()
+          && (assignedClient(resource.data.clientId) || assignedSite(resource.data.siteId))
+          && approvalFieldSet()
+        )
+      );
+
+      allow delete: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+      );
+    }
+
+    match /payrollRuns/{payrollRunId} {
+      allow read, create, update, delete: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+      );
+    }
+
+    match /auditLogs/{auditId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+      );
+
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (
+          request.resource.data.agencyId == agencyId()
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.role == role()
+        )
+      );
+
+      allow update, delete: if false;
+    }
+
+    match /subscriptions/{subscriptionId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyOwner() && sameAgencyResource())
+      );
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyOwner() && sameAgencyRequest())
+      );
+      allow update: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyOwner() && (sameAgencyResource() || sameAgencyRequest()))
+      );
+      allow delete: if signedIn() && isPlatformOwner();
+    }
+
+    match /settings/{settingsId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || sameAgencyResource()
+      );
+      allow create, update, delete: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+      );
+    }
+  }
+}

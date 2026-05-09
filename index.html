@@ -4,93 +4,288 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#1f6fff" />
-  <title>Portaly | QR Timeclock &amp; Agency Operations Platform</title>
-  <meta name="description" content="Multi-tenant staffing portal with QR timeclock, role-based access, timesheet approval workflows, payroll margins, and CSV export." />
-
+  <meta
+    name="description"
+    content="Portaly is a QR timeclock, approvals, payroll, and margin platform built for staffing agencies."
+  />
+  <title>Portaly | Staffing Agency Operating System</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  />
   <link rel="stylesheet" href="style.css" />
 </head>
+<body data-layout="public">
+  <div id="app"></div>
+  <div class="toast-root" id="toastRoot" aria-live="polite" aria-atomic="true"></div>
 
-<body>
-  <div class="page-glow page-glow-one"></div>
-  <div class="page-glow page-glow-two"></div>
+  <script src="firebase-config.js"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
+    import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-analytics.js";
+    import {
+      getAuth,
+      onAuthStateChanged,
+      signInWithEmailAndPassword,
+      createUserWithEmailAndPassword,
+      sendPasswordResetEmail,
+      signOut
+    } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+    import {
+      getFirestore,
+      collection,
+      doc,
+      setDoc,
+      addDoc,
+      getDoc,
+      getDocs,
+      updateDoc,
+      deleteDoc,
+      query,
+      where,
+      orderBy,
+      limit,
+      writeBatch,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
 
-  <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
-  <div class="mobile-overlay" id="mobileOverlay"></div>
+    function createSnapshotAdapter(snapshot) {
+      return {
+        id: snapshot.id,
+        exists: snapshot.exists(),
+        data: () => snapshot.data(),
+        ref: snapshot.ref
+      };
+    }
 
-  <div class="app-shell">
-    <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <div class="brand-mark" id="brandMark">PT</div>
-        <div>
-          <p class="eyebrow eyebrow-tight">Staffing Agency SaaS Demo</p>
-          <h1 id="brandName">Portaly</h1>
-          <p class="brand-copy">QR Timeclock &amp; Agency Operations Platform</p>
-        </div>
-      </div>
+    function createQuerySnapshotAdapter(snapshot) {
+      return {
+        empty: snapshot.empty,
+        size: snapshot.size,
+        docs: snapshot.docs.map(createSnapshotAdapter)
+      };
+    }
 
-      <div class="sidebar-badges">
-        <span class="pill pill-quiet">Static Site</span>
-        <span class="pill pill-quiet">LocalStorage Demo</span>
-        <span class="pill pill-quiet">Warehouse Staffing</span>
-      </div>
+    function applyQueryState(sourceRef, state) {
+      let current = sourceRef;
+      state.whereClauses.forEach(args => {
+        current = query(current, where(...args));
+      });
+      state.orderClauses.forEach(args => {
+        current = query(current, orderBy(...args));
+      });
+      if (state.limitValue !== null) {
+        current = query(current, limit(state.limitValue));
+      }
+      return current;
+    }
 
-      <div class="sidebar-controls">
-        <div class="field-group">
-          <label for="roleSelect">Demo role</label>
-          <select id="roleSelect"></select>
-        </div>
+    function createDocumentRef(db, collectionName, id) {
+      return {
+        id,
+        async get() {
+          const snapshot = await getDoc(doc(db, collectionName, id));
+          return createSnapshotAdapter(snapshot);
+        },
+        async set(data, options = {}) {
+          await setDoc(doc(db, collectionName, id), data, options);
+        },
+        async update(data) {
+          await updateDoc(doc(db, collectionName, id), data);
+        },
+        async delete() {
+          await deleteDoc(doc(db, collectionName, id));
+        }
+      };
+    }
 
-        <div class="field-group">
-          <label for="agencySelect">Agency workspace</label>
-          <select id="agencySelect"></select>
-        </div>
+    function createCollectionRef(db, collectionName, queryState = null) {
+      const state = queryState || {
+        whereClauses: [],
+        orderClauses: [],
+        limitValue: null
+      };
 
-        <div class="field-group">
-          <label for="clientSelect">Client focus</label>
-          <select id="clientSelect"></select>
-        </div>
+      return {
+        doc(id) {
+          return createDocumentRef(db, collectionName, id);
+        },
+        where(field, operator, value) {
+          return createCollectionRef(db, collectionName, {
+            ...state,
+            whereClauses: [...state.whereClauses, [field, operator, value]]
+          });
+        },
+        orderBy(field, direction = "asc") {
+          return createCollectionRef(db, collectionName, {
+            ...state,
+            orderClauses: [...state.orderClauses, [field, direction]]
+          });
+        },
+        limit(value) {
+          return createCollectionRef(db, collectionName, {
+            ...state,
+            limitValue: value
+          });
+        },
+        async get() {
+          const ref = applyQueryState(collection(db, collectionName), state);
+          return createQuerySnapshotAdapter(await getDocs(ref));
+        },
+        async add(data) {
+          const response = await addDoc(collection(db, collectionName), data);
+          return { id: response.id };
+        }
+      };
+    }
 
-        <div class="field-group">
-          <label for="workerSelect">Worker profile</label>
-          <select id="workerSelect"></select>
-        </div>
-      </div>
+    function createBatchAdapter(db) {
+      const batch = writeBatch(db);
+      return {
+        set(targetRef, data, options = {}) {
+          batch.set(doc(db, targetRef.collectionName || targetRef._collectionName || targetRef.__collectionName || targetRef.path.split("/")[0], targetRef.id), data, options);
+        },
+        update(targetRef, data) {
+          batch.update(doc(db, targetRef.collectionName || targetRef._collectionName || targetRef.__collectionName || targetRef.path.split("/")[0], targetRef.id), data);
+        },
+        delete(targetRef) {
+          batch.delete(doc(db, targetRef.collectionName || targetRef._collectionName || targetRef.__collectionName || targetRef.path.split("/")[0], targetRef.id));
+        },
+        commit() {
+          return batch.commit();
+        }
+      };
+    }
 
-      <nav class="nav" id="nav" aria-label="Primary navigation"></nav>
+    function attachCollectionName(target, collectionName) {
+      target.collectionName = collectionName;
+      target._collectionName = collectionName;
+      target.__collectionName = collectionName;
+      target.path = `${collectionName}/${target.id}`;
+      return target;
+    }
 
-      <div class="sidebar-footer">
-        <button class="ghost-btn full" id="signOutBtn" type="button">Sign Out</button>
-        <button class="ghost-btn full" id="resetDemoBtn" type="button">Reset Demo Data</button>
-        <p class="sidebar-note">All demo changes save to localStorage so the GitHub Pages version still feels persistent without a backend.</p>
-        <p>Portaly v1.0 · GitHub Pages Ready</p>
-      </div>
-    </aside>
+    try {
+      const config = window.PORTALY_FIREBASE_CONFIG || {};
+      const firebaseConfig = config.firebaseConfig || {
+        apiKey: config.apiKey,
+        authDomain: config.authDomain,
+        projectId: config.projectId,
+        storageBucket: config.storageBucket,
+        messagingSenderId: config.messagingSenderId,
+        appId: config.appId,
+        measurementId: config.measurementId
+      };
 
-    <main class="main-shell">
-      <header class="topbar">
-        <div class="topbar-left">
-          <button class="menu-button" id="menuButton" type="button" aria-label="Open navigation">Menu</button>
-          <div>
-            <p class="eyebrow" id="contextLabel">Agency command view</p>
-            <h2 id="pageTitle">Dashboard</h2>
-          </div>
-        </div>
+      if (!config.enabled) {
+        window.PortalyFirebase = {
+          ready: false,
+          disabled: true,
+          error: "",
+          config
+        };
+        window.dispatchEvent(new Event("portaly-firebase-ready"));
+      } else {
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        let analytics = null;
 
-        <div class="topbar-actions">
-          <button class="button button-secondary" data-view="payroll" type="button">Payroll Workflow</button>
-          <button class="button button-primary" data-view="timeclock" type="button">Worker Punch</button>
-        </div>
-      </header>
+        try {
+          analytics = getAnalytics(app);
+        } catch (_error) {
+          analytics = null;
+        }
 
-      <section class="view-shell" id="view"></section>
-    </main>
-  </div>
+        const authBridge = {
+          raw: auth,
+          onAuthStateChanged(callback) {
+            return onAuthStateChanged(auth, callback);
+          },
+          signInWithEmailAndPassword(email, password) {
+            return signInWithEmailAndPassword(auth, email, password);
+          },
+          createUserWithEmailAndPassword(email, password) {
+            return createUserWithEmailAndPassword(auth, email, password);
+          },
+          sendPasswordResetEmail(email) {
+            return sendPasswordResetEmail(auth, email);
+          },
+          signOut() {
+            return signOut(auth);
+          }
+        };
 
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+        Object.defineProperty(authBridge, "currentUser", {
+          get() {
+            return auth.currentUser;
+          }
+        });
 
-  <script src="app.js"></script>
+        const dbBridge = {
+          raw: db,
+          collection(collectionName) {
+            const ref = createCollectionRef(db, collectionName);
+            const originalDoc = ref.doc;
+            ref.doc = id => attachCollectionName(originalDoc(id), collectionName);
+            return ref;
+          },
+          batch() {
+            return createBatchAdapter(db);
+          }
+        };
+
+        window.PortalyFirebase = {
+          ready: true,
+          disabled: false,
+          error: "",
+          config,
+          app,
+          analytics,
+          auth: authBridge,
+          db: dbBridge,
+          initializeApp,
+          getAnalytics,
+          getAuth,
+          onAuthStateChanged,
+          signInWithEmailAndPassword,
+          createUserWithEmailAndPassword,
+          sendPasswordResetEmail,
+          signOut,
+          getFirestore,
+          collection,
+          doc,
+          setDoc,
+          addDoc,
+          getDoc,
+          getDocs,
+          updateDoc,
+          deleteDoc,
+          query,
+          where,
+          orderBy,
+          serverTimestamp,
+          waitForReady() {
+            return Promise.resolve(window.PortalyFirebase);
+          }
+        };
+
+        window.dispatchEvent(new Event("portaly-firebase-ready"));
+      }
+    } catch (error) {
+      console.error(error);
+      window.PortalyFirebase = {
+        ready: false,
+        disabled: false,
+        error: error.message || "Firebase failed to initialize.",
+        config: window.PORTALY_FIREBASE_CONFIG || {}
+      };
+      window.dispatchEvent(new Event("portaly-firebase-ready"));
+    }
+  </script>
+  <script src="https://js.stripe.com/v3/" defer></script>
+  <script src="app.js" defer></script>
 </body>
 </html>

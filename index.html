@@ -3,91 +3,93 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Portaly — QR TimeClock & Agency Portal</title>
+  <meta name="theme-color" content="#1f6fff" />
+  <title>Portaly | QR Timeclock &amp; Agency Operations Platform</title>
   <meta name="description" content="Multi-tenant staffing portal with QR timeclock, role-based access, timesheet approval workflows, payroll margins, and CSV export." />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 
 <body>
-  <div class="bg-orb orb-1"></div>
-  <div class="bg-orb orb-2"></div>
-  <div class="bg-grid"></div>
+  <div class="page-glow page-glow-one"></div>
+  <div class="page-glow page-glow-two"></div>
 
   <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
   <div class="mobile-overlay" id="mobileOverlay"></div>
 
   <div class="app-shell">
     <aside class="sidebar" id="sidebar">
-      <div class="brand">
-        <div class="brand-mark">P</div>
+      <div class="sidebar-header">
+        <div class="brand-mark" id="brandMark">PT</div>
         <div>
-          <p class="sidebar-kicker">Agency Operating System</p>
-          <h1>Portaly</h1>
-          <p>QR timeclock, approvals, payroll, and margin visibility.</p>
+          <p class="eyebrow eyebrow-tight">Staffing Agency SaaS Demo</p>
+          <h1 id="brandName">Portaly</h1>
+          <p class="brand-copy">QR Timeclock &amp; Agency Operations Platform</p>
         </div>
       </div>
 
-      <div class="sidebar-status">
-        <span class="sidebar-chip">Static deploy</span>
-        <span class="sidebar-chip">Multi-role demo</span>
-        <span class="sidebar-chip">Agency-ready</span>
+      <div class="sidebar-badges">
+        <span class="pill pill-quiet">Static Site</span>
+        <span class="pill pill-quiet">LocalStorage Demo</span>
+        <span class="pill pill-quiet">Warehouse Staffing</span>
       </div>
 
-      <div class="sidebar-section">
-        <label for="roleSelect">Demo profile</label>
-        <select id="roleSelect">
-          <option value="super_admin">Platform Owner</option>
-          <option value="agency_admin">Agency Ops</option>
-          <option value="client_manager">Client Approver</option>
-          <option value="worker">Worker</option>
-        </select>
+      <div class="sidebar-controls">
+        <div class="field-group">
+          <label for="roleSelect">Demo role</label>
+          <select id="roleSelect"></select>
+        </div>
+
+        <div class="field-group">
+          <label for="agencySelect">Agency workspace</label>
+          <select id="agencySelect"></select>
+        </div>
+
+        <div class="field-group">
+          <label for="clientSelect">Client focus</label>
+          <select id="clientSelect"></select>
+        </div>
+
+        <div class="field-group">
+          <label for="workerSelect">Worker profile</label>
+          <select id="workerSelect"></select>
+        </div>
       </div>
 
-      <div class="sidebar-section">
-        <label for="agencySelect">Agency</label>
-        <select id="agencySelect"></select>
-      </div>
-
-      <div class="sidebar-section" id="clientBox">
-        <label for="clientSelect">Client account</label>
-        <select id="clientSelect"></select>
-      </div>
-
-      <div class="sidebar-section" id="workerBox">
-        <label for="workerSelect">Worker profile</label>
-        <select id="workerSelect"></select>
-      </div>
-
-      <nav id="nav" class="nav"></nav>
+      <nav class="nav" id="nav" aria-label="Primary navigation"></nav>
 
       <div class="sidebar-footer">
-        <button class="ghost-btn full" id="signOutBtn">Sign Out</button>
-        <button class="ghost-btn full" id="resetDemoBtn">Reset Demo Data</button>
+        <button class="ghost-btn full" id="signOutBtn" type="button">Sign Out</button>
+        <button class="ghost-btn full" id="resetDemoBtn" type="button">Reset Demo Data</button>
+        <p class="sidebar-note">All demo changes save to localStorage so the GitHub Pages version still feels persistent without a backend.</p>
         <p>Portaly v1.0 · GitHub Pages Ready</p>
       </div>
     </aside>
 
-    <main class="main">
+    <main class="main-shell">
       <header class="topbar">
-        <div class="topbar-copy">
-          <p class="eyebrow" id="activeContextLabel">Agency Operating System</p>
-          <h2 id="pageTitle">Access Hub</h2>
+        <div class="topbar-left">
+          <button class="menu-button" id="menuButton" type="button" aria-label="Open navigation">Menu</button>
+          <div>
+            <p class="eyebrow" id="contextLabel">Agency command view</p>
+            <h2 id="pageTitle">Dashboard</h2>
+          </div>
         </div>
 
-        <div class="top-actions">
-          <button class="secondary-btn" id="exportBtn">Export Payroll</button>
-          <button class="primary-btn" data-view="timeclock">Open Worker Punch</button>
+        <div class="topbar-actions">
+          <button class="button button-secondary" data-view="payroll" type="button">Payroll Workflow</button>
+          <button class="button button-primary" data-view="timeclock" type="button">Worker Punch</button>
         </div>
       </header>
 
-      <section id="view"></section>
+      <section class="view-shell" id="view"></section>
     </main>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="app.js"></script>
 </body>

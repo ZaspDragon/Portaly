@@ -25,8 +25,9 @@ window.PORTALY_BILLING_CONFIG = {
       label: "$99/month",
       workerLimit: 25,
       siteLimit: 1,
-      squarePaymentLink: "PASTE_STARTER_SQUARE_PAYMENT_LINK_HERE"
+      squarePaymentLink: "https://square.link/u/mfu6eun7"
     },
+
     agency: {
       id: "agency",
       name: "Agency",
@@ -34,8 +35,9 @@ window.PORTALY_BILLING_CONFIG = {
       label: "$249/month",
       workerLimit: 100,
       siteLimit: 5,
-      squarePaymentLink: "PASTE_AGENCY_SQUARE_PAYMENT_LINK_HERE"
+      squarePaymentLink: "https://square.link/u/ojz2a1Au"
     },
+
     growth: {
       id: "growth",
       name: "Growth",
@@ -43,7 +45,17 @@ window.PORTALY_BILLING_CONFIG = {
       label: "$499/month",
       workerLimit: null,
       siteLimit: null,
-      squarePaymentLink: "PASTE_GROWTH_SQUARE_PAYMENT_LINK_HERE"
+      squarePaymentLink: "https://square.link/u/Iy99LyYg"
+    },
+
+    enterprise: {
+      id: "enterprise",
+      name: "Enterprise",
+      price: null,
+      label: "Custom",
+      workerLimit: null,
+      siteLimit: null,
+      squarePaymentLink: "https://square.link/u/96br6x5W"
     }
   }
 };

@@ -5,16 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#1f6fff" />
   <title>Portaly | QR Timeclock &amp; Agency Operations Platform</title>
+  <meta name="description" content="Multi-tenant staffing portal with QR timeclock, role-based access, timesheet approval workflows, payroll margins, and CSV export." />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
   <div class="page-glow page-glow-one"></div>
   <div class="page-glow page-glow-two"></div>
 
-  <div class="app-frame">
+  <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">☰</button>
+  <div class="mobile-overlay" id="mobileOverlay"></div>
+
+  <div class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="brand-mark" id="brandMark">PT</div>
@@ -56,12 +62,12 @@
       <nav class="nav" id="nav" aria-label="Primary navigation"></nav>
 
       <div class="sidebar-footer">
-        <button class="button button-secondary button-block" id="resetDemoBtn" type="button">Reset Demo Data</button>
+        <button class="ghost-btn full" id="signOutBtn" type="button">Sign Out</button>
+        <button class="ghost-btn full" id="resetDemoBtn" type="button">Reset Demo Data</button>
         <p class="sidebar-note">All demo changes save to localStorage so the GitHub Pages version still feels persistent without a backend.</p>
+        <p>Portaly v1.0 · GitHub Pages Ready</p>
       </div>
     </aside>
-
-    <div class="mobile-overlay" id="mobileOverlay"></div>
 
     <main class="main-shell">
       <header class="topbar">

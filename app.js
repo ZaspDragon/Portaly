@@ -1,1445 +1,2782 @@
-const STORAGE_KEY = "temptrack_pro_role_signin_no_location_v1";
+const STORAGE_KEY = "portaly_staffing_saas_demo_v2";
 
-const seedData = {
-  activeView: "login_portal",
-  activeRole: "worker",
-  activeAgencyId: "a1",
-  activeClientId: "c1",
-  activeWorkerId: "w1",
-  signedInRole: "",
-  signedInName: "",
-  agencies: [
-    { id: "a1", agencyNumber: "TA-1001", name: "Elite Staffing Group", owner: "Maria Carter", plan: "Pro", status: "Active" },
-    { id: "a2", agencyNumber: "TA-1002", name: "Rapid Labor Solutions", owner: "Derek Mills", plan: "Growth", status: "Active" }
-  ],
-  clients: [
-    { id: "c1", agencyId: "a1", name: "Chadwell Supply", contact: "Receiving Manager", email: "manager@demo.com" },
-    { id: "c2", agencyId: "a1", name: "Metro Foods DC", contact: "Ops Lead", email: "ops@demo.com" },
-    { id: "c3", agencyId: "a2", name: "Northline Warehouse", contact: "Site Manager", email: "site@demo.com" }
-  ],
-  sites: [
-    { id: "s1", agencyId: "a1", clientId: "c1", siteCode: "CHD-OH-001", address: "Canal Winchester, OH", gpsRequired: false },
-    { id: "s2", agencyId: "a1", clientId: "c2", siteCode: "MFD-OH-002", address: "Columbus, OH", gpsRequired: false },
-    { id: "s3", agencyId: "a2", clientId: "c3", siteCode: "NLW-OH-001", address: "Groveport, OH", gpsRequired: false }
-  ],
-  workers: [
-    { id: "w1", agencyId: "a1", workerNumber: "TA-1001-W0001", firstName: "Angel", lastName: "Quincel", phone: "555-0101", status: "Active" },
-    { id: "w2", agencyId: "a1", workerNumber: "TA-1001-W0002", firstName: "Henry", lastName: "Moore", phone: "555-0102", status: "Active" },
-    { id: "w3", agencyId: "a1", workerNumber: "TA-1001-W0003", firstName: "Kris", lastName: "Brown", phone: "555-0103", status: "Active" },
-    { id: "w4", agencyId: "a2", workerNumber: "TA-1002-W0001", firstName: "Dawitt", lastName: "Ali", phone: "555-0104", status: "Active" }
-  ],
-  assignments: [
-    { id: "as1", agencyId: "a1", workerId: "w1", clientId: "c1", siteId: "s1", payRate: 18, billRate: 27, shiftStart: "07:00", shiftEnd: "15:30", active: true },
-    { id: "as2", agencyId: "a1", workerId: "w2", clientId: "c1", siteId: "s1", payRate: 19, billRate: 29, shiftStart: "07:00", shiftEnd: "15:30", active: true },
-    { id: "as3", agencyId: "a1", workerId: "w3", clientId: "c2", siteId: "s2", payRate: 18, billRate: 26, shiftStart: "08:00", shiftEnd: "16:30", active: true },
-    { id: "as4", agencyId: "a2", workerId: "w4", clientId: "c3", siteId: "s3", payRate: 20, billRate: 31, shiftStart: "06:00", shiftEnd: "14:30", active: true }
-  ],
-  punches: [
-    { id: "p1", agencyId: "a1", workerId: "w1", siteId: "s1", type: "Clock In", timestamp: todayAt("06:58"), gps: "Not Required", photo: "Yes", status: "Approved" },
-    { id: "p2", agencyId: "a1", workerId: "w2", siteId: "s1", type: "Clock In", timestamp: todayAt("07:11"), gps: "Not Required", photo: "Yes", status: "Late" },
-    { id: "p3", agencyId: "a1", workerId: "w3", siteId: "s2", type: "Clock In", timestamp: todayAt("08:03"), gps: "Not Required", photo: "No", status: "Approved" }
-  ],
-  timesheets: [
-    { id: "t1", agencyId: "a1", workerId: "w1", clientId: "c1", weekStart: weekStart(), regularHours: 38.5, overtimeHours: 0, agencyApproved: true, clientApproved: true, status: "Final Approved", disputeReason: "" },
-    { id: "t2", agencyId: "a1", workerId: "w2", clientId: "c1", weekStart: weekStart(), regularHours: 41.25, overtimeHours: 1.25, agencyApproved: false, clientApproved: true, status: "Client Approved", disputeReason: "" },
-    { id: "t3", agencyId: "a1", workerId: "w3", clientId: "c2", weekStart: weekStart(), regularHours: 29.75, overtimeHours: 0, agencyApproved: false, clientApproved: false, status: "Pending Client Review", disputeReason: "" },
-    { id: "t4", agencyId: "a2", workerId: "w4", clientId: "c3", weekStart: weekStart(), regularHours: 40, overtimeHours: 0, agencyApproved: true, clientApproved: true, status: "Final Approved", disputeReason: "" }
-  ],
-  auditLogs: [
-    { id: "log1", agencyId: "a1", timesheetId: "t1", action: "Client Approved", actorRole: "Client Manager", actorName: "Receiving Manager", timestamp: todayAt("15:10"), note: "Hours verified by client." },
-    { id: "log2", agencyId: "a1", timesheetId: "t1", action: "Final Approved", actorRole: "Agency Admin", actorName: "Agency Admin", timestamp: todayAt("15:35"), note: "Ready for payroll export." }
-  ]
+const NAV_ITEMS = [
+  { id: "dashboard", label: "Dashboard", badge: "DB" },
+  { id: "agencies", label: "Agencies", badge: "AG" },
+  { id: "clients", label: "Clients", badge: "CL" },
+  { id: "sites", label: "Sites", badge: "SI" },
+  { id: "workers", label: "Workers", badge: "WK" },
+  { id: "assignments", label: "Assignments", badge: "AS" },
+  { id: "timeclock", label: "QR Timeclock", badge: "QR" },
+  { id: "approvals", label: "Client Approvals", badge: "AP" },
+  { id: "payroll", label: "Payroll", badge: "PY" },
+  { id: "margin", label: "Margin Reports", badge: "MR" },
+  { id: "settings", label: "Settings", badge: "ST" }
+];
+
+const ROLE_LABELS = {
+  super_admin: "Platform Owner",
+  agency_admin: "Agency Admin",
+  client_manager: "Client Manager",
+  worker: "Worker"
 };
 
-function todayAt(time) {
-  const d = new Date();
-  const [h, m] = time.split(":");
-  d.setHours(Number(h), Number(m), 0, 0);
-  return d.toISOString();
-}
+const ROLE_HOME = {
+  super_admin: "agencies",
+  agency_admin: "dashboard",
+  client_manager: "approvals",
+  worker: "timeclock"
+};
 
-function weekStart() {
-  const d = new Date();
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  const monday = new Date(d.setDate(diff));
-  monday.setHours(0, 0, 0, 0);
-  return monday.toISOString().slice(0, 10);
-}
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 
-let state = load();
+let state = loadState();
+let toastTimer = 0;
 
-function load() {
-  const existing = localStorage.getItem(STORAGE_KEY);
-  if (!existing) return structuredClone(seedData);
+document.addEventListener("DOMContentLoaded", () => {
+  bindEvents();
+  applyUrlParams();
+  normalizeSelections(state);
+  applyTheme();
+  renderShell();
+  renderView();
+});
+
+function loadState() {
+  const seed = buildSeedState();
+  const raw = localStorage.getItem(STORAGE_KEY);
+
+  if (!raw) {
+    return normalizeLoadedState(seed, seed);
+  }
+
   try {
-    return normalize(JSON.parse(existing));
+    return normalizeLoadedState(JSON.parse(raw), seed);
   } catch {
-    return structuredClone(seedData);
+    return normalizeLoadedState(seed, seed);
   }
 }
 
-function normalize(data) {
-  const merged = { ...structuredClone(seedData), ...data };
-  merged.auditLogs = merged.auditLogs || [];
-  merged.sites = merged.sites.map(s => ({
-    ...s,
-    gpsRequired: false
+function normalizeLoadedState(input, seed) {
+  const merged = {
+    ...seed,
+    ...input,
+    agencies: Array.isArray(input.agencies) && input.agencies.length ? input.agencies : seed.agencies,
+    clients: Array.isArray(input.clients) && input.clients.length ? input.clients : seed.clients,
+    sites: Array.isArray(input.sites) && input.sites.length ? input.sites : seed.sites,
+    workers: Array.isArray(input.workers) && input.workers.length ? input.workers : seed.workers,
+    assignments: Array.isArray(input.assignments) && input.assignments.length ? input.assignments : seed.assignments,
+    punches: Array.isArray(input.punches) && input.punches.length ? input.punches : seed.punches,
+    timesheets: Array.isArray(input.timesheets) && input.timesheets.length ? input.timesheets : seed.timesheets,
+    auditTrail: Array.isArray(input.auditTrail) && input.auditTrail.length ? input.auditTrail : seed.auditTrail,
+    settingsByAgency: {
+      ...seed.settingsByAgency,
+      ...(input.settingsByAgency || {})
+    }
+  };
+
+  merged.currentView = NAV_ITEMS.some(item => item.id === merged.currentView) ? merged.currentView : seed.currentView;
+  merged.currentRole = ROLE_LABELS[merged.currentRole] ? merged.currentRole : seed.currentRole;
+  merged.punchMessage = merged.punchMessage || seed.punchMessage;
+
+  merged.agencies = merged.agencies.map((agencyRecord, index) => ({
+    ...agencyRecord,
+    code: agencyRecord.code || buildAgencyCode(agencyRecord.name, index)
   }));
-  merged.timesheets = merged.timesheets.map(t => ({
-    ...t,
-    status: t.status || inferTimesheetStatus(t),
-    disputeReason: t.disputeReason || ""
-  }));
-  ensureSelectionsFor(merged);
+
+  merged.assignments = merged.assignments.map(record => ({ ...record, active: record.active !== false }));
+  merged.timesheets = merged.timesheets.map(syncTimesheet);
+  normalizeSelections(merged);
   return merged;
 }
 
-function ensureSelectionsFor(data) {
-  if (!data.clients.some(c => c.id === data.activeClientId && c.agencyId === data.activeAgencyId)) {
-    data.activeClientId = data.clients.find(c => c.agencyId === data.activeAgencyId)?.id || "";
-  }
-  if (!data.workers.some(w => w.id === data.activeWorkerId && w.agencyId === data.activeAgencyId)) {
-    data.activeWorkerId = data.workers.find(w => w.agencyId === data.activeAgencyId)?.id || "";
-  }
-}
-
-function inferTimesheetStatus(t) {
-  if (t.agencyApproved && t.clientApproved) return "Final Approved";
-  if (t.clientApproved) return "Client Approved";
-  if (t.disputeReason) return "Disputed";
-  return "Pending Client Review";
-}
-
-function save() {
+function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-function agency() {
-  return state.agencies.find(a => a.id === state.activeAgencyId) || state.agencies[0];
-}
+function buildSeedState() {
+  const currentWeek = toISODate(startOfWeek(new Date()));
+  const previousWeek = toISODate(addDays(parseISODate(currentWeek), -7));
 
-function agencyClients() {
-  return state.clients.filter(c => c.agencyId === state.activeAgencyId);
-}
-
-function agencySites() {
-  return state.sites.filter(s => s.agencyId === state.activeAgencyId);
-}
-
-function agencyWorkers() {
-  return state.workers.filter(w => w.agencyId === state.activeAgencyId);
-}
-
-function activeClient() {
-  return state.clients.find(c => c.id === state.activeClientId) || agencyClients()[0];
-}
-
-function activeWorker() {
-  return state.workers.find(w => w.id === state.activeWorkerId) || agencyWorkers()[0];
-}
-
-function clientSites() {
-  return agencySites().filter(s => s.clientId === state.activeClientId);
-}
-
-function clientWorkerIds() {
-  const siteIds = new Set(clientSites().map(s => s.id));
-  return new Set(
-    state.assignments
-      .filter(a => a.agencyId === state.activeAgencyId && a.clientId === state.activeClientId && siteIds.has(a.siteId))
-      .map(a => a.workerId)
-  );
-}
-
-function rowsFor(collection) {
-  let rows = state[collection] || [];
-
-  if (state.activeRole !== "super_admin" || state.activeView !== "agencies") {
-    rows = rows.filter(row => row.agencyId === state.activeAgencyId);
-  }
-
-  if (state.activeRole === "client_manager") {
-    if (collection === "clients") rows = rows.filter(r => r.id === state.activeClientId);
-    if (collection === "sites") rows = rows.filter(r => r.clientId === state.activeClientId);
-    if (collection === "assignments") rows = rows.filter(r => r.clientId === state.activeClientId);
-
-    if (collection === "workers") {
-      const ids = clientWorkerIds();
-      rows = rows.filter(r => ids.has(r.id));
+  const agencies = [
+    {
+      id: "agency_1",
+      code: "BRS-1201",
+      name: "BlueRidge Staffing Partners",
+      owner: "Melissa Grant",
+      plan: "Agency",
+      payrollEmail: "payroll@blueridgestaffing.com",
+      supportPhone: "(614) 555-0188"
+    },
+    {
+      id: "agency_2",
+      code: "HLG-2210",
+      name: "Harbor Labor Group",
+      owner: "Darius Webb",
+      plan: "Growth",
+      payrollEmail: "ops@harborlaborgroup.com",
+      supportPhone: "(502) 555-0140"
     }
+  ];
 
-    if (collection === "punches") {
-      const siteIds = new Set(clientSites().map(s => s.id));
-      rows = rows.filter(r => siteIds.has(r.siteId));
+  const clients = [
+    {
+      id: "client_1",
+      agencyId: "agency_1",
+      name: "NorthPeak Logistics",
+      contactName: "Dana Wilson",
+      contactTitle: "Warehouse Operations Manager",
+      email: "dana.wilson@northpeaklogistics.com"
+    },
+    {
+      id: "client_2",
+      agencyId: "agency_1",
+      name: "Summit Fresh Foods",
+      contactName: "Eric Madden",
+      contactTitle: "Distribution Supervisor",
+      email: "eric.madden@summitfresh.com"
+    },
+    {
+      id: "client_3",
+      agencyId: "agency_2",
+      name: "Apex Retail Distribution",
+      contactName: "Kelly Monroe",
+      contactTitle: "Regional Site Lead",
+      email: "kelly.monroe@apexretail.com"
     }
+  ];
 
-    if (collection === "timesheets") rows = rows.filter(r => r.clientId === state.activeClientId);
-  }
-
-  if (state.activeRole === "worker") {
-    if (collection === "workers") rows = rows.filter(r => r.id === state.activeWorkerId);
-    if (collection === "punches") rows = rows.filter(r => r.workerId === state.activeWorkerId);
-    if (collection === "timesheets") rows = rows.filter(r => r.workerId === state.activeWorkerId);
-    if (collection === "assignments") rows = rows.filter(r => r.workerId === state.activeWorkerId);
-
-    if (collection === "sites") {
-      const siteIds = new Set(rowsFor("assignments").map(a => a.siteId));
-      rows = rows.filter(r => siteIds.has(r.id));
+  const sites = [
+    {
+      id: "site_1",
+      agencyId: "agency_1",
+      clientId: "client_1",
+      name: "NorthPeak East DC",
+      code: "NPL-EAST",
+      address: "3800 Alum Creek Dr, Columbus, OH",
+      shiftProfile: "Day shift"
+    },
+    {
+      id: "site_2",
+      agencyId: "agency_1",
+      clientId: "client_1",
+      name: "NorthPeak Overflow Yard",
+      code: "NPL-OVR",
+      address: "7815 Green Pointe Dr, Groveport, OH",
+      shiftProfile: "Day shift"
+    },
+    {
+      id: "site_3",
+      agencyId: "agency_1",
+      clientId: "client_2",
+      name: "Summit Fresh Cold Storage",
+      code: "SFF-COLD",
+      address: "5151 Commerce Center Dr, Lockbourne, OH",
+      shiftProfile: "Cold chain"
+    },
+    {
+      id: "site_4",
+      agencyId: "agency_2",
+      clientId: "client_3",
+      name: "Apex Retail South Hub",
+      code: "ARD-SOUTH",
+      address: "1450 Logistics Way, Louisville, KY",
+      shiftProfile: "Split shift"
     }
-  }
+  ];
 
-  return rows;
-}
+  const workers = [
+    workerSeed("worker_1", "agency_1", "Mia", "Hernandez", "Forklift Operator", "mia.hernandez@blueridge-demo.com", "(614) 555-0101"),
+    workerSeed("worker_2", "agency_1", "Caleb", "Foster", "Order Selector", "caleb.foster@blueridge-demo.com", "(614) 555-0102"),
+    workerSeed("worker_3", "agency_1", "Jasmine", "Brooks", "Packer", "jasmine.brooks@blueridge-demo.com", "(614) 555-0103"),
+    workerSeed("worker_4", "agency_1", "Terrance", "Lee", "Loader", "terrance.lee@blueridge-demo.com", "(614) 555-0104"),
+    workerSeed("worker_5", "agency_1", "Olivia", "Price", "Inventory Associate", "olivia.price@blueridge-demo.com", "(614) 555-0105"),
+    workerSeed("worker_6", "agency_1", "Andre", "Collins", "Sanitation Lead", "andre.collins@blueridge-demo.com", "(614) 555-0106"),
+    workerSeed("worker_7", "agency_2", "Sofia", "Nguyen", "Reach Truck Operator", "sofia.nguyen@harbor-demo.com", "(502) 555-0107"),
+    workerSeed("worker_8", "agency_2", "Marcus", "Bell", "Shipping Clerk", "marcus.bell@harbor-demo.com", "(502) 555-0108"),
+    workerSeed("worker_9", "agency_2", "Nia", "Turner", "Pallet Sorter", "nia.turner@harbor-demo.com", "(502) 555-0109"),
+    workerSeed("worker_10", "agency_2", "Devonte", "Hayes", "Dock Associate", "devonte.hayes@harbor-demo.com", "(502) 555-0110")
+  ];
 
-function clientName(id) {
-  return state.clients.find(c => c.id === id)?.name || "Unknown Client";
-}
+  const assignments = [
+    assignmentSeed("assignment_1", "agency_1", "worker_1", "client_1", "site_1", "Forklift Operator", 19.5, 31, "07:00", "15:30"),
+    assignmentSeed("assignment_2", "agency_1", "worker_2", "client_1", "site_1", "Order Selector", 18, 29, "07:00", "15:30"),
+    assignmentSeed("assignment_3", "agency_1", "worker_3", "client_1", "site_2", "Packer", 18.75, 29.5, "06:30", "15:00"),
+    assignmentSeed("assignment_4", "agency_1", "worker_4", "client_1", "site_2", "Loader", 19, 30, "07:00", "15:30"),
+    assignmentSeed("assignment_5", "agency_1", "worker_5", "client_2", "site_3", "Inventory Control", 20.5, 33, "08:00", "16:30"),
+    assignmentSeed("assignment_6", "agency_1", "worker_6", "client_2", "site_3", "Sanitation Lead", 21.25, 34, "08:00", "16:30"),
+    assignmentSeed("assignment_7", "agency_2", "worker_7", "client_3", "site_4", "Reach Truck Operator", 19.75, 31.5, "06:00", "14:30"),
+    assignmentSeed("assignment_8", "agency_2", "worker_8", "client_3", "site_4", "Shipping Clerk", 18.5, 29, "06:00", "14:30"),
+    assignmentSeed("assignment_9", "agency_2", "worker_9", "client_3", "site_4", "Pallet Sorter", 17.75, 28.5, "14:00", "22:30"),
+    assignmentSeed("assignment_10", "agency_2", "worker_10", "client_3", "site_4", "Dock Associate", 18.25, 29.25, "14:00", "22:30")
+  ];
 
-function siteName(id) {
-  const s = state.sites.find(site => site.id === id);
-  return s ? `${s.siteCode} · ${s.address}` : "Unknown Site";
-}
+  const timesheets = [
+    createTimesheet("ts_1", "agency_1", "worker_1", "client_1", "site_1", "assignment_1", currentWeek, [8, 8, 8, 8, 6], "approved", "finalized", { approvalNote: "Approved by Dana Wilson." }),
+    createTimesheet("ts_2", "agency_1", "worker_2", "client_1", "site_1", "assignment_2", currentWeek, [8, 8, 8, 8, 8.5], "pending", "ready", {}),
+    createTimesheet("ts_3", "agency_1", "worker_3", "client_1", "site_2", "assignment_3", currentWeek, [8, 8, 7.5, 8, 7.5], "pending", "ready", {
+      manualEdited: true,
+      manualNote: "Agency adjusted Tuesday scan after a scanner battery swap."
+    }),
+    createTimesheet("ts_4", "agency_1", "worker_4", "client_1", "site_2", "assignment_4", currentWeek, [8.5, 8.5, 8.5, 8.5, 8], "approved", "finalized", { approvalNote: "Outbound dock volume verified." }),
+    createTimesheet("ts_5", "agency_1", "worker_5", "client_2", "site_3", "assignment_5", currentWeek, [8, 8, 8, 8, 8], "approved", "ready", { approvalNote: "Client approved for payroll review." }),
+    createTimesheet("ts_6", "agency_1", "worker_6", "client_2", "site_3", "assignment_6", currentWeek, [7.5, 7.5, 7.5, 8, 8], "rejected", "hold", { rejectionNote: "Thursday sanitation hours need dock lead confirmation." }),
+    createTimesheet("ts_7", "agency_2", "worker_7", "client_3", "site_4", "assignment_7", currentWeek, [8, 8, 8, 8, 7], "approved", "finalized", { approvalNote: "Approved by Kelly Monroe." }),
+    createTimesheet("ts_8", "agency_2", "worker_8", "client_3", "site_4", "assignment_8", currentWeek, [8, 8, 8, 8, 8], "pending", "ready", {}),
+    createTimesheet("ts_9", "agency_2", "worker_9", "client_3", "site_4", "assignment_9", currentWeek, [8, 8, 8, 7.5, 7.5], "approved", "finalized", { approvalNote: "PM crew released cleanly." }),
+    createTimesheet("ts_10", "agency_2", "worker_10", "client_3", "site_4", "assignment_10", currentWeek, [8, 8, 8, 8, 8.5], "approved", "finalized", { approvalNote: "Dock closeout approved." }),
+    createTimesheet("ts_11", "agency_1", "worker_1", "client_1", "site_1", "assignment_1", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_12", "agency_1", "worker_2", "client_1", "site_1", "assignment_2", previousWeek, [8, 8, 8, 8, 7.5], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_13", "agency_1", "worker_3", "client_1", "site_2", "assignment_3", previousWeek, [8, 8, 8, 8, 7], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_14", "agency_1", "worker_4", "client_1", "site_2", "assignment_4", previousWeek, [8, 8, 8, 8, 8.5], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_15", "agency_1", "worker_5", "client_2", "site_3", "assignment_5", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_16", "agency_1", "worker_6", "client_2", "site_3", "assignment_6", previousWeek, [8, 8, 8, 8, 7.5], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_17", "agency_2", "worker_7", "client_3", "site_4", "assignment_7", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_18", "agency_2", "worker_8", "client_3", "site_4", "assignment_8", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_19", "agency_2", "worker_9", "client_3", "site_4", "assignment_9", previousWeek, [8, 8, 8, 8, 7.5], "approved", "finalized", { approvalNote: "Previous pay period finalized." }),
+    createTimesheet("ts_20", "agency_2", "worker_10", "client_3", "site_4", "assignment_10", previousWeek, [8, 8, 8, 8, 8], "approved", "finalized", { approvalNote: "Previous pay period finalized." })
+  ];
 
-function workerName(id) {
-  const w = state.workers.find(worker => worker.id === id);
-  return w ? `${w.firstName} ${w.lastName}` : "Unknown Worker";
-}
+  const punches = [
+    punchSeed("punch_1", "agency_1", "worker_1", "site_1", "Clock In", makeTimestamp(0, "06:56")),
+    punchSeed("punch_2", "agency_1", "worker_1", "site_1", "Start Lunch", makeTimestamp(0, "11:59")),
+    punchSeed("punch_3", "agency_1", "worker_1", "site_1", "End Lunch", makeTimestamp(0, "12:28")),
+    punchSeed("punch_4", "agency_1", "worker_1", "site_1", "Clock Out", makeTimestamp(0, "15:34")),
+    punchSeed("punch_5", "agency_1", "worker_2", "site_1", "Clock In", makeTimestamp(0, "07:12")),
+    punchSeed("punch_6", "agency_1", "worker_2", "site_1", "Start Lunch", makeTimestamp(0, "12:02")),
+    punchSeed("punch_7", "agency_1", "worker_2", "site_1", "End Lunch", makeTimestamp(0, "12:31")),
+    punchSeed("punch_8", "agency_1", "worker_3", "site_2", "Clock In", makeTimestamp(0, "06:33")),
+    punchSeed("punch_9", "agency_1", "worker_3", "site_2", "Start Lunch", makeTimestamp(0, "11:57")),
+    punchSeed("punch_10", "agency_1", "worker_4", "site_2", "Clock In", makeTimestamp(0, "07:09")),
+    punchSeed("punch_11", "agency_1", "worker_4", "site_2", "Clock In", makeTimestamp(0, "07:12")),
+    punchSeed("punch_12", "agency_1", "worker_4", "site_2", "Clock Out", makeTimestamp(0, "15:21")),
+    punchSeed("punch_13", "agency_1", "worker_5", "site_3", "Clock In", makeTimestamp(0, "08:17")),
+    punchSeed("punch_14", "agency_2", "worker_7", "site_4", "Clock In", makeTimestamp(0, "05:58")),
+    punchSeed("punch_15", "agency_2", "worker_7", "site_4", "Start Lunch", makeTimestamp(0, "10:58")),
+    punchSeed("punch_16", "agency_2", "worker_7", "site_4", "End Lunch", makeTimestamp(0, "11:27")),
+    punchSeed("punch_17", "agency_2", "worker_7", "site_4", "Clock Out", makeTimestamp(0, "14:35")),
+    punchSeed("punch_18", "agency_2", "worker_8", "site_4", "Clock In", makeTimestamp(0, "06:02")),
+    punchSeed("punch_19", "agency_2", "worker_8", "site_4", "Clock Out", makeTimestamp(0, "14:29")),
+    punchSeed("punch_20", "agency_2", "worker_9", "site_4", "Clock In", makeTimestamp(0, "13:58")),
+    punchSeed("punch_21", "agency_2", "worker_10", "site_4", "Clock In", makeTimestamp(0, "14:02")),
+    punchSeed("punch_22", "agency_1", "worker_5", "site_3", "Clock Out", makeTimestamp(-1, "16:31")),
+    punchSeed("punch_23", "agency_1", "worker_6", "site_3", "Clock In", makeTimestamp(-1, "07:58"))
+  ];
 
-function assignmentForWorker(workerId) {
-  return state.assignments.find(a => a.workerId === workerId && a.active);
-}
+  const auditTrail = [
+    auditSeed("audit_1", "agency_1", "Timesheet approved", "NorthPeak approved Mia Hernandez for final payroll.", makeTimestamp(0, "15:40"), "Client Manager"),
+    auditSeed("audit_2", "agency_1", "Payroll finalized", "Terrance Lee moved into the final approved queue.", makeTimestamp(0, "16:04"), "Agency Admin"),
+    auditSeed("audit_3", "agency_1", "Manual edit noted", "Jasmine Brooks Tuesday hours were corrected after a scanner battery swap.", makeTimestamp(0, "13:10"), "Agency Admin"),
+    auditSeed("audit_4", "agency_1", "Client rejection", "Summit Fresh sent Andre Collins back for review with a note.", makeTimestamp(0, "12:42"), "Client Manager"),
+    auditSeed("audit_5", "agency_2", "Pay period exported", "Previous-week payroll was exported for Apex Retail.", makeTimestamp(-1, "17:05"), "Agency Admin"),
+    auditSeed("audit_6", "agency_1", "QR link shared", "NorthPeak East DC punch link copied for a supervisor kickoff.", makeTimestamp(-1, "09:11"), "Agency Admin")
+  ];
 
-const navByRole = {
-  super_admin: [
-    ["login_portal", "Access Hub"],
-    ["dashboard", "Platform Overview"],
-    ["agencies", "Agencies"],
-    ["clients", "Clients"],
-    ["sites", "Job Sites / QR"],
-    ["workers", "Workers"],
-    ["assignments", "Assignments"],
-    ["timesheets", "Timesheets"],
-    ["reports", "Revenue & Margin"],
-    ["timeclock", "Worker Punch"]
-  ],
-  agency_admin: [
-    ["login_portal", "Access Hub"],
-    ["dashboard", "Ops Overview"],
-    ["clients", "Clients"],
-    ["sites", "Job Sites / QR"],
-    ["workers", "Workers"],
-    ["assignments", "Assignments"],
-    ["timesheets", "Timesheets"],
-    ["reports", "Revenue & Margin"],
-    ["timeclock", "Worker Punch"]
-  ],
-  client_manager: [
-    ["login_portal", "Access Hub"],
-    ["dashboard", "Client Live Board"],
-    ["workers", "Assigned Crew"],
-    ["timesheets", "Approve Timesheets"],
-    ["timeclock", "Site Punch"]
-  ],
-  worker: [
-    ["login_portal", "Access Hub"],
-    ["timeclock", "My Punch"],
-    ["timesheets", "My Weekly Hours"]
-  ]
-};
-
-document.addEventListener("DOMContentLoaded", () => {
-  applyUrlParams();
-  bindBasics();
-  renderShell();
-  render();
-  setInterval(updateClock, 1000);
-});
-
-function applyUrlParams() {
-  const params = new URLSearchParams(location.search);
-  const agencyNumber = params.get("agency");
-  const siteCode = params.get("site");
-
-  if (agencyNumber) {
-    const foundAgency = state.agencies.find(a => a.agencyNumber.toLowerCase() === agencyNumber.toLowerCase());
-    if (foundAgency) state.activeAgencyId = foundAgency.id;
-  }
-
-  if (siteCode) {
-    const site = state.sites.find(s => s.agencyId === state.activeAgencyId && s.siteCode.toLowerCase() === siteCode.toLowerCase());
-    if (site) {
-      state.activeClientId = site.clientId;
-      state.activeView = "timeclock";
+  return {
+    currentView: "dashboard",
+    currentRole: "agency_admin",
+    currentAgencyId: "agency_1",
+    currentClientId: "client_1",
+    currentWorkerId: "worker_1",
+    currentWeek,
+    selectedWeekStart: currentWeek,
+    punchSiteId: "site_1",
+    punchMessage: "Ready for the next worker punch.",
+    agencies,
+    clients,
+    sites,
+    workers,
+    assignments,
+    punches,
+    timesheets,
+    auditTrail,
+    settingsByAgency: {
+      agency_1: {
+        agencyName: "BlueRidge Staffing Partners",
+        logoText: "BP",
+        primaryColor: "#1f6fff",
+        payrollContactEmail: "payroll@blueridgestaffing.com",
+        supportPhone: "(614) 555-0188"
+      },
+      agency_2: {
+        agencyName: "Harbor Labor Group",
+        logoText: "HG",
+        primaryColor: "#145bdb",
+        payrollContactEmail: "ops@harborlaborgroup.com",
+        supportPhone: "(502) 555-0140"
+      }
     }
-  }
-
-  save();
+  };
 }
 
-function bindBasics() {
-  document.getElementById("roleSelect").addEventListener("change", e => {
-    state.activeRole = e.target.value;
-    state.signedInRole = "";
-    state.signedInName = "";
-    state.activeView = navByRole[state.activeRole][0][0];
-    ensureSelections();
-    save();
+function workerSeed(id, agencyId, firstName, lastName, title, email, phone) {
+  return {
+    id,
+    agencyId,
+    firstName,
+    lastName,
+    title,
+    email,
+    phone,
+    status: "Active"
+  };
+}
+
+function assignmentSeed(id, agencyId, workerId, clientId, siteId, title, payRate, billRate, shiftStart, shiftEnd) {
+  return {
+    id,
+    agencyId,
+    workerId,
+    clientId,
+    siteId,
+    title,
+    payRate,
+    billRate,
+    shiftStart,
+    shiftEnd,
+    active: true
+  };
+}
+
+function createTimesheet(id, agencyId, workerId, clientId, siteId, assignmentId, weekStart, hours, clientStatus, agencyStatus, extras) {
+  const days = WEEKDAY_LABELS.map((label, index) => ({
+    label,
+    date: toISODate(addDays(parseISODate(weekStart), index)),
+    hours: round2(Number(hours[index] || 0))
+  }));
+
+  const totalHours = round2(days.reduce((sum, day) => sum + day.hours, 0));
+  const regularHours = round2(Math.min(totalHours, 40));
+  const overtimeHours = round2(Math.max(totalHours - 40, 0));
+  const approvedHours = clientStatus === "approved" ? totalHours : 0;
+
+  return syncTimesheet({
+    id,
+    agencyId,
+    workerId,
+    clientId,
+    siteId,
+    assignmentId,
+    weekStart,
+    days,
+    totalHours,
+    regularHours,
+    overtimeHours,
+    approvedHours,
+    clientStatus,
+    agencyStatus,
+    approvalNote: extras.approvalNote || "",
+    rejectionNote: extras.rejectionNote || "",
+    manualEdited: Boolean(extras.manualEdited),
+    manualNote: extras.manualNote || "",
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function punchSeed(id, agencyId, workerId, siteId, type, timestamp) {
+  return {
+    id,
+    agencyId,
+    workerId,
+    siteId,
+    type,
+    timestamp
+  };
+}
+
+function auditSeed(id, agencyId, title, note, timestamp, actor) {
+  return {
+    id,
+    agencyId,
+    title,
+    note,
+    timestamp,
+    actor
+  };
+}
+
+function bindEvents() {
+  const roleSelect = document.getElementById("roleSelect");
+  const agencySelect = document.getElementById("agencySelect");
+  const clientSelect = document.getElementById("clientSelect");
+  const workerSelect = document.getElementById("workerSelect");
+  const menuButton = document.getElementById("menuButton");
+  const mobileOverlay = document.getElementById("mobileOverlay");
+  const resetDemoBtn = document.getElementById("resetDemoBtn");
+
+  roleSelect.addEventListener("change", event => {
+    state.currentRole = event.target.value;
+    state.currentView = ROLE_HOME[state.currentRole] || "dashboard";
+    saveState();
     renderShell();
-    render();
+    renderView();
   });
 
-  document.getElementById("agencySelect").addEventListener("change", e => {
-    state.activeAgencyId = e.target.value;
-    ensureSelections();
-    save();
+  agencySelect.addEventListener("change", event => {
+    state.currentAgencyId = event.target.value;
+    normalizeSelections(state);
+    applyTheme();
+    saveState();
     renderShell();
-    render();
+    renderView();
   });
 
-  document.getElementById("clientSelect").addEventListener("change", e => {
-    state.activeClientId = e.target.value;
-    ensureSelections();
-    save();
+  clientSelect.addEventListener("change", event => {
+    state.currentClientId = event.target.value;
+    saveState();
     renderShell();
-    render();
+    renderView();
   });
 
-  document.getElementById("workerSelect").addEventListener("change", e => {
-    state.activeWorkerId = e.target.value;
-    save();
+  workerSelect.addEventListener("change", event => {
+    state.currentWorkerId = event.target.value;
+    const nextAssignment = activeAssignmentForWorker(state.currentWorkerId);
+    if (nextAssignment) {
+      state.punchSiteId = nextAssignment.siteId;
+    }
+    saveState();
     renderShell();
-    render();
+    renderView();
   });
 
-  document.getElementById("signOutBtn").addEventListener("click", () => {
-    state.signedInRole = "";
-    state.signedInName = "";
-    state.activeView = "login_portal";
-    save();
-    renderShell();
-    render();
-    toast("Signed out.");
-  });
+  menuButton.addEventListener("click", toggleMobileMenu);
+  mobileOverlay.addEventListener("click", closeMobileMenu);
 
-  document.getElementById("resetDemoBtn").addEventListener("click", () => {
-    state = structuredClone(seedData);
+  resetDemoBtn.addEventListener("click", () => {
+    state = normalizeLoadedState(buildSeedState(), buildSeedState());
     localStorage.removeItem(STORAGE_KEY);
-    save();
+    applyTheme();
     renderShell();
-    render();
+    renderView();
     toast("Demo data reset.");
   });
 
-  document.getElementById("exportBtn").addEventListener("click", exportPayroll);
-
-  document.addEventListener("click", e => {
-    const view = e.target.closest("[data-view]")?.dataset.view;
-    if (view) {
-      state.activeView = view;
-      save();
-      renderShell();
-      render();
+  document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("submit", handleSubmit);
+  document.addEventListener("change", handleDocumentChange);
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 1080) {
+      closeMobileMenu();
     }
-
-    const punch = e.target.closest("[data-punch]")?.dataset.punch;
-    if (punch) createPunch(punch);
-
-    const approve = e.target.closest("[data-approve]")?.dataset.approve;
-    if (approve) approveTimesheet(approve);
-
-    const reject = e.target.closest("[data-reject]")?.dataset.reject;
-    if (reject) rejectTimesheet(reject);
-
-    const copy = e.target.closest("[data-copy]")?.dataset.copy;
-    if (copy) copyText(copy);
-  });
-
-  document.addEventListener("input", e => {
-    if (e.target.id === "workerNameInput") {
-      const display = document.getElementById("enteredNameDisplay");
-      if (display) display.textContent = e.target.value || "-";
-    }
-  });
-
-  document.addEventListener("submit", e => {
-    e.preventDefault();
-
-    const loginRole = e.target.dataset.loginForm;
-    if (loginRole) {
-      const fd = new FormData(e.target);
-      return demoSignIn(loginRole, e.target.dataset.loginTarget, fd);
-    }
-
-    if (e.target.id === "agencyForm") addAgency(new FormData(e.target));
-    if (e.target.id === "workerForm") addWorker(new FormData(e.target));
-    if (e.target.id === "clientForm") addClient(new FormData(e.target));
-    if (e.target.id === "siteForm") addSite(new FormData(e.target));
-    if (e.target.id === "assignmentForm") addAssignment(new FormData(e.target));
   });
 }
 
-function ensureSelections() {
-  ensureSelectionsFor(state);
+function handleDocumentClick(event) {
+  const viewButton = event.target.closest("[data-view]");
+  if (viewButton) {
+    setView(viewButton.dataset.view);
+    return;
+  }
+
+  const punchButton = event.target.closest("[data-punch]");
+  if (punchButton) {
+    createPunch(punchButton.dataset.punch);
+    return;
+  }
+
+  const copyButton = event.target.closest("[data-copy-link]");
+  if (copyButton) {
+    copyText(copyButton.dataset.copyLink, "Punch link copied.");
+    return;
+  }
+
+  const approveButton = event.target.closest("[data-approve-timesheet]");
+  if (approveButton) {
+    approveTimesheet(approveButton.dataset.approveTimesheet);
+    return;
+  }
+
+  const rejectButton = event.target.closest("[data-reject-timesheet]");
+  if (rejectButton) {
+    rejectTimesheet(rejectButton.dataset.rejectTimesheet);
+    return;
+  }
+
+  const finalizeButton = event.target.closest("[data-finalize-timesheet]");
+  if (finalizeButton) {
+    finalizeTimesheet(finalizeButton.dataset.finalizeTimesheet);
+    return;
+  }
+
+  const exportButton = event.target.closest("[data-export]");
+  if (exportButton) {
+    const exportMode = exportButton.dataset.export;
+    if (exportMode === "csv") exportPayrollCsv(false);
+    if (exportMode === "excel") exportPayrollCsv(true);
+    if (exportMode === "pdf") exportPayrollPdf();
+  }
+}
+
+function handleDocumentChange(event) {
+  if (event.target.id === "payrollWeekSelect") {
+    state.selectedWeekStart = event.target.value;
+    saveState();
+    renderView();
+  }
+
+  if (event.target.id === "timeclockSiteSelect") {
+    state.punchSiteId = event.target.value;
+    saveState();
+  }
+}
+
+function handleSubmit(event) {
+  event.preventDefault();
+
+  const formId = event.target.id;
+  const data = new FormData(event.target);
+
+  if (formId === "agencyForm") addAgency(data);
+  if (formId === "clientForm") addClient(data);
+  if (formId === "siteForm") addSite(data);
+  if (formId === "workerForm") addWorker(data);
+  if (formId === "assignmentForm") addAssignment(data);
+  if (formId === "settingsForm") saveSettings(data);
+}
+
+function setView(view) {
+  if (!NAV_ITEMS.some(item => item.id === view)) return;
+  state.currentView = view;
+  saveState();
+  renderShell();
+  renderView();
+  closeMobileMenu();
 }
 
 function renderShell() {
-  document.getElementById("roleSelect").value = state.activeRole;
-
+  const roleSelect = document.getElementById("roleSelect");
   const agencySelect = document.getElementById("agencySelect");
-  agencySelect.innerHTML = state.agencies.map(a => `<option value="${a.id}">${a.agencyNumber} · ${a.name}</option>`).join("");
-  agencySelect.value = state.activeAgencyId;
-
   const clientSelect = document.getElementById("clientSelect");
-  clientSelect.innerHTML = agencyClients().map(c => `<option value="${c.id}">${c.name}</option>`).join("");
-  clientSelect.value = state.activeClientId;
-
   const workerSelect = document.getElementById("workerSelect");
-  workerSelect.innerHTML = agencyWorkers().map(w => `<option value="${w.id}">${w.workerNumber} · ${w.firstName} ${w.lastName}</option>`).join("");
-  workerSelect.value = state.activeWorkerId;
-
-  document.getElementById("clientBox").style.display = state.activeRole === "client_manager" ? "block" : "none";
-  document.getElementById("workerBox").style.display = state.activeRole === "worker" ? "block" : "none";
-
   const nav = document.getElementById("nav");
-  nav.innerHTML = navByRole[state.activeRole]
-    .map(([view, label]) => `<button class="nav-btn ${state.activeView === view ? "active" : ""}" data-view="${view}">${label}</button>`)
+  const contextLabel = document.getElementById("contextLabel");
+  const pageTitle = document.getElementById("pageTitle");
+  const brandMark = document.getElementById("brandMark");
+  const brandCopy = document.querySelector(".brand-copy");
+
+  roleSelect.innerHTML = Object.entries(ROLE_LABELS)
+    .map(([value, label]) => `<option value="${safe(value)}">${safe(label)}</option>`)
     .join("");
+  roleSelect.value = state.currentRole;
 
-  const title = navByRole[state.activeRole].find(([v]) => v === state.activeView)?.[1] || "Dashboard";
-  document.getElementById("pageTitle").textContent = title;
+  agencySelect.innerHTML = state.agencies
+    .map(agencyRecord => `<option value="${safe(agencyRecord.id)}">${safe(agencyRecord.code)} - ${safe(agencyRecord.name)}</option>`)
+    .join("");
+  agencySelect.value = state.currentAgencyId;
 
-  const context = state.activeRole === "client_manager"
-    ? `${agency().agencyNumber} · ${activeClient()?.name || "Client"}`
-    : state.activeRole === "worker"
-      ? `${agency().agencyNumber} · ${workerName(state.activeWorkerId)}`
-      : `${agency().agencyNumber} · ${agency().name}`;
+  clientSelect.innerHTML = clientsForCurrentAgency()
+    .map(clientRecord => `<option value="${safe(clientRecord.id)}">${safe(clientRecord.name)}</option>`)
+    .join("");
+  clientSelect.value = state.currentClientId;
 
-  const signedInText = state.signedInName ? `Signed in: ${state.signedInName} · ` : "";
-  document.getElementById("activeContextLabel").textContent = signedInText + context;
+  workerSelect.innerHTML = workersForCurrentAgency()
+    .map(workerRecord => `<option value="${safe(workerRecord.id)}">${safe(fullWorkerName(workerRecord.id))}</option>`)
+    .join("");
+  workerSelect.value = state.currentWorkerId;
+
+  nav.innerHTML = NAV_ITEMS.map(item => `
+    <button class="nav-button ${state.currentView === item.id ? "active" : ""}" data-view="${safe(item.id)}" type="button">
+      <span class="nav-badge">${safe(item.badge)}</span>
+      <span>${safe(item.label)}</span>
+    </button>
+  `).join("");
+
+  const page = NAV_ITEMS.find(item => item.id === state.currentView);
+  const settings = currentAgencySettings();
+
+  brandMark.textContent = (settings.logoText || initials(currentAgency()?.name || "Portaly", 2)).slice(0, 3).toUpperCase();
+  brandCopy.textContent = `${settings.agencyName || currentAgency()?.name || "Agency workspace"} demo workspace`;
+  pageTitle.textContent = page ? page.label : "Dashboard";
+  contextLabel.textContent = renderContextLabel();
 }
 
-function render() {
+function renderView() {
   const view = document.getElementById("view");
-
-  const map = {
-    login_portal: loginPortalView,
+  const renderers = {
     dashboard: dashboardView,
     agencies: agenciesView,
     clients: clientsView,
     sites: sitesView,
     workers: workersView,
     assignments: assignmentsView,
-    timesheets: timesheetsView,
-    reports: reportsView,
-    timeclock: timeclockView
+    timeclock: timeclockView,
+    approvals: approvalsView,
+    payroll: payrollView,
+    margin: marginView,
+    settings: settingsView
   };
 
-  view.innerHTML = (map[state.activeView] || loginPortalView)();
-  updateClock();
-}
-
-function loginPortalView() {
-  return `
-    <div class="login-hero hero-panel card">
-      <div class="hero-copy">
-        <p class="eyebrow">Agency operating system</p>
-        <h3>One portal for workers, clients, agency teams, and platform owners.</h3>
-        <p class="muted">Portaly packages QR timeclock capture, client approvals, payroll handoff, and spread visibility into a static product demo that already feels agency-ready.</p>
-        <div class="hero-badges">
-          <span class="badge blue">QR worker punch</span>
-          <span class="badge green">Client signoff</span>
-          <span class="badge yellow">Margin visibility</span>
-        </div>
-      </div>
-      <div class="hero-stat-grid">
-        <div class="hero-stat">
-          <span>Deployment</span>
-          <strong>GitHub Pages</strong>
-          <p>No build step, fast demo handoff, easy agency review.</p>
-        </div>
-        <div class="hero-stat">
-          <span>Roles</span>
-          <strong>4 portal views</strong>
-          <p>Workers, clients, agency ops, and platform owners all have a clean lane.</p>
-        </div>
-        <div class="login-mini-clock" id="miniClock">--:--:--</div>
-      </div>
-    </div>
-
-    <div class="signin-grid">
-      ${signinCard("worker", "Worker Access", "Punch in, punch out, and review your weekly hours without extra clutter.", "worker@demo.com", "worker123", "Open worker portal", "timeclock")}
-      ${signinCard("client_manager", "Client Approver Access", "Review labor hours, approve clean time, and flag disputes quickly.", "client@demo.com", "client123", "Open client portal", "timesheets")}
-      ${signinCard("agency_admin", "Agency Ops Access", "Manage clients, workers, assignments, payroll export, and final approval.", "agency@demo.com", "agency123", "Open agency portal", "dashboard")}
-      ${signinCard("super_admin", "Platform Owner Access", "Oversee agencies, plans, tenants, and the full demo experience.", "admin@demo.com", "admin123", "Open platform portal", "agencies")}
-    </div>
-  `;
-}
-
-function signinCard(role, title, description, email, password, button, targetView) {
-  const roleLabel = {
-    worker: "Worker",
-    client_manager: "Client approval",
-    agency_admin: "Agency ops",
-    super_admin: "Platform owner"
-  }[role] || "Access";
-
-  return `
-    <form class="signin-card card" data-login-form="${role}" data-login-target="${targetView}">
-      <div class="signin-top">
-        <div class="portal-icon">${title.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
-        <div>
-          <span class="badge blue">${roleLabel}</span>
-          <h3>${title}</h3>
-          <p class="muted">${description}</p>
-        </div>
-      </div>
-
-      <div class="form-grid">
-        <div>
-          <label>Email</label>
-          <input name="email" type="email" value="${email}" autocomplete="username" required />
-        </div>
-        <div>
-          <label>Password</label>
-          <input name="password" type="password" value="${password}" autocomplete="current-password" required />
-        </div>
-      </div>
-
-      <div class="demo-credentials">
-        <span>Demo credentials</span>
-        <code>${email}</code>
-        <code>${password}</code>
-      </div>
-
-      <button class="primary-btn full">${button}</button>
-    </form>
-  `;
-}
-
-function demoSignIn(role, targetView, fd) {
-  const email = fd.get("email");
-  const password = fd.get("password");
-
-  const allowed = {
-    worker: ["worker@demo.com", "worker123", "Angel Quincel"],
-    client_manager: ["client@demo.com", "client123", activeClient()?.contact || "Client Manager"],
-    agency_admin: ["agency@demo.com", "agency123", "Agency Admin"],
-    super_admin: ["admin@demo.com", "admin123", "Super Admin"]
-  };
-
-  const [demoEmail, demoPassword, displayName] = allowed[role] || [];
-
-  if (email !== demoEmail || password !== demoPassword) {
-    return toast("Demo login failed. Use the demo email and password shown on the card.");
-  }
-
-  state.activeRole = role;
-  state.activeView = targetView || navByRole[role][0][0];
-  state.signedInRole = role;
-  state.signedInName = displayName;
-  ensureSelections();
-  save();
-  renderShell();
-  render();
-  toast(`Signed in as ${displayName}.`);
-}
-
-function dashboardStats() {
-  const punches = rowsFor("punches");
-  const workers = rowsFor("workers");
-  const timesheets = rowsFor("timesheets");
-  const present = new Set(punches.filter(p => p.type === "Clock In").map(p => p.workerId)).size;
-  const late = punches.filter(p => p.status === "Late").length;
-  const totalHours = timesheets.reduce((sum, t) => sum + Number(t.regularHours) + Number(t.overtimeHours), 0);
-  const missing = Math.max(workers.length - present, 0);
-  return { present, late, totalHours, missing };
+  view.innerHTML = (renderers[state.currentView] || dashboardView)();
 }
 
 function dashboardView() {
-  const s = dashboardStats();
-  const activeAssignments = rowsFor("assignments").filter(a => a.active).length;
-  const openApprovals = rowsFor("timesheets").filter(t => t.status !== "Final Approved").length;
-  const marginEstimate = rowsFor("timesheets").reduce((sum, t) => {
-    const assignment = assignmentForWorker(t.workerId) || { payRate: 0, billRate: 0 };
-    const hours = Number(t.regularHours) + Number(t.overtimeHours);
-    return sum + hours * (Number(assignment.billRate) - Number(assignment.payRate));
-  }, 0);
+  const metrics = dashboardMetrics();
+  const exceptions = buildExceptions().slice(0, 6);
+  const recent = recentActivity().slice(0, 6);
+  const settings = currentAgencySettings();
 
   return `
-    <div class="hero-panel card">
+    <section class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">Agency command center</p>
-        <h3>Run labor ops, client approvals, and payroll handoff from one clean control surface.</h3>
-        <p class="muted">Portaly now presents like a finished staffing product: clearer live operations framing, a tighter QRTimeclock-style visual system, and demo copy that speaks directly to agencies.</p>
-        <div class="hero-badges">
-          <span class="badge blue">${agency().name}</span>
-          <span class="badge green">${rowsFor("clients").length} client accounts</span>
-          <span class="badge yellow">${rowsFor("sites").length} active sites</span>
+        <p class="eyebrow">Portaly</p>
+        <h3>QR Timeclock &amp; Agency Operations Platform</h3>
+        <p>Track worker punches, client approvals, payroll exports, and gross margin from one clean dashboard.</p>
+        <div class="hero-actions">
+          <button class="button button-primary" data-view="dashboard" type="button">Try Demo</button>
+          <button class="button button-secondary" data-view="timeclock" type="button">Open Worker Punch</button>
+          <button class="button button-ghost" data-view="payroll" type="button">View Payroll Workflow</button>
+        </div>
+        <div class="hero-proof">
+          <span class="tiny-pill">${safe(settings.agencyName || currentAgency()?.name || "Agency")}</span>
+          <span class="tiny-pill">${safe(metrics.activeSitesLabel)}</span>
+          <span class="tiny-pill">${safe(metrics.readyHoursLabel)}</span>
         </div>
       </div>
-      <div class="hero-stat-grid">
-        <div class="hero-stat">
-          <span>Present now</span>
-          <strong>${s.present}</strong>
-          <p>${Math.max(rowsFor("workers").length - s.present, 0)} workers still need a punch.</p>
-        </div>
-        <div class="hero-stat">
-          <span>Open approvals</span>
-          <strong>${openApprovals}</strong>
-          <p>Timesheets waiting on client or agency signoff.</p>
-        </div>
-        <div class="hero-stat">
-          <span>Weekly spread</span>
-          <strong>$${marginEstimate.toFixed(2)}</strong>
-          <p>Estimated gross margin across the current weekly timecards.</p>
+
+      <div class="hero-rail">
+        ${heroStat("Live worker punches", String(metrics.workersClockedInToday), "Workers clocked in across today's active sites.")}
+        ${heroStat("Pending approvals", String(metrics.pendingApprovals), "Client-side timecards still waiting for signoff.")}
+        ${heroStat("Estimated gross margin", formatCurrency(metrics.grossMargin), "Current-week spread modeled from bill and pay rates.")}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Executive Dashboard</p>
+          <h3>Live agency operations at a glance</h3>
+          <p>Built for staffing agencies that need one credible place to see labor activity, payroll readiness, and account health.</p>
         </div>
       </div>
-    </div>
 
-    <div class="grid kpi-grid">
-      ${kpi("Present Today", s.present, "Clocked in", "green")}
-      ${kpi("Late Punches", s.late, "Needs review", s.late ? "yellow" : "green")}
-      ${kpi("Active Assignments", activeAssignments, "Spread tracked", "blue")}
-      ${kpi("Weekly Hours", s.totalHours.toFixed(2), "Regular + OT", "blue")}
-    </div>
+      <div class="metric-grid">
+        ${metricCard("WK", "Workers Clocked In Today", String(metrics.workersClockedInToday), "Unique workers with a live punch today.")}
+        ${metricCard("AP", "Pending Client Approvals", String(metrics.pendingApprovals), "Timecards waiting for client signoff.")}
+        ${metricCard("EX", "Missing Punches", String(metrics.missingPunches), "Open lunch or missing clock-out exceptions.")}
+        ${metricCard("HR", "Payroll Hours This Week", formatHours(metrics.payrollHours), "Current pay-period total hours.")}
+        ${metricCard("GM", "Estimated Gross Margin", formatCurrency(metrics.grossMargin), "Revenue less labor cost for the week.")}
+        ${metricCard("ST", "Active Client Sites", String(metrics.activeSites), "Live staffing locations for this agency.")}
+      </div>
+    </section>
 
-    <div class="grid two-col" style="margin-top:18px;">
+    <section class="split-grid">
       <div class="card">
-        <div class="section-head">
-          <h3>Live attendance feed</h3>
-          <p class="muted">A clean last-punch view for agency ops and client teams watching attendance in real time.</p>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Product Credibility</p>
+            <h3>Built for staffing agencies that still chase paper timecards</h3>
+            <p>Position the demo around operational trust, clean approval flows, and margin visibility instead of just punch capture.</p>
+          </div>
         </div>
-        ${punchTable(rowsFor("punches").slice(-8).reverse())}
+
+        <div class="feature-grid">
+          ${featureCard("QR", "QR worker punches", "Open the mobile punch flow in seconds and keep daily attendance visible.")}
+          ${featureCard("CA", "Client approvals", "Let client managers approve or reject labor hours with notes.")}
+          ${featureCard("PX", "Payroll exports", "Push approved hours into CSV, Excel-ready CSV, or print-to-PDF handoff.")}
+          ${featureCard("GM", "Gross margin visibility", "Model pay, bill, spread, and margin per worker or site.")}
+          ${featureCard("MS", "Multi-site tracking", "Run multiple warehouses and overflow locations in one agency workspace.")}
+          ${featureCard("AT", "Audit trail", "Keep visible notes for approvals, manual edits, exports, and settings changes.")}
+        </div>
       </div>
 
       <div class="card">
-        <div class="section-head">
-          <h3>Why agencies buy this</h3>
-          <p class="muted">The product story is clear: faster punch capture, cleaner approvals, and payroll visibility without a custom rollout.</p>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Exceptions</p>
+            <h3>Attention items that payroll ops can’t miss</h3>
+            <p>These alerts come straight from punch activity, approval state, and manual edits stored in the demo data.</p>
+          </div>
         </div>
-        <div class="list">
-          <div class="list-item">
-            <div>
-              <div class="strong">Role-based portal flow</div>
-              <div class="muted small">Workers punch, clients approve, and agency teams finalize without role confusion.</div>
-            </div>
-            <span class="badge blue">Core</span>
-          </div>
 
-          <div class="list-item">
-            <div>
-              <div class="strong">Assignment + spread logic</div>
-              <div class="muted small">Each assignment carries pay, bill, and margin logic so export conversations are easier.</div>
-            </div>
-            <span class="badge green">Revenue</span>
-          </div>
-
-          <div class="list-item">
-            <div>
-              <div class="strong">Client-ready approvals</div>
-              <div class="muted small">Client signoff and dispute handling are visible instead of buried in email chains.</div>
-            </div>
-            <span class="badge yellow">Ops</span>
-          </div>
+        <div class="exception-list">
+          ${exceptions.length ? exceptions.map(renderExceptionCard).join("") : emptyState("No exceptions in this agency view.")}
         </div>
       </div>
-    </div>
-  `;
-}
+    </section>
 
-function kpi(label, value, note, color) {
-  return `
-    <div class="card kpi-card">
-      <p class="label">${label}</p>
-      <div class="value">${value}</div>
-      <p class="note"><span class="badge ${color}">${note}</span></p>
-    </div>
+    <section class="split-grid">
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Recent Activity</p>
+            <h3>Visible audit trail for demos and ops conversations</h3>
+          </div>
+        </div>
+
+        <div class="timeline">
+          ${recent.length ? recent.map(renderTimelineItem).join("") : emptyState("No recent audit events yet.")}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Pricing Preview</p>
+            <h3>Simple packaging for staffing owners and investors</h3>
+          </div>
+        </div>
+
+        <div class="pricing-grid">
+          ${pricingCard("Starter", "$99/month", ["Up to 25 workers", "1 client site", "QR punches", "Basic payroll export"])}
+          ${pricingCard("Agency", "$249/month", ["Up to 100 workers", "5 client sites", "Client approvals", "Payroll exports", "Exception alerts"])}
+          ${pricingCard("Growth", "$499/month", ["Unlimited clients", "Advanced reports", "White-label branding", "Priority setup"])}
+          ${pricingCard("Enterprise", "Custom", ["Multi-branch agencies", "Custom integrations", "Dedicated onboarding"])}
+        </div>
+      </div>
+    </section>
   `;
 }
 
 function agenciesView() {
+  const agencies = state.agencies;
+
   return `
-    <div class="grid two-col">
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Agency Management</p>
+          <h3>Multi-agency staffing demo portfolio</h3>
+          <p>Show how Portaly supports multiple staffing brands while keeping payroll contacts, branding, and site operations distinct.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="content-grid">
       <div class="card">
-        <h3>Create Agency</h3>
+        <div class="section-heading">
+          <div>
+            <h3>Agency directory</h3>
+            <p>Use the active agency selector in the sidebar to swap the full product context.</p>
+          </div>
+        </div>
+
+        <div class="site-grid">
+          ${agencies.map(agencyCard).join("")}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <h3>Add demo agency</h3>
+            <p>Keep the existing static app flexible for sales demos without adding a backend.</p>
+          </div>
+        </div>
+
         <form id="agencyForm" class="form-grid">
-          <div><label>Agency Name</label><input name="name" required placeholder="Example Staffing LLC"></div>
-          <div><label>Owner</label><input name="owner" required placeholder="Owner name"></div>
-          <div><label>Plan</label><select name="plan"><option>Starter</option><option>Growth</option><option>Pro</option><option>Enterprise</option></select></div>
-          <div><label>Status</label><select name="status"><option>Active</option><option>Trial</option><option>Paused</option></select></div>
-          <button class="primary-btn wide">Add Agency</button>
+          <div>
+            <label>Agency name</label>
+            <input name="name" type="text" placeholder="Lakefront Staffing Group" required />
+          </div>
+          <div>
+            <label>Owner</label>
+            <input name="owner" type="text" placeholder="Jordan Blake" required />
+          </div>
+          <div>
+            <label>Payroll contact email</label>
+            <input name="payrollEmail" type="email" placeholder="payroll@agency.com" required />
+          </div>
+          <div>
+            <label>Support phone</label>
+            <input name="supportPhone" type="text" placeholder="(555) 555-0100" required />
+          </div>
+          <div>
+            <label>Plan</label>
+            <select name="plan">
+              <option>Starter</option>
+              <option selected>Agency</option>
+              <option>Growth</option>
+              <option>Enterprise</option>
+            </select>
+          </div>
+          <div>
+            <label>Primary color</label>
+            <input name="primaryColor" type="color" value="#1f6fff" />
+          </div>
+          <div class="form-span-2 form-actions">
+            <button class="button button-primary" type="submit">Add Agency</button>
+          </div>
         </form>
       </div>
+    </section>
 
-      <div class="card">
-        <h3>Multi-Tenant Rule</h3>
-        <p class="muted">Every agency gets a unique number. All data stays tied to that agency.</p>
-        <div class="qr-box">TA-1001 → Site QR → Worker Punch → Timesheet → Payroll Export</div>
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h3>Agency operating snapshot</h3>
+          <p>Quick reference for plan level, client footprint, labor count, and payroll contact routing.</p>
+        </div>
       </div>
-    </div>
 
-    <div class="card" style="margin-top:14px;">
-      <h3>Agencies</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Agency #</th><th>Name</th><th>Owner</th><th>Plan</th><th>Status</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Agency</th>
+              <th>Plan</th>
+              <th>Clients</th>
+              <th>Sites</th>
+              <th>Workers</th>
+              <th>Payroll Contact</th>
+              <th>Support</th>
+            </tr>
+          </thead>
           <tbody>
-            ${state.agencies.map(a => `<tr><td>${a.agencyNumber}</td><td>${a.name}</td><td>${a.owner}</td><td>${a.plan}</td><td><span class="badge green">${a.status}</span></td></tr>`).join("")}
+            ${agencies.map(agencyRow).join("")}
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   `;
 }
 
 function clientsView() {
-  const clients = rowsFor("clients");
+  const clients = clientsForCurrentAgency();
 
   return `
-    <div class="grid two-col">
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Client Accounts</p>
+          <h3>Client relationships tied directly to sites and approvals</h3>
+          <p>Each client account in the demo owns its own locations, assigned workers, and approval queue.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="content-grid">
       <div class="card">
-        <h3>Add Client</h3>
+        <div class="section-heading">
+          <div>
+            <h3>Client list</h3>
+            <p>Switch the client focus in the sidebar to preview the manager approval experience.</p>
+          </div>
+        </div>
+
+        <div class="site-grid">
+          ${clients.map(clientCard).join("")}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <h3>Add client account</h3>
+            <p>Create another warehouse or distribution customer for the active agency.</p>
+          </div>
+        </div>
+
         <form id="clientForm" class="form-grid">
-          <div><label>Client Name</label><input name="name" required placeholder="Warehouse / Company"></div>
-          <div><label>Contact</label><input name="contact" required placeholder="Site contact"></div>
-          <div class="wide"><label>Email</label><input name="email" type="email" required placeholder="contact@company.com"></div>
-          <button class="primary-btn wide">Add Client</button>
+          <div>
+            <label>Client name</label>
+            <input name="name" type="text" placeholder="Anchor Distribution" required />
+          </div>
+          <div>
+            <label>Contact name</label>
+            <input name="contactName" type="text" placeholder="Casey Miller" required />
+          </div>
+          <div>
+            <label>Contact title</label>
+            <input name="contactTitle" type="text" placeholder="Site Operations Manager" required />
+          </div>
+          <div>
+            <label>Email</label>
+            <input name="email" type="email" placeholder="casey@anchor.com" required />
+          </div>
+          <div class="form-span-2 form-actions">
+            <button class="button button-primary" type="submit">Add Client</button>
+          </div>
         </form>
       </div>
+    </section>
 
-      <div class="card">
-        <h3>Client Portal Value</h3>
-        <p class="muted">Clients approve hours, dispute errors, and review attendance by assigned location.</p>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:14px;">
-      <h3>Clients</h3>
-      ${clients.length ? `
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Client</th><th>Contact</th><th>Email</th><th>Sites</th></tr></thead>
-            <tbody>
-              ${clients.map(c => `<tr><td>${c.name}</td><td>${c.contact}</td><td>${c.email}</td><td>${state.sites.filter(s => s.clientId === c.id).length}</td></tr>`).join("")}
-            </tbody>
-          </table>
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h3>Client approval readiness</h3>
+          <p>Count the current sites, assigned workers, and pending approvals per client account.</p>
         </div>
-      ` : empty("No clients added yet.")}
-    </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th>Primary Contact</th>
+              <th>Sites</th>
+              <th>Assigned Workers</th>
+              <th>Pending Approvals</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${clients.map(clientRow).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
   `;
 }
 
 function sitesView() {
-  const sites = rowsFor("sites");
+  const sites = sitesForCurrentAgency();
 
   return `
-    <div class="grid two-col">
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Sites</p>
+          <h3>Warehouse locations with QR-ready punch entry points</h3>
+          <p>These site cards make the GitHub Pages demo feel closer to a real warehouse rollout with shareable worker punch links.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="content-grid">
       <div class="card">
-        <h3>Add Job Site</h3>
+        <div class="section-heading">
+          <div>
+            <h3>Active client sites</h3>
+            <p>Every site carries a direct worker punch route into the static demo.</p>
+          </div>
+        </div>
+
+        <div class="site-grid">
+          ${sites.map(siteCard).join("")}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <h3>Add site</h3>
+            <p>Create another warehouse, overflow yard, or cold-storage location for the active agency.</p>
+          </div>
+        </div>
+
         <form id="siteForm" class="form-grid">
-          <div><label>Client</label><select name="clientId" required>${agencyClients().map(c => `<option value="${c.id}">${c.name}</option>`).join("")}</select></div>
-          <div><label>Site Code</label><input name="siteCode" required placeholder="CHD-OH-001"></div>
-          <div class="wide"><label>Address</label><input name="address" required placeholder="City, State"></div>
-          <button class="primary-btn wide">Add Site</button>
+          <div>
+            <label>Client</label>
+            <select name="clientId">
+              ${clientsForCurrentAgency().map(clientRecord => `<option value="${safe(clientRecord.id)}">${safe(clientRecord.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label>Site name</label>
+            <input name="name" type="text" placeholder="NorthPeak West Annex" required />
+          </div>
+          <div>
+            <label>Site code</label>
+            <input name="code" type="text" placeholder="NPL-WEST" required />
+          </div>
+          <div>
+            <label>Shift profile</label>
+            <input name="shiftProfile" type="text" placeholder="Weekend shift" required />
+          </div>
+          <div class="form-span-2">
+            <label>Address</label>
+            <input name="address" type="text" placeholder="4200 Warehouse Blvd, Columbus, OH" required />
+          </div>
+          <div class="form-span-2 form-actions">
+            <button class="button button-primary" type="submit">Add Site</button>
+          </div>
         </form>
       </div>
-
-      <div class="card">
-        <h3>QR Timeclock Link</h3>
-        <p class="muted">Use the QR link to send workers directly to the timeclock for the correct agency and site.</p>
-        <div class="qr-box">${qrLink(sites[0])}</div>
-        ${sites[0] ? `<button class="secondary-btn" data-copy="${qrLink(sites[0])}">Copy First Site Link</button>` : ""}
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:14px;">
-      <h3>Job Sites</h3>
-      ${sites.length ? `
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Client</th><th>Site Code</th><th>Address</th><th>QR Link</th></tr></thead>
-            <tbody>
-              ${sites.map(s => `<tr><td>${clientName(s.clientId)}</td><td>${s.siteCode}</td><td>${s.address}</td><td>${qrLink(s)}</td></tr>`).join("")}
-            </tbody>
-          </table>
-        </div>
-      ` : empty("No job sites added yet.")}
-    </div>
+    </section>
   `;
 }
 
-function qrLink(site) {
-  if (!site) return "Create a site first.";
-  return `${location.origin}${location.pathname}?agency=${agency().agencyNumber}&site=${site.siteCode}`;
-}
-
 function workersView() {
-  const workers = rowsFor("workers");
+  const workers = workersForCurrentAgency();
 
   return `
-    <div class="grid two-col">
-      <div class="card">
-        <h3>Add Worker</h3>
-        <form id="workerForm" class="form-grid">
-          <div><label>First Name</label><input name="firstName" required></div>
-          <div><label>Last Name</label><input name="lastName" required></div>
-          <div><label>Phone</label><input name="phone" required></div>
-          <div><label>Status</label><select name="status"><option>Active</option><option>Inactive</option></select></div>
-          <button class="primary-btn wide">Add Worker</button>
-        </form>
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Workers</p>
+          <h3>Active staffing roster with assignment and contact context</h3>
+          <p>Use the worker selector for a clean mobile punch demo, or scan the table below for titles, sites, and status.</p>
+        </div>
       </div>
+    </section>
 
+    <section class="content-grid">
       <div class="card">
-        <h3>Worker ID Format</h3>
-        <div class="qr-box">${agency().agencyNumber}-W0001</div>
-        <p class="muted small">Worker IDs inherit the agency number.</p>
-      </div>
-    </div>
+        <div class="section-heading">
+          <div>
+            <h3>Worker roster</h3>
+            <p>Active assignments, sites, and titles stay visible for client and agency walkthroughs.</p>
+          </div>
+        </div>
 
-    <div class="card" style="margin-top:14px;">
-      <h3>${state.activeRole === "client_manager" ? "Assigned Workers" : "Workers"}</h3>
-      ${workers.length ? `
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Worker #</th><th>Name</th><th>Phone</th><th>Status</th><th>Client / Site</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Worker</th>
+                <th>Title</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Assignment</th>
+                <th>Status</th>
+              </tr>
+            </thead>
             <tbody>
-              ${workers.map(w => {
-                const as = assignmentForWorker(w.id);
-                return `<tr><td>${w.workerNumber}</td><td>${w.firstName} ${w.lastName}</td><td>${w.phone}</td><td><span class="badge green">${w.status}</span></td><td>${as ? `${clientName(as.clientId)} / ${siteName(as.siteId)}` : "Unassigned"}</td></tr>`;
-              }).join("")}
+              ${workers.map(workerRow).join("")}
             </tbody>
           </table>
         </div>
-      ` : empty("No workers found for this view.")}
-    </div>
+      </div>
+
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <h3>Add worker</h3>
+            <p>New worker profiles save to localStorage and show up immediately in the punch flow.</p>
+          </div>
+        </div>
+
+        <form id="workerForm" class="form-grid">
+          <div>
+            <label>First name</label>
+            <input name="firstName" type="text" placeholder="Riley" required />
+          </div>
+          <div>
+            <label>Last name</label>
+            <input name="lastName" type="text" placeholder="Parker" required />
+          </div>
+          <div>
+            <label>Title</label>
+            <input name="title" type="text" placeholder="Picker / Packer" required />
+          </div>
+          <div>
+            <label>Phone</label>
+            <input name="phone" type="text" placeholder="(555) 555-0112" required />
+          </div>
+          <div class="form-span-2">
+            <label>Email</label>
+            <input name="email" type="email" placeholder="riley@agency-demo.com" required />
+          </div>
+          <div class="form-span-2 form-actions">
+            <button class="button button-primary" type="submit">Add Worker</button>
+          </div>
+        </form>
+      </div>
+    </section>
   `;
 }
 
 function assignmentsView() {
-  const rows = rowsFor("assignments");
+  const assignments = assignmentsForCurrentAgency();
 
   return `
-    <div class="grid two-col">
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Assignments</p>
+          <h3>Pay rates, bill rates, shifts, and site placement</h3>
+          <p>This is the staffing economics layer that makes payroll and gross margin reporting feel real.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="content-grid">
       <div class="card">
-        <h3>Create Assignment</h3>
+        <div class="section-heading">
+          <div>
+            <h3>Assignment sheet</h3>
+            <p>Each assignment connects the worker, client, site, shift window, pay rate, and bill rate.</p>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Worker</th>
+                <th>Client</th>
+                <th>Site</th>
+                <th>Shift</th>
+                <th>Pay Rate</th>
+                <th>Bill Rate</th>
+                <th>Spread</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${assignments.map(assignmentRow).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <h3>Add assignment</h3>
+            <p>Update worker placement without leaving the static app.</p>
+          </div>
+        </div>
+
         <form id="assignmentForm" class="form-grid">
-          <div><label>Worker</label><select name="workerId" required>${agencyWorkers().map(w => `<option value="${w.id}">${w.workerNumber} · ${w.firstName} ${w.lastName}</option>`).join("")}</select></div>
-          <div><label>Client</label><select name="clientId" required>${agencyClients().map(c => `<option value="${c.id}">${c.name}</option>`).join("")}</select></div>
-          <div><label>Job Site</label><select name="siteId" required>${agencySites().map(s => `<option value="${s.id}">${s.siteCode} · ${clientName(s.clientId)}</option>`).join("")}</select></div>
-          <div><label>Shift Start</label><input name="shiftStart" type="time" value="07:00" required></div>
-          <div><label>Shift End</label><input name="shiftEnd" type="time" value="15:30" required></div>
-          <div><label>Pay Rate</label><input name="payRate" type="number" min="0" step="0.01" value="18" required></div>
-          <div><label>Bill Rate</label><input name="billRate" type="number" min="0" step="0.01" value="27" required></div>
-          <button class="primary-btn wide">Create Assignment</button>
+          <div>
+            <label>Worker</label>
+            <select name="workerId">
+              ${workersForCurrentAgency().map(workerRecord => `<option value="${safe(workerRecord.id)}">${safe(fullWorkerName(workerRecord.id))}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label>Client</label>
+            <select name="clientId">
+              ${clientsForCurrentAgency().map(clientRecord => `<option value="${safe(clientRecord.id)}">${safe(clientRecord.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label>Site</label>
+            <select name="siteId">
+              ${sitesForCurrentAgency().map(siteRecord => `<option value="${safe(siteRecord.id)}">${safe(siteRecord.code)} - ${safe(siteRecord.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label>Title</label>
+            <input name="title" type="text" placeholder="Forklift Operator" required />
+          </div>
+          <div>
+            <label>Shift start</label>
+            <input name="shiftStart" type="time" value="07:00" required />
+          </div>
+          <div>
+            <label>Shift end</label>
+            <input name="shiftEnd" type="time" value="15:30" required />
+          </div>
+          <div>
+            <label>Pay rate</label>
+            <input name="payRate" type="number" min="0" step="0.01" value="18.00" required />
+          </div>
+          <div>
+            <label>Bill rate</label>
+            <input name="billRate" type="number" min="0" step="0.01" value="29.00" required />
+          </div>
+          <div class="form-span-2 form-actions">
+            <button class="button button-primary" type="submit">Save Assignment</button>
+          </div>
         </form>
       </div>
-
-      <div class="card">
-        <h3>Assignment Logic</h3>
-        <p class="muted">Assignments connect worker, client, site, shift, pay rate, and bill rate.</p>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:14px;">
-      <h3>Assignments</h3>
-      ${rows.length ? `
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Worker</th><th>Client</th><th>Site</th><th>Shift</th><th>Pay</th><th>Bill</th><th>Margin</th></tr></thead>
-            <tbody>
-              ${rows.map(a => `<tr><td>${workerName(a.workerId)}</td><td>${clientName(a.clientId)}</td><td>${siteName(a.siteId)}</td><td>${a.shiftStart} - ${a.shiftEnd}</td><td>$${Number(a.payRate).toFixed(2)}/hr</td><td>$${Number(a.billRate).toFixed(2)}/hr</td><td><span class="badge green">$${(Number(a.billRate) - Number(a.payRate)).toFixed(2)}/hr</span></td></tr>`).join("")}
-            </tbody>
-          </table>
-        </div>
-      ` : empty("No assignments yet.")}
-    </div>
-  `;
-}
-
-function timesheetsView() {
-  const rows = rowsFor("timesheets");
-
-  return `
-    <div class="grid two-col">
-      <div class="card">
-        <h3>${state.activeRole === "worker" ? "My Weekly Hours" : "Weekly Timesheets"}</h3>
-        ${rows.length ? `
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Week</th><th>Worker</th><th>Client</th><th>Regular</th><th>OT</th><th>Total</th><th>Status</th><th>Agency</th><th>Client</th><th>Action</th></tr></thead>
-              <tbody>
-                ${rows.map(t => `<tr><td>${t.weekStart}</td><td>${workerName(t.workerId)}</td><td>${clientName(t.clientId)}</td><td>${t.regularHours}</td><td>${t.overtimeHours}</td><td>${(Number(t.regularHours) + Number(t.overtimeHours)).toFixed(2)}</td><td>${statusBadge(t.status)}</td><td><span class="badge ${t.agencyApproved ? "green" : "yellow"}">${t.agencyApproved ? "Approved" : "Pending"}</span></td><td><span class="badge ${t.clientApproved ? "green" : t.status === "Disputed" ? "red" : "yellow"}">${t.clientApproved ? "Approved" : t.status === "Disputed" ? "Disputed" : "Pending"}</span></td><td>${approvalActions(t)}</td></tr>`).join("")}
-              </tbody>
-            </table>
-          </div>
-        ` : empty("No timesheets found.")}
-      </div>
-
-      <div class="card">
-        <h3>Approval Rules</h3>
-        <div class="list">
-          <div class="list-item"><div><div class="strong">Worker</div><div class="muted small">View hours only.</div></div><span class="badge red">Locked</span></div>
-          <div class="list-item"><div><div class="strong">Client Manager</div><div class="muted small">Approve or dispute client-side.</div></div><span class="badge blue">Client</span></div>
-          <div class="list-item"><div><div class="strong">Agency Admin</div><div class="muted small">Finalize after client approval.</div></div><span class="badge green">Final</span></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:14px;">
-      <h3>Approval / Dispute History</h3>
-      ${auditLogTable(rows.map(r => r.id))}
-    </div>
-  `;
-}
-
-function statusBadge(status) {
-  const cls = status === "Final Approved" ? "green" : status === "Client Approved" ? "blue" : status === "Disputed" ? "red" : "yellow";
-  return `<span class="badge ${cls}">${status || "Pending Client Review"}</span>`;
-}
-
-function approvalActions(t) {
-  if (state.activeRole === "worker") return '<span class="muted small">View only</span>';
-  if (t.status === "Final Approved") return '<span class="muted small">Locked</span>';
-
-  if (state.activeRole === "client_manager") {
-    if (t.clientApproved) return '<span class="muted small">Client approved</span>';
-    return `<button class="secondary-btn" data-approve="${t.id}">Approve</button><button class="danger-btn" data-reject="${t.id}">Dispute</button>`;
-  }
-
-  if (state.activeRole === "agency_admin") {
-    if (!t.clientApproved) return '<span class="muted small">Waiting on client</span>';
-    return `<button class="secondary-btn" data-approve="${t.id}">Finalize</button>`;
-  }
-
-  if (state.activeRole === "super_admin") {
-    return `<button class="secondary-btn" data-approve="${t.id}">Admin Approve</button><button class="danger-btn" data-reject="${t.id}">Dispute</button>`;
-  }
-
-  return '<span class="muted small">No access</span>';
-}
-
-function auditLogTable(timesheetIds) {
-  const logs = (state.auditLogs || [])
-    .filter(log => log.agencyId === state.activeAgencyId && timesheetIds.includes(log.timesheetId))
-    .slice()
-    .reverse();
-
-  if (!logs.length) return empty("No approval history yet.");
-
-  return `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Time</th><th>Timesheet</th><th>Action</th><th>Actor</th><th>Note</th></tr></thead>
-        <tbody>
-          ${logs.map(log => `<tr><td>${new Date(log.timestamp).toLocaleString()}</td><td>${workerName(state.timesheets.find(t => t.id === log.timesheetId)?.workerId)}</td><td>${log.action}</td><td>${log.actorName} · ${log.actorRole}</td><td>${log.note || ""}</td></tr>`).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function reportsView() {
-  const rows = rowsFor("timesheets").map(t => {
-    const as = assignmentForWorker(t.workerId) || { payRate: 0, billRate: 0 };
-    const hours = Number(t.regularHours) + Number(t.overtimeHours);
-    return {
-      ...t,
-      hours,
-      pay: hours * Number(as.payRate),
-      bill: hours * Number(as.billRate),
-      margin: hours * (Number(as.billRate) - Number(as.payRate))
-    };
-  });
-
-  const totals = rows.reduce((a, r) => ({
-    hours: a.hours + r.hours,
-    pay: a.pay + r.pay,
-    bill: a.bill + r.bill,
-    margin: a.margin + r.margin
-  }), { hours: 0, pay: 0, bill: 0, margin: 0 });
-
-  return `
-    <div class="hero-panel card">
-      <div class="hero-copy">
-        <p class="eyebrow">Revenue intelligence</p>
-        <h3>Know payroll cost, client billing, and gross spread before export leaves the portal.</h3>
-        <p class="muted">This page now reads like an agency product module instead of a utility screen, which makes the value easier to demo to staffing owners.</p>
-      </div>
-      <div class="hero-stat-grid">
-        <div class="hero-stat">
-          <span>Estimated payroll</span>
-          <strong>$${totals.pay.toFixed(2)}</strong>
-          <p>Modeled from the active assignments tied to the current weekly timecards.</p>
-        </div>
-        <div class="hero-stat">
-          <span>Estimated billing</span>
-          <strong>$${totals.bill.toFixed(2)}</strong>
-          <p>Client invoice view before export leaves the platform.</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid kpi-grid">
-      ${kpi("Total Hours", totals.hours.toFixed(2), "Payroll hours", "blue")}
-      ${kpi("Worker Pay", "$" + totals.pay.toFixed(2), "Estimated payroll", "yellow")}
-      ${kpi("Client Billing", "$" + totals.bill.toFixed(2), "Estimated invoice", "green")}
-      ${kpi("Gross Margin", "$" + totals.margin.toFixed(2), "Agency profit", "green")}
-    </div>
-
-    <div class="card" style="margin-top:18px;">
-      <div class="section-head">
-        <h3>Payroll and margin detail</h3>
-        <p class="muted">Use this export-friendly table to explain worker cost, bill rate, and spread per account.</p>
-      </div>
-      ${rows.length ? `
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Worker</th><th>Client</th><th>Hours</th><th>Pay Estimate</th><th>Bill Estimate</th><th>Margin</th></tr></thead>
-            <tbody>
-              ${rows.map(r => `<tr><td>${workerName(r.workerId)}</td><td>${clientName(r.clientId)}</td><td>${r.hours.toFixed(2)}</td><td>$${r.pay.toFixed(2)}</td><td>$${r.bill.toFixed(2)}</td><td><span class="badge green">$${r.margin.toFixed(2)}</span></td></tr>`).join("")}
-            </tbody>
-          </table>
-        </div>
-      ` : empty("No payroll records found.")}
-    </div>
+    </section>
   `;
 }
 
 function timeclockView() {
-  const isWorker = state.activeRole === "worker";
-  const workers = isWorker ? [activeWorker()].filter(Boolean) : rowsFor("workers");
-  const sites = state.activeRole === "client_manager" ? clientSites() : isWorker ? rowsFor("sites") : agencySites();
-  const selectedWorker = activeWorker();
+  const worker = currentWorker();
+  const assignment = activeAssignmentForWorker(worker?.id);
+  const site = state.sites.find(record => record.id === state.punchSiteId) || (assignment ? siteById(assignment.siteId) : sitesForCurrentAgency()[0]);
+  const workerHistory = punchesForWorker(worker?.id).slice(0, 8);
 
   return `
-    <div class="timeclock-layout">
-      <section class="tc-worker-card card">
-        <div class="tc-header">
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Worker QR Punch</p>
+          <h3>Simple mobile-first punch flow</h3>
+          <p>Clean worker context, four large punch actions, instant confirmation, and a short recent history feed.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="timeclock-layout">
+      <div class="card timeclock-panel">
+        <div class="worker-banner">
+          <span class="eyebrow">Selected Worker</span>
+          <strong>${safe(worker ? fullWorkerName(worker.id) : "No worker selected")}</strong>
+          <span class="worker-meta">${safe(assignment?.title || worker?.title || "Unassigned worker")} · ${safe(clientById(assignment?.clientId)?.name || "No client")} · ${safe(site ? `${site.code} - ${site.name}` : "No site selected")}</span>
+        </div>
+
+        <div class="field-group">
+          <label for="timeclockSiteSelect">Punch site</label>
+          <select id="timeclockSiteSelect">
+            ${punchSiteOptions(worker?.id).map(siteRecord => `<option value="${safe(siteRecord.id)}" ${siteRecord.id === site?.id ? "selected" : ""}>${safe(siteRecord.code)} - ${safe(siteRecord.name)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div class="punch-button-grid">
+          <button class="punch-button clock-in" data-punch="Clock In" type="button">Clock In</button>
+          <button class="punch-button lunch-start" data-punch="Start Lunch" type="button">Start Lunch</button>
+          <button class="punch-button lunch-end" data-punch="End Lunch" type="button">End Lunch</button>
+          <button class="punch-button clock-out" data-punch="Clock Out" type="button">Clock Out</button>
+        </div>
+
+        <div class="confirmation-banner">${safe(state.punchMessage)}</div>
+      </div>
+
+      <div class="card">
+        <div class="section-heading">
           <div>
-            <h3>Worker Punch</h3>
-            <p>Enter your name, choose the job site, and punch your action.</p>
+            <h3>Recent punch history</h3>
+            <p>Show the last several actions for the selected worker, including the newest confirmation.</p>
           </div>
-          <span class="tc-status">Ready</span>
         </div>
 
-        <label>Your name</label>
-        ${isWorker ? `
-          <input id="workerNameInput" value="${selectedWorker ? `${selectedWorker.firstName} ${selectedWorker.lastName}` : ""}" readonly />
-          <input type="hidden" id="clockWorkerHidden" value="${selectedWorker?.id || ""}" />
-        ` : `
-          <input id="workerNameInput" list="workerNames" placeholder="Start typing worker name" value="${workers[0] ? `${workers[0].firstName} ${workers[0].lastName}` : ""}" />
-          <datalist id="workerNames">
-            ${workers.map(w => `<option data-id="${w.id}" value="${w.firstName} ${w.lastName}"></option>`).join("")}
-          </datalist>
-        `}
-
-        <label style="margin-top:12px;">Job site</label>
-        <select id="clockSite">
-          ${sites.map(s => `<option value="${s.id}">${s.siteCode} · ${clientName(s.clientId)}</option>`).join("")}
-        </select>
-
-        <div class="tc-punch-grid">
-          <button class="tc-punch-btn clock-in" data-punch="Clock In">Clock In</button>
-          <button class="tc-punch-btn lunch-start" data-punch="Start Lunch">Start Lunch</button>
-          <button class="tc-punch-btn lunch-end" data-punch="End Lunch">End Lunch</button>
-          <button class="tc-punch-btn clock-out" data-punch="Clock Out">Clock Out</button>
+        <div class="history-list">
+          ${workerHistory.length ? workerHistory.map(renderHistoryItem).join("") : emptyState("No punch history yet for this worker.")}
         </div>
-
-        <div class="tc-summary">
-          <div><span>Entered name</span><strong id="enteredNameDisplay">${selectedWorker ? `${selectedWorker.firstName} ${selectedWorker.lastName}` : "-"}</strong></div>
-          <div><span>Last action</span><strong>${lastPunchForWorker(selectedWorker?.id)?.type || "-"}</strong></div>
-          <div><span>Last punch</span><strong>${formatLastPunch(lastPunchForWorker(selectedWorker?.id))}</strong></div>
-          <div><span>Status</span><strong>Ready to punch.</strong></div>
-        </div>
-      </section>
-
-      <section class="card">
-        <h3>Manager live preview</h3>
-        <p class="muted">Use the same visual language as QRTimeclock: live punches, weekly signoff, worker edits, and export access in one place.</p>
-
-        <div class="tc-tabs">
-          <button class="tc-tab" data-view="dashboard">Live board</button>
-          <button class="tc-tab" data-view="timesheets">Weekly signoff</button>
-          <button class="tc-tab" data-view="timesheets">Approval queue</button>
-          <button class="tc-tab" data-view="workers">Worker roster</button>
-          <button class="tc-tab" data-view="reports">Export view</button>
-        </div>
-
-        <h3 style="margin-top:18px;">Latest punch activity</h3>
-        ${punchTable(rowsFor("punches").slice(-8).reverse())}
-      </section>
-    </div>
+      </div>
+    </section>
   `;
 }
 
-function lastPunchForWorker(workerId) {
-  if (!workerId) return null;
-  return rowsFor("punches").filter(p => p.workerId === workerId).slice(-1)[0] || null;
-}
-
-function formatLastPunch(punch) {
-  return punch ? new Date(punch.timestamp).toLocaleString() : "-";
-}
-
-function punchTable(rows) {
-  if (!rows.length) return empty("No punches recorded yet.");
+function approvalsView() {
+  const client = currentClient();
+  const timesheets = timesheetsForClient(state.currentClientId, state.selectedWeekStart);
+  const assignedWorkers = workersAssignedToClient(state.currentClientId);
+  const pendingCount = timesheets.filter(record => record.clientStatus === "pending").length;
+  const approvedCount = timesheets.filter(record => record.clientStatus === "approved").length;
+  const rejectedCount = timesheets.filter(record => record.clientStatus === "rejected").length;
 
   return `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Time</th><th>Worker</th><th>Site</th><th>Type</th><th>GPS</th><th>Status</th></tr></thead>
-        <tbody>
-          ${rows.map(p => `<tr><td>${new Date(p.timestamp).toLocaleString()}</td><td>${workerName(p.workerId)}</td><td>${siteName(p.siteId)}</td><td>${p.type}</td><td>${p.gps}</td><td><span class="badge ${p.status === "Late" ? "yellow" : "green"}">${p.status}</span></td></tr>`).join("")}
-        </tbody>
-      </table>
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Client Approval Portal</p>
+          <h3>${safe(client?.name || "Client")} manager review view</h3>
+          <p>See assigned workers, review daily and weekly hours, approve clean time, or reject with notes before payroll export.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="summary-grid">
+        ${summaryCard("PD", "Pending approval count", String(pendingCount))}
+        ${summaryCard("OK", "Approved this week", String(approvedCount))}
+        ${summaryCard("RJ", "Rejected this week", String(rejectedCount))}
+        ${summaryCard("CR", "Assigned crew", String(assignedWorkers.length))}
+      </div>
+    </section>
+
+    <section class="split-grid">
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <h3>Workers assigned to this site group</h3>
+            <p>Client managers can quickly verify the crew attached to their warehouses.</p>
+          </div>
+        </div>
+
+        <div class="site-grid">
+          ${assignedWorkers.length ? assignedWorkers.map(clientWorkerCard).join("") : emptyState("No workers are assigned to this client yet.")}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <h3>Approval queue</h3>
+            <p>Approve timesheets, or reject them with a note that stays visible in the audit trail.</p>
+          </div>
+        </div>
+
+        <div class="approval-list">
+          ${timesheets.length ? timesheets.map(renderApprovalCard).join("") : emptyState("No timesheets exist for this client in the selected week.")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function payrollView() {
+  const weeks = availableWeeksForCurrentAgency();
+  const rows = payrollRows(state.selectedWeekStart);
+  const totals = payrollTotals(rows);
+
+  return `
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Payroll Export Center</p>
+          <h3>Weekly payroll handoff without leaving the static demo</h3>
+          <p>Select a pay period, review approved and pending hours, then export CSV, Excel-ready CSV, or a print-to-PDF timesheet packet.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="toolbar">
+        <div class="field-group">
+          <label for="payrollWeekSelect">Weekly pay period</label>
+          <select id="payrollWeekSelect">
+            ${weeks.map(week => `<option value="${safe(week)}" ${week === state.selectedWeekStart ? "selected" : ""}>Week of ${safe(formatDate(week))}</option>`).join("")}
+          </select>
+        </div>
+
+        <div class="toolbar-actions">
+          <button class="button button-secondary" data-export="csv" type="button">Export CSV</button>
+          <button class="button button-ghost" data-export="excel" type="button">Export Excel-ready CSV</button>
+          <button class="button button-primary" data-export="pdf" type="button">Export Weekly Timesheet PDF</button>
+        </div>
+      </div>
+
+      <div class="metric-grid" style="margin-top: 18px;">
+        ${metricCard("AH", "Approved Hours", formatHours(totals.approvedHours), "Hours approved by the client.")}
+        ${metricCard("RG", "Regular Hours", formatHours(totals.regularHours), "Straight-time hours for the week.")}
+        ${metricCard("OT", "Overtime Hours", formatHours(totals.overtimeHours), "Hours above forty.")}
+        ${metricCard("PR", "Avg Pay Rate", formatCurrency(totals.averagePayRate), "Weighted average pay rate.")}
+        ${metricCard("LC", "Total Labor Cost", formatCurrency(totals.totalLaborCost), "Modeled payroll cost for this period.")}
+        ${metricCard("FA", "Final Approved", String(totals.finalApproved), "Timesheets ready to export.")}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h3>Payroll detail</h3>
+          <p>Approved hours, regular, overtime, pay rate, and total labor cost per worker.</p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Worker</th>
+              <th>Client</th>
+              <th>Site</th>
+              <th>Approved Hours</th>
+              <th>Regular</th>
+              <th>OT</th>
+              <th>Pay Rate</th>
+              <th>Total Labor Cost</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(payrollRow).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function marginView() {
+  const rows = payrollRows(state.selectedWeekStart);
+  const totals = payrollTotals(rows);
+  const marginPercent = totals.totalRevenue ? (totals.totalGrossProfit / totals.totalRevenue) * 100 : 0;
+
+  return `
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">Gross Margin Report</p>
+          <h3>See pay, bill, revenue, labor cost, and margin in one report</h3>
+          <p>Revenue = Bill Rate × Hours. Labor Cost = Pay Rate × Hours. Gross Profit = Revenue - Labor Cost. Margin % = Gross Profit / Revenue × 100.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="formula-grid">
+        ${formulaCard("Revenue", "Bill Rate × Hours")}
+        ${formulaCard("Labor Cost", "Pay Rate × Hours")}
+        ${formulaCard("Gross Profit", "Revenue - Labor Cost")}
+        ${formulaCard("Margin %", "Gross Profit / Revenue × 100")}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="metric-grid">
+        ${metricCard("RV", "Revenue", formatCurrency(totals.totalRevenue), "Projected client billing for the selected week.")}
+        ${metricCard("LC", "Labor Cost", formatCurrency(totals.totalLaborCost), "Projected payroll cost for the selected week.")}
+        ${metricCard("GP", "Gross Profit", formatCurrency(totals.totalGrossProfit), "Revenue minus labor cost.")}
+        ${metricCard("M%", "Margin %", `${formatPercent(marginPercent)}`, "Gross profit divided by revenue.")}
+        ${metricCard("BR", "Avg Bill Rate", formatCurrency(totals.averageBillRate), "Weighted average bill rate.")}
+        ${metricCard("PR", "Avg Pay Rate", formatCurrency(totals.averagePayRate), "Weighted average pay rate.")}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <h3>Margin detail by worker</h3>
+          <p>Use this report to show staffing owners how Portaly surfaces spread and profitability before payroll leaves the system.</p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Worker</th>
+              <th>Client</th>
+              <th>Hours Worked</th>
+              <th>Pay Rate</th>
+              <th>Bill Rate</th>
+              <th>Revenue</th>
+              <th>Labor Cost</th>
+              <th>Gross Profit</th>
+              <th>Margin %</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(marginRow).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function settingsView() {
+  const settings = currentAgencySettings();
+
+  return `
+    <section class="page-intro card">
+      <div class="page-intro-header">
+        <div>
+          <p class="eyebrow">White-Label Settings</p>
+          <h3>Customize the agency-facing demo brand</h3>
+          <p>Save agency name, logo placeholder, primary color, payroll contact email, and support phone to localStorage.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="content-grid">
+      <div class="card">
+        <div class="section-heading">
+          <div>
+            <h3>Brand controls</h3>
+            <p>These changes update the active agency workspace instantly after saving.</p>
+          </div>
+        </div>
+
+        <form id="settingsForm" class="form-grid">
+          <div>
+            <label>Agency name</label>
+            <input name="agencyName" type="text" value="${safe(settings.agencyName)}" required />
+          </div>
+          <div>
+            <label>Logo placeholder</label>
+            <input name="logoText" type="text" value="${safe(settings.logoText)}" maxlength="3" required />
+          </div>
+          <div>
+            <label>Primary color</label>
+            <input name="primaryColor" type="color" value="${safe(settings.primaryColor)}" />
+          </div>
+          <div>
+            <label>Payroll contact email</label>
+            <input name="payrollContactEmail" type="email" value="${safe(settings.payrollContactEmail)}" required />
+          </div>
+          <div class="form-span-2">
+            <label>Support phone number</label>
+            <input name="supportPhone" type="text" value="${safe(settings.supportPhone)}" required />
+          </div>
+          <div class="form-span-2 form-actions">
+            <button class="button button-primary" type="submit">Save Settings</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card settings-preview">
+        <div class="section-heading">
+          <div>
+            <h3>Brand preview</h3>
+            <p>Use this preview to sell the white-label angle of the staffing platform.</p>
+          </div>
+        </div>
+
+        <div class="brand-preview-shell">
+          <div class="brand-preview-header">
+            <div class="brand-mark">${safe(settings.logoText)}</div>
+            <div class="brand-preview-copy">
+              <h4>${safe(settings.agencyName)}</h4>
+              <p class="muted">Powered by Portaly</p>
+            </div>
+          </div>
+
+          <div class="settings-list">
+            <div><span>Primary color</span><strong>${safe(settings.primaryColor)}</strong></div>
+            <div><span>Payroll contact</span><strong>${safe(settings.payrollContactEmail)}</strong></div>
+            <div><span>Support phone</span><strong>${safe(settings.supportPhone)}</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function agencyCard(agencyRecord) {
+  const settings = settingsForAgency(agencyRecord.id);
+  return `
+    <article class="site-card">
+      <header>
+        <div>
+          <h4>${safe(agencyRecord.name)}</h4>
+          <p class="site-meta">${safe(agencyRecord.code)} · ${safe(agencyRecord.plan)}</p>
+        </div>
+        ${statusBadge(agencyRecord.id === state.currentAgencyId ? "Active Workspace" : "Available", agencyRecord.id === state.currentAgencyId ? "status-approved" : "status-neutral")}
+      </header>
+      <p>${safe(agencyRecord.owner)} leads this branch with ${safe(countLabel(clientsForAgency(agencyRecord.id).length, "client"))} and ${safe(countLabel(workersForAgency(agencyRecord.id).length, "worker"))}.</p>
+      <div class="site-tags">
+        <span class="tiny-pill">${safe(settings.payrollContactEmail)}</span>
+        <span class="tiny-pill">${safe(settings.supportPhone)}</span>
+      </div>
+    </article>
+  `;
+}
+
+function agencyRow(agencyRecord) {
+  const settings = settingsForAgency(agencyRecord.id);
+  return `
+    <tr>
+      <td>${safe(agencyRecord.code)} - ${safe(agencyRecord.name)}</td>
+      <td>${safe(agencyRecord.plan)}</td>
+      <td>${clientsForAgency(agencyRecord.id).length}</td>
+      <td>${sitesForAgency(agencyRecord.id).length}</td>
+      <td>${workersForAgency(agencyRecord.id).length}</td>
+      <td>${safe(settings.payrollContactEmail)}</td>
+      <td>${safe(settings.supportPhone)}</td>
+    </tr>
+  `;
+}
+
+function clientCard(clientRecord) {
+  return `
+    <article class="site-card">
+      <header>
+        <div>
+          <h4>${safe(clientRecord.name)}</h4>
+          <p class="site-meta">${safe(clientRecord.contactName)} · ${safe(clientRecord.contactTitle)}</p>
+        </div>
+        ${statusBadge(`${timesheetsForClient(clientRecord.id, state.selectedWeekStart).filter(record => record.clientStatus === "pending").length} pending`, "status-warning")}
+      </header>
+      <p>${safe(clientRecord.email)}</p>
+      <div class="site-tags">
+        <span class="tiny-pill">${safe(countLabel(sitesForClient(clientRecord.id).length, "site"))}</span>
+        <span class="tiny-pill">${safe(countLabel(workersAssignedToClient(clientRecord.id).length, "assigned worker"))}</span>
+      </div>
+    </article>
+  `;
+}
+
+function clientRow(clientRecord) {
+  return `
+    <tr>
+      <td>${safe(clientRecord.name)}</td>
+      <td>${safe(clientRecord.contactName)} - ${safe(clientRecord.contactTitle)}</td>
+      <td>${sitesForClient(clientRecord.id).length}</td>
+      <td>${workersAssignedToClient(clientRecord.id).length}</td>
+      <td>${timesheetsForClient(clientRecord.id, state.selectedWeekStart).filter(record => record.clientStatus === "pending").length}</td>
+    </tr>
+  `;
+}
+
+function siteCard(siteRecord) {
+  const link = timeclockUrlForSite(siteRecord);
+  return `
+    <article class="site-card">
+      <header>
+        <div>
+          <h4>${safe(siteRecord.name)}</h4>
+          <p class="site-meta">${safe(siteRecord.code)} · ${safe(clientById(siteRecord.clientId)?.name || "No client")}</p>
+        </div>
+        ${statusBadge("QR ready", "status-approved")}
+      </header>
+      <p>${safe(siteRecord.address)}</p>
+      <div class="site-tags">
+        <span class="tiny-pill">${safe(siteRecord.shiftProfile)}</span>
+        <span class="tiny-pill">${safe(countLabel(workersAssignedToSite(siteRecord.id).length, "worker"))}</span>
+      </div>
+      <div class="table-actions">
+        <a class="button button-secondary" href="${safe(link)}">Open Punch Link</a>
+        <button class="button button-ghost" data-copy-link="${safe(link)}" type="button">Copy Link</button>
+      </div>
+    </article>
+  `;
+}
+
+function workerRow(workerRecord) {
+  const assignment = activeAssignmentForWorker(workerRecord.id);
+  return `
+    <tr>
+      <td>${safe(fullWorkerName(workerRecord.id))}</td>
+      <td>${safe(workerRecord.title)}</td>
+      <td>${safe(workerRecord.email)}</td>
+      <td>${safe(workerRecord.phone)}</td>
+      <td>${safe(assignment ? `${clientById(assignment.clientId)?.name || ""} · ${siteById(assignment.siteId)?.code || ""}` : "Unassigned")}</td>
+      <td>${statusBadge(workerRecord.status, "status-approved")}</td>
+    </tr>
+  `;
+}
+
+function assignmentRow(record) {
+  return `
+    <tr>
+      <td>${safe(fullWorkerName(record.workerId))}</td>
+      <td>${safe(clientById(record.clientId)?.name || "No client")}</td>
+      <td>${safe(siteById(record.siteId)?.code || "")}</td>
+      <td>${safe(record.shiftStart)} - ${safe(record.shiftEnd)}</td>
+      <td>${safe(formatCurrency(record.payRate))}</td>
+      <td>${safe(formatCurrency(record.billRate))}</td>
+      <td>${safe(formatCurrency(record.billRate - record.payRate))}</td>
+    </tr>
+  `;
+}
+
+function renderApprovalCard(timesheet) {
+  const statusClass = approvalStatusClass(timesheet);
+  const noteValue = timesheet.clientStatus === "rejected" ? timesheet.rejectionNote : timesheet.approvalNote;
+  return `
+    <article class="approval-card">
+      <header>
+        <div>
+          <h4>${safe(fullWorkerName(timesheet.workerId))}</h4>
+          <p class="approval-meta">${safe(siteById(timesheet.siteId)?.code || "")} · ${safe(clientById(timesheet.clientId)?.name || "")}</p>
+        </div>
+        ${statusBadge(approvalStatusLabel(timesheet), statusClass)}
+      </header>
+
+      <div class="hours-strip">
+        ${timesheet.days.map(day => `<div class="hours-chip">${safe(day.label)}<strong>${safe(formatHours(day.hours))}</strong></div>`).join("")}
+      </div>
+
+      <div class="compact-stats">
+        <span>Weekly hours: ${safe(formatHours(timesheet.totalHours))}</span>
+        <span>Regular: ${safe(formatHours(timesheet.regularHours))}</span>
+        <span>OT: ${safe(formatHours(timesheet.overtimeHours))}</span>
+        <span>Approved: ${safe(formatHours(timesheet.approvedHours))}</span>
+      </div>
+
+      <div class="field-group">
+        <label for="note_${safe(timesheet.id)}">Approval notes</label>
+        <textarea id="note_${safe(timesheet.id)}" data-note-input="${safe(timesheet.id)}" placeholder="Approve with a note, or explain why this timesheet needs to be rejected.">${safe(noteValue)}</textarea>
+      </div>
+
+      <div class="approval-footer">
+        <div class="inline-pills">
+          ${timesheet.manualEdited ? `<span class="tiny-pill">Manual edit: ${safe(timesheet.manualNote || "Yes")}</span>` : ""}
+        </div>
+        <div class="approval-actions">
+          <button class="button button-secondary" data-approve-timesheet="${safe(timesheet.id)}" type="button">Approve Timesheet</button>
+          <button class="button button-danger" data-reject-timesheet="${safe(timesheet.id)}" type="button">Reject with Note</button>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function payrollRow(row) {
+  const timesheet = row.timesheet;
+  const showFinalize = timesheet.clientStatus === "approved" && timesheet.agencyStatus !== "finalized";
+  return `
+    <tr>
+      <td>${safe(row.workerName)}</td>
+      <td>${safe(row.clientName)}</td>
+      <td>${safe(row.siteName)}</td>
+      <td>${safe(formatHours(row.approvedHours))}</td>
+      <td>${safe(formatHours(row.regularHours))}</td>
+      <td>${safe(formatHours(row.overtimeHours))}</td>
+      <td>${safe(formatCurrency(row.payRate))}</td>
+      <td>${safe(formatCurrency(row.laborCost))}</td>
+      <td>${statusBadge(approvalStatusLabel(timesheet), approvalStatusClass(timesheet))}</td>
+      <td>
+        ${showFinalize
+          ? `<button class="button button-ghost" data-finalize-timesheet="${safe(timesheet.id)}" type="button">Finalize</button>`
+          : `<span class="help-text">${safe(timesheet.agencyStatus === "finalized" ? "Ready" : "Waiting")}</span>`}
+      </td>
+    </tr>
+  `;
+}
+
+function marginRow(row) {
+  return `
+    <tr>
+      <td>${safe(row.workerName)}</td>
+      <td>${safe(row.clientName)}</td>
+      <td>${safe(formatHours(row.totalHours))}</td>
+      <td>${safe(formatCurrency(row.payRate))}</td>
+      <td>${safe(formatCurrency(row.billRate))}</td>
+      <td>${safe(formatCurrency(row.revenue))}</td>
+      <td>${safe(formatCurrency(row.laborCost))}</td>
+      <td>${safe(formatCurrency(row.grossProfit))}</td>
+      <td>${safe(formatPercent(row.marginPercent))}</td>
+    </tr>
+  `;
+}
+
+function clientWorkerCard(workerRecord) {
+  const assignment = activeAssignmentForWorker(workerRecord.id);
+  return `
+    <article class="worker-card">
+      <header>
+        <div>
+          <h4>${safe(fullWorkerName(workerRecord.id))}</h4>
+          <p class="worker-meta">${safe(workerRecord.title)}</p>
+        </div>
+        ${statusBadge("Assigned", "status-approved")}
+      </header>
+      <p>${safe(siteById(assignment?.siteId)?.code || "No site")} · ${safe(siteById(assignment?.siteId)?.name || "")}</p>
+      <div class="worker-tags">
+        <span class="tiny-pill">${safe(assignment?.shiftStart || "--:--")} - ${safe(assignment?.shiftEnd || "--:--")}</span>
+        <span class="tiny-pill">${safe(formatCurrency(assignment?.billRate || 0))} bill</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderExceptionCard(item) {
+  const severityClass = item.severity === "high" ? "status-danger" : item.severity === "medium" ? "status-warning" : "status-neutral";
+  return `
+    <article class="exception-item">
+      <header>
+        <div>
+          <h4>${safe(item.title)}</h4>
+          <p class="exception-meta">${safe(item.meta)}</p>
+        </div>
+        ${statusBadge(item.category, severityClass)}
+      </header>
+      <p>${safe(item.note)}</p>
+    </article>
+  `;
+}
+
+function renderTimelineItem(item) {
+  return `
+    <article class="timeline-item">
+      <div class="timeline-icon">AT</div>
+      <div>
+        <div class="timeline-time">${safe(formatDateTime(item.timestamp))} · ${safe(item.actor)}</div>
+        <h4>${safe(item.title)}</h4>
+        <p class="timeline-note">${safe(item.note)}</p>
+      </div>
+    </article>
+  `;
+}
+
+function renderHistoryItem(punch) {
+  return `
+    <article class="history-item">
+      <header>
+        <div>
+          <h4>${safe(punch.type)}</h4>
+          <p class="history-meta">${safe(siteById(punch.siteId)?.code || "")} · ${safe(formatDateTime(punch.timestamp))}</p>
+        </div>
+        ${statusBadge(punchStatus(punch), punchStatus(punch) === "Late" ? "status-warning" : "status-approved")}
+      </header>
+    </article>
+  `;
+}
+
+function heroStat(label, value, copy) {
+  return `
+    <div class="hero-stat">
+      <span>${safe(label)}</span>
+      <strong>${safe(value)}</strong>
+      <p>${safe(copy)}</p>
     </div>
   `;
 }
 
-function empty(message) {
-  return `<div class="empty-state">${message}</div>`;
+function metricCard(icon, label, value, note) {
+  return `
+    <article class="metric-card">
+      <div class="metric-header">
+        <div>
+          <div class="metric-label">${safe(label)}</div>
+          <div class="metric-value">${safe(value)}</div>
+        </div>
+        <span class="metric-icon">${safe(icon)}</span>
+      </div>
+      <div class="metric-note">${safe(note)}</div>
+    </article>
+  `;
 }
 
-function updateClock() {
-  const mini = document.getElementById("miniClock");
-  if (mini) mini.textContent = new Date().toLocaleTimeString();
+function featureCard(icon, title, copy) {
+  return `
+    <article class="feature-card">
+      <span class="feature-icon">${safe(icon)}</span>
+      <h4>${safe(title)}</h4>
+      <p>${safe(copy)}</p>
+    </article>
+  `;
 }
 
-function createPunch(type) {
-  const typedName = document.getElementById("workerNameInput")?.value?.trim();
-  let workerId = document.getElementById("clockWorkerHidden")?.value || state.activeWorkerId;
+function pricingCard(name, price, items) {
+  return `
+    <article class="pricing-card">
+      <h4>${safe(name)}</h4>
+      <div class="pricing-price">${safe(price)}</div>
+      <ul>
+        ${items.map(item => `<li>${safe(item)}</li>`).join("")}
+      </ul>
+    </article>
+  `;
+}
 
-  if (!workerId && typedName) {
-    const match = agencyWorkers().find(w => `${w.firstName} ${w.lastName}`.toLowerCase() === typedName.toLowerCase());
-    workerId = match?.id;
-  }
+function formulaCard(title, formula) {
+  return `
+    <article class="formula-card">
+      <span class="eyebrow eyebrow-tight">${safe(title)}</span>
+      <code>${safe(formula)}</code>
+    </article>
+  `;
+}
 
-  const siteId = document.getElementById("clockSite")?.value || agencySites()[0]?.id;
+function summaryCard(icon, label, value) {
+  return `
+    <article class="summary-card">
+      <div class="summary-top">
+        <div>
+          <div class="summary-label">${safe(label)}</div>
+          <div class="summary-value">${safe(value)}</div>
+        </div>
+        <span class="summary-icon">${safe(icon)}</span>
+      </div>
+    </article>
+  `;
+}
 
-  if (!typedName && !workerId) return toast("Enter a worker name first.");
-  if (!siteId) return toast("Choose a job site first.");
+function dashboardMetrics() {
+  const currentWeekTimesheets = timesheetsForAgencyWeek(state.currentAgencyId, state.currentWeek);
+  const todayPunches = punchesForAgency(state.currentAgencyId).filter(record => isTodayTimestamp(record.timestamp));
+  const workersClockedInToday = new Set(todayPunches.filter(record => record.type === "Clock In").map(record => record.workerId)).size;
+  const pendingApprovals = currentWeekTimesheets.filter(record => record.clientStatus === "pending").length;
+  const exceptions = buildExceptions();
+  const missingPunches = exceptions.filter(item => item.key === "missing_clock_out" || item.key === "open_lunch").length;
+  const payrollHours = currentWeekTimesheets.reduce((sum, record) => sum + record.totalHours, 0);
+  const grossMargin = payrollRows(state.currentWeek).reduce((sum, row) => sum + row.grossProfit, 0);
+  const activeSites = sitesForAgency(state.currentAgencyId).length;
+  const readyHours = currentWeekTimesheets.filter(record => record.agencyStatus === "finalized").reduce((sum, record) => sum + record.totalHours, 0);
 
-  const site = state.sites.find(s => s.id === siteId);
-  if (!site) return toast("Job site not found.");
+  return {
+    workersClockedInToday,
+    pendingApprovals,
+    missingPunches,
+    payrollHours,
+    grossMargin,
+    activeSites,
+    activeSitesLabel: `${activeSites} active client sites`,
+    readyHoursLabel: `${formatHours(readyHours)} ready payroll hours`
+  };
+}
 
-  if (!workerId && typedName) {
-    const [firstName, ...rest] = typedName.split(" ");
-    const lastName = rest.join(" ") || "Temp";
-    const count = agencyWorkers().length + 1;
-    const num = String(count).padStart(4, "0");
-    workerId = "w" + crypto.randomUUID();
+function buildExceptions() {
+  const exceptions = [];
+  const todayPunches = punchesForAgency(state.currentAgencyId)
+    .filter(record => isTodayTimestamp(record.timestamp))
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-    state.workers.push({
-      id: workerId,
-      agencyId: state.activeAgencyId,
-      workerNumber: `${agency().agencyNumber}-W${num}`,
-      firstName,
-      lastName,
-      phone: "",
-      status: "Active"
-    });
+  const byWorker = new Map();
 
-    state.assignments.push({
-      id: "as" + crypto.randomUUID(),
-      agencyId: state.activeAgencyId,
-      workerId,
-      clientId: site.clientId,
-      siteId: site.id,
-      payRate: 0,
-      billRate: 0,
-      shiftStart: "07:00",
-      shiftEnd: "15:30",
-      active: true
-    });
-  }
-
-  const as = assignmentForWorker(workerId);
-  const nowTime = new Date().toTimeString().slice(0, 5);
-  const late = type === "Clock In" && as?.shiftStart && nowTime > as.shiftStart;
-
-  state.punches.push({
-    id: "p" + crypto.randomUUID(),
-    agencyId: state.activeAgencyId,
-    workerId,
-    siteId,
-    type,
-    timestamp: new Date().toISOString(),
-    gps: "Not Required",
-    photo: type === "Clock In" ? "Yes" : "No",
-    status: late ? "Late" : "Approved"
+  todayPunches.forEach(record => {
+    if (!byWorker.has(record.workerId)) {
+      byWorker.set(record.workerId, []);
+    }
+    byWorker.get(record.workerId).push(record);
   });
 
-  state.activeWorkerId = workerId;
-  save();
-  renderShell();
-  render();
-  toast(`${type} saved.`);
+  byWorker.forEach((records, workerId) => {
+    const assignment = activeAssignmentForWorker(workerId);
+    const firstClockIn = records.find(record => record.type === "Clock In");
+
+    const latestLunchStart = [...records].reverse().find(record => record.type === "Start Lunch");
+    const latestLunchEnd = [...records].reverse().find(record => record.type === "End Lunch");
+    const lunchOpen = latestLunchStart && (!latestLunchEnd || new Date(latestLunchStart.timestamp) > new Date(latestLunchEnd.timestamp));
+
+    if (lunchOpen) {
+      exceptions.push({
+        key: "open_lunch",
+        category: "Lunch started but not ended",
+        severity: "high",
+        title: fullWorkerName(workerId),
+        meta: `${siteById(records[0].siteId)?.code || "Site"} · ${clientById(assignment?.clientId)?.name || "Client"}`,
+        note: "Lunch was started and never ended on today's punch flow."
+      });
+    } else {
+      const latestClockIn = [...records].reverse().find(record => record.type === "Clock In");
+      const latestClockOut = [...records].reverse().find(record => record.type === "Clock Out");
+      if (latestClockIn && !latestClockOut) {
+        exceptions.push({
+          key: "missing_clock_out",
+          category: "Clocked in but no clock out",
+          severity: "high",
+          title: fullWorkerName(workerId),
+          meta: `${siteById(records[0].siteId)?.code || "Site"} · ${clientById(assignment?.clientId)?.name || "Client"}`,
+          note: "The worker has a live clock-in today with no matching clock-out."
+        });
+      }
+    }
+
+    if (firstClockIn && assignment) {
+      const scheduled = parseTimestampOnSameDay(firstClockIn.timestamp, assignment.shiftStart);
+      const minutesLate = Math.round((new Date(firstClockIn.timestamp) - scheduled) / 60000);
+      if (minutesLate > 5) {
+        exceptions.push({
+          key: "late_punch",
+          category: "Late punch",
+          severity: "medium",
+          title: fullWorkerName(workerId),
+          meta: `${siteById(records[0].siteId)?.code || "Site"} · ${minutesLate} minutes late`,
+          note: `Clock-in landed after the scheduled ${assignment.shiftStart} start time.`
+        });
+      }
+    }
+
+    for (let index = 1; index < records.length; index += 1) {
+      const current = records[index];
+      const previous = records[index - 1];
+      const deltaMinutes = Math.round((new Date(current.timestamp) - new Date(previous.timestamp)) / 60000);
+
+      if (current.type === previous.type && deltaMinutes <= 10) {
+        exceptions.push({
+          key: "duplicate_punch",
+          category: "Duplicate punch",
+          severity: "low",
+          title: fullWorkerName(workerId),
+          meta: `${siteById(current.siteId)?.code || "Site"} · ${current.type}`,
+          note: "Two identical punch actions were recorded within ten minutes."
+        });
+        break;
+      }
+    }
+  });
+
+  timesheetsForAgencyWeek(state.currentAgencyId, state.currentWeek).forEach(record => {
+    if (record.clientStatus === "pending") {
+      exceptions.push({
+        key: "missing_approval",
+        category: "Missing approval",
+        severity: "medium",
+        title: fullWorkerName(record.workerId),
+        meta: `${clientById(record.clientId)?.name || "Client"} · Week of ${formatDate(record.weekStart)}`,
+        note: "This timecard still needs client review before payroll export."
+      });
+    }
+
+    if (record.manualEdited) {
+      exceptions.push({
+        key: "manual_edit",
+        category: "Manual edit made",
+        severity: "low",
+        title: fullWorkerName(record.workerId),
+        meta: `${clientById(record.clientId)?.name || "Client"} · Week of ${formatDate(record.weekStart)}`,
+        note: record.manualNote || "The timesheet was adjusted manually and should be reviewed."
+      });
+    }
+  });
+
+  return exceptions;
+}
+
+function recentActivity() {
+  return auditTrailForAgency(state.currentAgencyId)
+    .slice()
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 }
 
 function approveTimesheet(id) {
-  const t = state.timesheets.find(row => row.id === id);
-  if (!t) return;
-
-  if (state.activeRole === "worker") return toast("Workers cannot approve their own time.");
-  if (t.status === "Final Approved" && state.activeRole !== "super_admin") return toast("This timesheet is already finalized.");
-
-  if (state.activeRole === "client_manager") {
-    if (t.clientId !== state.activeClientId) return toast("You can only approve your selected client's timesheets.");
-    t.clientApproved = true;
-    t.status = "Client Approved";
-    t.disputeReason = "";
-    addAuditLog(t.id, "Client Approved", "Hours verified by client.");
+  if (state.currentRole === "worker") {
+    toast("Workers cannot approve timesheets.");
+    return;
   }
 
-  if (state.activeRole === "agency_admin") {
-    if (!t.clientApproved) return toast("Client must approve before agency final approval.");
-    t.agencyApproved = true;
-    t.status = "Final Approved";
-    addAuditLog(t.id, "Final Approved", "Approved by agency for payroll.");
-  }
+  const timesheet = state.timesheets.find(record => record.id === id);
+  if (!timesheet) return;
 
-  if (state.activeRole === "super_admin") {
-    t.clientApproved = true;
-    t.agencyApproved = true;
-    t.status = "Final Approved";
-    t.disputeReason = "";
-    addAuditLog(t.id, "Super Admin Override", "Timesheet approved by super admin.");
-  }
+  const noteInput = document.querySelector(`[data-note-input="${id}"]`);
+  const note = String(noteInput?.value || "").trim();
 
-  save();
-  render();
-  toast("Timesheet updated.");
+  timesheet.clientStatus = "approved";
+  timesheet.agencyStatus = timesheet.agencyStatus === "hold" ? "ready" : timesheet.agencyStatus;
+  timesheet.approvedHours = timesheet.totalHours;
+  timesheet.rejectionNote = "";
+  timesheet.approvalNote = note || "Approved in the client approval portal.";
+  timesheet.updatedAt = new Date().toISOString();
+  syncTimesheet(timesheet);
+
+  addAudit("Timesheet approved", `${fullWorkerName(timesheet.workerId)} was approved for ${clientById(timesheet.clientId)?.name || "the client"}.`, state.currentAgencyId);
+
+  saveState();
+  renderView();
+  toast("Timesheet approved.");
 }
 
 function rejectTimesheet(id) {
-  const t = state.timesheets.find(row => row.id === id);
-  if (!t) return;
+  if (state.currentRole === "worker") {
+    toast("Workers cannot reject timesheets.");
+    return;
+  }
 
-  if (state.activeRole === "worker") return toast("Workers cannot dispute or approve timesheets.");
-  if (state.activeRole === "agency_admin") return toast("Agency admins should send disputed hours back to review.");
-  if (state.activeRole === "client_manager" && t.clientId !== state.activeClientId) return toast("You can only dispute your selected client's timesheets.");
+  const timesheet = state.timesheets.find(record => record.id === id);
+  if (!timesheet) return;
 
-  const reason = prompt("Enter dispute reason:", t.disputeReason || "Hours need review.");
-  if (!reason) return;
+  const noteInput = document.querySelector(`[data-note-input="${id}"]`);
+  const note = String(noteInput?.value || "").trim();
 
-  t.clientApproved = false;
-  t.agencyApproved = false;
-  t.status = "Disputed";
-  t.disputeReason = reason;
-  addAuditLog(t.id, "Disputed", reason);
+  if (!note) {
+    toast("Add a rejection note before rejecting this timesheet.");
+    return;
+  }
 
-  save();
-  render();
-  toast("Timesheet disputed.");
+  timesheet.clientStatus = "rejected";
+  timesheet.agencyStatus = "hold";
+  timesheet.approvedHours = 0;
+  timesheet.rejectionNote = note;
+  timesheet.approvalNote = "";
+  timesheet.updatedAt = new Date().toISOString();
+  syncTimesheet(timesheet);
+
+  addAudit("Timesheet rejected", `${fullWorkerName(timesheet.workerId)} was sent back with a client note.`, state.currentAgencyId);
+
+  saveState();
+  renderView();
+  toast("Timesheet rejected with note.");
 }
 
-function addAuditLog(timesheetId, action, note) {
-  const actorMap = {
-    super_admin: ["Super Admin", "System Owner"],
-    agency_admin: ["Agency Admin", "Agency Admin"],
-    client_manager: ["Client Manager", activeClient()?.contact || activeClient()?.name || "Client Manager"],
-    worker: ["Worker", workerName(state.activeWorkerId)]
+function finalizeTimesheet(id) {
+  if (state.currentRole === "worker") {
+    toast("Workers cannot finalize payroll.");
+    return;
+  }
+
+  const timesheet = state.timesheets.find(record => record.id === id);
+  if (!timesheet) return;
+
+  if (timesheet.clientStatus !== "approved") {
+    toast("The client must approve this timesheet before payroll finalization.");
+    return;
+  }
+
+  timesheet.agencyStatus = "finalized";
+  timesheet.updatedAt = new Date().toISOString();
+  syncTimesheet(timesheet);
+
+  addAudit("Payroll finalized", `${fullWorkerName(timesheet.workerId)} moved into the final approved payroll queue.`, state.currentAgencyId);
+
+  saveState();
+  renderView();
+  toast("Timesheet finalized for payroll.");
+}
+
+function createPunch(type) {
+  const worker = currentWorker();
+  if (!worker) {
+    toast("Select a worker first.");
+    return;
+  }
+
+  const site = siteById(state.punchSiteId) || siteById(activeAssignmentForWorker(worker.id)?.siteId);
+  if (!site) {
+    toast("Select a punch site first.");
+    return;
+  }
+
+  const record = {
+    id: uid("punch"),
+    agencyId: state.currentAgencyId,
+    workerId: worker.id,
+    siteId: site.id,
+    type,
+    timestamp: new Date().toISOString()
   };
 
-  const [actorRole, actorName] = actorMap[state.activeRole] || ["User", "Unknown"];
+  state.punches.push(record);
+  state.punchMessage = `${type} saved for ${fullWorkerName(worker.id)} at ${site.code} on ${formatDateTime(record.timestamp)}.`;
 
-  state.auditLogs = state.auditLogs || [];
-  state.auditLogs.push({
-    id: "log" + crypto.randomUUID(),
-    agencyId: state.activeAgencyId,
-    timesheetId,
-    action,
-    actorRole,
-    actorName,
-    timestamp: new Date().toISOString(),
-    note
-  });
+  addAudit("Worker punch captured", `${fullWorkerName(worker.id)} recorded ${type.toLowerCase()} at ${site.code}.`, state.currentAgencyId);
+
+  saveState();
+  renderView();
+  toast(`${type} recorded.`);
 }
 
-function addAgency(fd) {
-  const usedNumbers = state.agencies.map(a => Number(a.agencyNumber.replace("TA-", ""))).filter(Boolean);
-  const next = Math.max(1000, ...usedNumbers) + 1;
-  const id = "a" + crypto.randomUUID();
+function saveSettings(data) {
+  const currentAgencyRecord = currentAgency();
+  if (!currentAgencyRecord) return;
 
-  state.agencies.push({
-    id,
-    agencyNumber: `TA-${next}`,
-    name: fd.get("name"),
-    owner: fd.get("owner"),
-    plan: fd.get("plan"),
-    status: fd.get("status")
-  });
+  const agencyName = String(data.get("agencyName") || "").trim();
+  const logoText = String(data.get("logoText") || "").trim().slice(0, 3).toUpperCase();
+  const primaryColor = String(data.get("primaryColor") || "#1f6fff");
+  const payrollContactEmail = String(data.get("payrollContactEmail") || "").trim();
+  const supportPhone = String(data.get("supportPhone") || "").trim();
 
-  state.activeAgencyId = id;
-  state.activeClientId = "";
-  state.activeWorkerId = "";
-  save();
+  currentAgencyRecord.name = agencyName;
+  currentAgencyRecord.payrollEmail = payrollContactEmail;
+  currentAgencyRecord.supportPhone = supportPhone;
+
+  state.settingsByAgency[state.currentAgencyId] = {
+    agencyName,
+    logoText: logoText || initials(agencyName, 2),
+    primaryColor,
+    payrollContactEmail,
+    supportPhone
+  };
+
+  addAudit("White-label settings updated", `${agencyName} branding and support details were saved in the demo.`, state.currentAgencyId);
+
+  applyTheme();
+  saveState();
   renderShell();
-  render();
-  toast("Agency created.");
+  renderView();
+  toast("Settings saved.");
 }
 
-function addClient(fd) {
-  const id = "c" + crypto.randomUUID();
+function addAgency(data) {
+  const nextId = uid("agency");
+  const name = String(data.get("name") || "").trim();
+  const owner = String(data.get("owner") || "").trim();
+  const payrollEmail = String(data.get("payrollEmail") || "").trim();
+  const supportPhone = String(data.get("supportPhone") || "").trim();
+  const plan = String(data.get("plan") || "Agency");
+  const primaryColor = String(data.get("primaryColor") || "#1f6fff");
 
-  state.clients.push({
-    id,
-    agencyId: state.activeAgencyId,
-    name: fd.get("name"),
-    contact: fd.get("contact"),
-    email: fd.get("email")
-  });
+  const agencyRecord = {
+    id: nextId,
+    code: buildAgencyCode(name, state.agencies.length + 1),
+    name,
+    owner,
+    plan,
+    payrollEmail,
+    supportPhone
+  };
 
-  state.activeClientId = id;
-  save();
+  state.agencies.push(agencyRecord);
+  state.settingsByAgency[nextId] = {
+    agencyName: name,
+    logoText: initials(name, 2),
+    primaryColor,
+    payrollContactEmail: payrollEmail,
+    supportPhone
+  };
+
+  state.currentAgencyId = nextId;
+  normalizeSelections(state);
+  applyTheme();
+  addAudit("Agency created", `${name} was added to the staffing demo workspace.`, nextId);
+  saveState();
   renderShell();
-  render();
+  renderView();
+  toast("Agency added.");
+}
+
+function addClient(data) {
+  const clientRecord = {
+    id: uid("client"),
+    agencyId: state.currentAgencyId,
+    name: String(data.get("name") || "").trim(),
+    contactName: String(data.get("contactName") || "").trim(),
+    contactTitle: String(data.get("contactTitle") || "").trim(),
+    email: String(data.get("email") || "").trim()
+  };
+
+  state.clients.push(clientRecord);
+  state.currentClientId = clientRecord.id;
+  addAudit("Client added", `${clientRecord.name} was added to the agency client list.`, state.currentAgencyId);
+  saveState();
+  renderShell();
+  renderView();
   toast("Client added.");
 }
 
-function addSite(fd) {
-  if (!fd.get("clientId")) return toast("Add a client first.");
+function addSite(data) {
+  const siteRecord = {
+    id: uid("site"),
+    agencyId: state.currentAgencyId,
+    clientId: String(data.get("clientId") || state.currentClientId),
+    name: String(data.get("name") || "").trim(),
+    code: String(data.get("code") || "").trim().toUpperCase(),
+    address: String(data.get("address") || "").trim(),
+    shiftProfile: String(data.get("shiftProfile") || "").trim()
+  };
 
-  state.sites.push({
-    id: "s" + crypto.randomUUID(),
-    agencyId: state.activeAgencyId,
-    clientId: fd.get("clientId"),
-    siteCode: fd.get("siteCode"),
-    address: fd.get("address"),
-    gpsRequired: false
-  });
-
-  save();
-  renderShell();
-  render();
-  toast("Job site added.");
+  state.sites.push(siteRecord);
+  state.punchSiteId = siteRecord.id;
+  addAudit("Site added", `${siteRecord.name} was added to the demo site list.`, state.currentAgencyId);
+  saveState();
+  renderView();
+  toast("Site added.");
 }
 
-function addWorker(fd) {
-  const count = agencyWorkers().length + 1;
-  const num = String(count).padStart(4, "0");
-  const id = "w" + crypto.randomUUID();
+function addWorker(data) {
+  const workerRecord = {
+    id: uid("worker"),
+    agencyId: state.currentAgencyId,
+    firstName: String(data.get("firstName") || "").trim(),
+    lastName: String(data.get("lastName") || "").trim(),
+    title: String(data.get("title") || "").trim(),
+    email: String(data.get("email") || "").trim(),
+    phone: String(data.get("phone") || "").trim(),
+    status: "Active"
+  };
 
-  state.workers.push({
-    id,
-    agencyId: state.activeAgencyId,
-    workerNumber: `${agency().agencyNumber}-W${num}`,
-    firstName: fd.get("firstName"),
-    lastName: fd.get("lastName"),
-    phone: fd.get("phone"),
-    status: fd.get("status")
-  });
-
-  state.activeWorkerId = id;
-  save();
+  state.workers.push(workerRecord);
+  state.currentWorkerId = workerRecord.id;
+  addAudit("Worker added", `${fullWorkerName(workerRecord.id)} was added to the roster.`, state.currentAgencyId);
+  saveState();
   renderShell();
-  render();
+  renderView();
   toast("Worker added.");
 }
 
-function addAssignment(fd) {
-  const workerId = fd.get("workerId");
-  const clientId = fd.get("clientId");
-  const siteId = fd.get("siteId");
+function addAssignment(data) {
+  const workerId = String(data.get("workerId") || "");
+  const clientId = String(data.get("clientId") || "");
+  const siteId = String(data.get("siteId") || "");
 
-  if (!workerId || !clientId || !siteId) return toast("Add worker, client, and site first.");
+  if (!workerId || !clientId || !siteId) {
+    toast("Choose a worker, client, and site.");
+    return;
+  }
 
-  const site = state.sites.find(s => s.id === siteId);
-  if (site.clientId !== clientId) return toast("Selected site does not belong to that client.");
+  state.assignments = state.assignments.map(record => (
+    record.workerId === workerId ? { ...record, active: false } : record
+  ));
 
-  state.assignments = state.assignments.map(a => a.workerId === workerId ? { ...a, active: false } : a);
-
-  state.assignments.push({
-    id: "as" + crypto.randomUUID(),
-    agencyId: state.activeAgencyId,
+  const assignment = {
+    id: uid("assignment"),
+    agencyId: state.currentAgencyId,
     workerId,
     clientId,
     siteId,
-    payRate: Number(fd.get("payRate")),
-    billRate: Number(fd.get("billRate")),
-    shiftStart: fd.get("shiftStart"),
-    shiftEnd: fd.get("shiftEnd"),
+    title: String(data.get("title") || "").trim(),
+    shiftStart: String(data.get("shiftStart") || "07:00"),
+    shiftEnd: String(data.get("shiftEnd") || "15:30"),
+    payRate: Number(data.get("payRate") || 0),
+    billRate: Number(data.get("billRate") || 0),
     active: true
-  });
+  };
 
-  const existingTs = state.timesheets.find(t => t.workerId === workerId && t.weekStart === weekStart());
+  state.assignments.push(assignment);
+  state.currentWorkerId = workerId;
+  state.currentClientId = clientId;
+  state.punchSiteId = siteId;
 
-  if (!existingTs) {
-    state.timesheets.push({
-      id: "t" + crypto.randomUUID(),
-      agencyId: state.activeAgencyId,
+  const existingCurrentWeekTimesheet = state.timesheets.find(record => (
+    record.workerId === workerId &&
+    record.weekStart === state.currentWeek &&
+    record.agencyId === state.currentAgencyId
+  ));
+
+  if (!existingCurrentWeekTimesheet) {
+    state.timesheets.push(createTimesheet(
+      uid("timesheet"),
+      state.currentAgencyId,
       workerId,
       clientId,
-      weekStart: weekStart(),
-      regularHours: 0,
-      overtimeHours: 0,
-      agencyApproved: false,
-      clientApproved: false,
-      status: "Pending Client Review",
-      disputeReason: ""
-    });
+      siteId,
+      assignment.id,
+      state.currentWeek,
+      [0, 0, 0, 0, 0],
+      "pending",
+      "ready",
+      {}
+    ));
   }
 
-  save();
+  addAudit("Assignment saved", `${fullWorkerName(workerId)} was assigned to ${siteById(siteId)?.name || "the selected site"}.`, state.currentAgencyId);
+
+  saveState();
   renderShell();
-  render();
-  toast("Assignment created.");
+  renderView();
+  toast("Assignment saved.");
 }
 
-function exportPayroll() {
-  const rows = rowsFor("timesheets").map(t => {
-    const as = assignmentForWorker(t.workerId) || { payRate: 0, billRate: 0 };
-    const hours = Number(t.regularHours) + Number(t.overtimeHours);
+function exportPayrollCsv(excelMode) {
+  const rows = payrollRows(state.selectedWeekStart);
+  if (!rows.length) {
+    toast("No payroll rows are available for export.");
+    return;
+  }
+
+  const payload = rows.map(row => ({
+    agency: currentAgency()?.name || "",
+    week_start: row.weekStart,
+    worker: row.workerName,
+    client: row.clientName,
+    site: row.siteName,
+    approved_hours: formatHours(row.approvedHours),
+    regular_hours: formatHours(row.regularHours),
+    overtime_hours: formatHours(row.overtimeHours),
+    pay_rate: row.payRate.toFixed(2),
+    total_labor_cost: row.laborCost.toFixed(2),
+    bill_rate: row.billRate.toFixed(2),
+    revenue: row.revenue.toFixed(2),
+    gross_profit: row.grossProfit.toFixed(2),
+    margin_percent: formatPercent(row.marginPercent),
+    status: approvalStatusLabel(row.timesheet)
+  }));
+
+  const csv = toCsv(payload);
+  const prefix = excelMode ? "\uFEFF" : "";
+  const fileName = `${slugify(currentAgency()?.name || "portaly")}-${state.selectedWeekStart}-${excelMode ? "excel" : "payroll"}.csv`;
+  downloadFile(fileName, prefix + csv, "text/csv;charset=utf-8;");
+
+  addAudit("Payroll exported", `${excelMode ? "Excel-ready CSV" : "CSV"} payroll export generated for ${state.selectedWeekStart}.`, state.currentAgencyId);
+  saveState();
+  toast(excelMode ? "Excel-ready CSV exported." : "CSV exported.");
+}
+
+function exportPayrollPdf() {
+  const rows = payrollRows(state.selectedWeekStart);
+  if (!rows.length) {
+    toast("No payroll rows are available for PDF export.");
+    return;
+  }
+
+  const printable = window.open("", "_blank");
+  if (!printable) {
+    toast("Allow pop-ups to export the PDF print view.");
+    return;
+  }
+
+  printable.document.write(`
+    <html>
+      <head>
+        <title>Portaly Weekly Timesheet</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 32px; color: #17324d; }
+          h1 { margin-bottom: 4px; }
+          p { color: #5f738a; margin-top: 0; }
+          table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+          th, td { border: 1px solid #d9e5f2; padding: 10px 12px; text-align: left; font-size: 13px; }
+          th { background: #f3f8ff; text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; }
+        </style>
+      </head>
+      <body>
+        <h1>${safe(currentAgency()?.name || "Portaly")}</h1>
+        <p>Weekly Timesheet Report · Week of ${safe(formatDate(state.selectedWeekStart))}</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Worker</th>
+              <th>Client</th>
+              <th>Site</th>
+              <th>Approved Hours</th>
+              <th>Regular</th>
+              <th>OT</th>
+              <th>Pay Rate</th>
+              <th>Total Labor Cost</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr>
+                <td>${safe(row.workerName)}</td>
+                <td>${safe(row.clientName)}</td>
+                <td>${safe(row.siteName)}</td>
+                <td>${safe(formatHours(row.approvedHours))}</td>
+                <td>${safe(formatHours(row.regularHours))}</td>
+                <td>${safe(formatHours(row.overtimeHours))}</td>
+                <td>${safe(formatCurrency(row.payRate))}</td>
+                <td>${safe(formatCurrency(row.laborCost))}</td>
+                <td>${safe(approvalStatusLabel(row.timesheet))}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </body>
+    </html>
+  `);
+  printable.document.close();
+  printable.focus();
+  printable.print();
+
+  addAudit("PDF print view opened", `Weekly timesheet print view opened for ${state.selectedWeekStart}.`, state.currentAgencyId);
+  saveState();
+  toast("Weekly timesheet PDF view opened.");
+}
+
+function payrollRows(weekStart) {
+  return timesheetsForAgencyWeek(state.currentAgencyId, weekStart).map(timesheet => {
+    const assignment = state.assignments.find(record => record.id === timesheet.assignmentId) || activeAssignmentForWorker(timesheet.workerId);
+    const payRate = Number(assignment?.payRate || 0);
+    const billRate = Number(assignment?.billRate || 0);
+    const laborCost = round2(payRate * timesheet.totalHours);
+    const revenue = round2(billRate * timesheet.totalHours);
+    const grossProfit = round2(revenue - laborCost);
+    const marginPercent = revenue ? (grossProfit / revenue) * 100 : 0;
 
     return {
-      agency_number: agency().agencyNumber,
-      client: clientName(t.clientId),
-      worker: workerName(t.workerId),
-      week_start: t.weekStart,
-      regular_hours: t.regularHours,
-      overtime_hours: t.overtimeHours,
-      total_hours: hours.toFixed(2),
-      pay_rate: Number(as.payRate || 0).toFixed(2),
-      bill_rate: Number(as.billRate || 0).toFixed(2),
-      estimated_pay: (hours * Number(as.payRate || 0)).toFixed(2),
-      estimated_bill: (hours * Number(as.billRate || 0)).toFixed(2),
-      estimated_margin: (hours * (Number(as.billRate || 0) - Number(as.payRate || 0))).toFixed(2),
-      agency_approved: t.agencyApproved,
-      client_approved: t.clientApproved
+      timesheet,
+      weekStart: timesheet.weekStart,
+      workerName: fullWorkerName(timesheet.workerId),
+      clientName: clientById(timesheet.clientId)?.name || "",
+      siteName: siteById(timesheet.siteId)?.name || "",
+      approvedHours: timesheet.approvedHours,
+      regularHours: timesheet.regularHours,
+      overtimeHours: timesheet.overtimeHours,
+      totalHours: timesheet.totalHours,
+      payRate,
+      billRate,
+      laborCost,
+      revenue,
+      grossProfit,
+      marginPercent
     };
   });
+}
 
-  if (!rows.length) return toast("No payroll data to export.");
+function payrollTotals(rows) {
+  const totals = rows.reduce((accumulator, row) => {
+    accumulator.approvedHours += row.approvedHours;
+    accumulator.regularHours += row.regularHours;
+    accumulator.overtimeHours += row.overtimeHours;
+    accumulator.totalLaborCost += row.laborCost;
+    accumulator.totalRevenue += row.revenue;
+    accumulator.totalGrossProfit += row.grossProfit;
+    accumulator.weightedPayRate += row.payRate * row.totalHours;
+    accumulator.weightedBillRate += row.billRate * row.totalHours;
+    accumulator.totalHours += row.totalHours;
+    accumulator.finalApproved += row.timesheet.agencyStatus === "finalized" ? 1 : 0;
+    return accumulator;
+  }, {
+    approvedHours: 0,
+    regularHours: 0,
+    overtimeHours: 0,
+    totalLaborCost: 0,
+    totalRevenue: 0,
+    totalGrossProfit: 0,
+    weightedPayRate: 0,
+    weightedBillRate: 0,
+    totalHours: 0,
+    finalApproved: 0
+  });
 
-  const csv = toCsv(rows);
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
+  totals.averagePayRate = totals.totalHours ? totals.weightedPayRate / totals.totalHours : 0;
+  totals.averageBillRate = totals.totalHours ? totals.weightedBillRate / totals.totalHours : 0;
+  return totals;
+}
 
-  a.href = url;
-  a.download = `${agency().agencyNumber}-payroll-export.csv`;
-  a.click();
+function settingsForAgency(agencyId) {
+  const agencyRecord = state.agencies.find(record => record.id === agencyId);
+  const stored = state.settingsByAgency[agencyId] || {};
+  return {
+    agencyName: stored.agencyName || agencyRecord?.name || "Agency",
+    logoText: stored.logoText || initials(stored.agencyName || agencyRecord?.name || "Agency", 2),
+    primaryColor: stored.primaryColor || "#1f6fff",
+    payrollContactEmail: stored.payrollContactEmail || agencyRecord?.payrollEmail || "",
+    supportPhone: stored.supportPhone || agencyRecord?.supportPhone || ""
+  };
+}
 
-  URL.revokeObjectURL(url);
-  toast("Payroll CSV exported.");
+function currentAgencySettings() {
+  return settingsForAgency(state.currentAgencyId);
+}
+
+function applyTheme() {
+  const settings = currentAgencySettings();
+  const hex = settings.primaryColor || "#1f6fff";
+  const rgb = hexToRgb(hex);
+
+  document.documentElement.style.setProperty("--brand", hex);
+  document.documentElement.style.setProperty("--brand-rgb", `${rgb.r}, ${rgb.g}, ${rgb.b}`);
+
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  if (themeMeta) {
+    themeMeta.setAttribute("content", hex);
+  }
+}
+
+function addAudit(title, note, agencyId) {
+  state.auditTrail.push({
+    id: uid("audit"),
+    agencyId,
+    title,
+    note,
+    timestamp: new Date().toISOString(),
+    actor: ROLE_LABELS[state.currentRole]
+  });
+}
+
+function normalizeSelections(targetState) {
+  if (!targetState.agencies.some(record => record.id === targetState.currentAgencyId)) {
+    targetState.currentAgencyId = targetState.agencies[0]?.id || "";
+  }
+
+  const clients = targetState.clients.filter(record => record.agencyId === targetState.currentAgencyId);
+  if (!clients.some(record => record.id === targetState.currentClientId)) {
+    targetState.currentClientId = clients[0]?.id || "";
+  }
+
+  const workers = targetState.workers.filter(record => record.agencyId === targetState.currentAgencyId);
+  if (!workers.some(record => record.id === targetState.currentWorkerId)) {
+    targetState.currentWorkerId = workers[0]?.id || "";
+  }
+
+  const workerAssignment = targetState.assignments.find(record => record.workerId === targetState.currentWorkerId && record.active !== false) || null;
+  const agencySites = targetState.sites.filter(record => record.agencyId === targetState.currentAgencyId);
+  const sameClientSites = workerAssignment
+    ? agencySites.filter(record => record.clientId === workerAssignment.clientId)
+    : agencySites;
+  const punchSiteIds = sameClientSites.length ? sameClientSites.map(record => record.id) : agencySites.map(record => record.id);
+
+  if (!punchSiteIds.includes(targetState.punchSiteId)) {
+    targetState.punchSiteId = workerAssignment?.siteId || punchSiteIds[0] || agencySites[0]?.id || "";
+  }
+
+  const weeks = [...new Set(targetState.timesheets.filter(record => record.agencyId === targetState.currentAgencyId).map(record => record.weekStart))]
+    .sort((a, b) => new Date(b) - new Date(a));
+
+  if (!weeks.includes(targetState.selectedWeekStart)) {
+    targetState.selectedWeekStart = weeks[0] || targetState.currentWeek;
+  }
+}
+
+function syncTimesheet(timesheet) {
+  const totalHours = round2(timesheet.days.reduce((sum, day) => sum + Number(day.hours || 0), 0));
+  timesheet.totalHours = totalHours;
+  timesheet.regularHours = round2(Math.min(totalHours, 40));
+  timesheet.overtimeHours = round2(Math.max(totalHours - 40, 0));
+  if (timesheet.clientStatus === "approved" && Number(timesheet.approvedHours || 0) === 0) {
+    timesheet.approvedHours = totalHours;
+  }
+  if (timesheet.clientStatus !== "approved") {
+    timesheet.approvedHours = 0;
+  }
+  return timesheet;
+}
+
+function currentAgency() {
+  return state.agencies.find(record => record.id === state.currentAgencyId) || null;
+}
+
+function currentClient() {
+  return state.clients.find(record => record.id === state.currentClientId) || clientsForCurrentAgency()[0] || null;
+}
+
+function currentWorker() {
+  return state.workers.find(record => record.id === state.currentWorkerId) || workersForCurrentAgency()[0] || null;
+}
+
+function agencies() {
+  return state.agencies;
+}
+
+function clientsForAgency(agencyId) {
+  return state.clients.filter(record => record.agencyId === agencyId);
+}
+
+function clientsForCurrentAgency() {
+  return clientsForAgency(state.currentAgencyId);
+}
+
+function sitesForAgency(agencyId) {
+  return state.sites.filter(record => record.agencyId === agencyId);
+}
+
+function sitesForCurrentAgency() {
+  return sitesForAgency(state.currentAgencyId);
+}
+
+function workersForAgency(agencyId) {
+  return state.workers.filter(record => record.agencyId === agencyId);
+}
+
+function workersForCurrentAgency() {
+  return workersForAgency(state.currentAgencyId);
+}
+
+function assignmentsForCurrentAgency() {
+  return assignmentsForAgency(state.currentAgencyId);
+}
+
+function assignmentsForAgency(agencyId) {
+  return state.assignments.filter(record => record.agencyId === agencyId && record.active !== false);
+}
+
+function punchesForAgency(agencyId) {
+  return state.punches.filter(record => record.agencyId === agencyId);
+}
+
+function auditTrailForAgency(agencyId) {
+  return state.auditTrail.filter(record => record.agencyId === agencyId);
+}
+
+function clientById(id) {
+  return state.clients.find(record => record.id === id) || null;
+}
+
+function siteById(id) {
+  return state.sites.find(record => record.id === id) || null;
+}
+
+function activeAssignmentForWorker(workerId) {
+  return state.assignments.find(record => record.workerId === workerId && record.active !== false) || null;
+}
+
+function punchesForWorker(workerId) {
+  return state.punches
+    .filter(record => record.workerId === workerId)
+    .slice()
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+}
+
+function timesheetsForAgencyWeek(agencyId, weekStart) {
+  return state.timesheets.filter(record => record.agencyId === agencyId && record.weekStart === weekStart);
+}
+
+function timesheetsForClient(clientId, weekStart) {
+  return state.timesheets.filter(record => record.clientId === clientId && record.weekStart === weekStart);
+}
+
+function workersAssignedToClient(clientId) {
+  const ids = new Set(state.assignments.filter(record => record.clientId === clientId && record.active !== false).map(record => record.workerId));
+  return state.workers.filter(record => ids.has(record.id));
+}
+
+function workersAssignedToSite(siteId) {
+  const ids = new Set(state.assignments.filter(record => record.siteId === siteId && record.active !== false).map(record => record.workerId));
+  return state.workers.filter(record => ids.has(record.id));
+}
+
+function sitesForClient(clientId) {
+  return state.sites.filter(record => record.clientId === clientId);
+}
+
+function availableWeeksForCurrentAgency() {
+  return [...new Set(state.timesheets.filter(record => record.agencyId === state.currentAgencyId).map(record => record.weekStart))]
+    .sort((a, b) => new Date(b) - new Date(a));
+}
+
+function renderContextLabel() {
+  const roleLabel = ROLE_LABELS[state.currentRole] || "Demo Role";
+  const agencyName = currentAgencySettings().agencyName || currentAgency()?.name || "Agency";
+
+  if (state.currentRole === "client_manager") {
+    return `${roleLabel} · ${agencyName} · ${currentClient()?.name || "Client Focus"}`;
+  }
+
+  if (state.currentRole === "worker") {
+    return `${roleLabel} · ${agencyName} · ${fullWorkerName(state.currentWorkerId)}`;
+  }
+
+  return `${roleLabel} · ${agencyName}`;
+}
+
+function timeclockUrlForSite(siteRecord) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.searchParams.set("view", "timeclock");
+  url.searchParams.set("agency", siteRecord.agencyId);
+  url.searchParams.set("site", siteRecord.id);
+  url.searchParams.set("role", "worker");
+  return url.toString();
+}
+
+function punchSiteOptions(workerId, agencyId = state.currentAgencyId) {
+  const assignment = activeAssignmentForWorker(workerId);
+  const allSites = sitesForAgency(agencyId);
+
+  if (!assignment) {
+    return allSites;
+  }
+
+  const assignedSite = siteById(assignment.siteId);
+  if (!assignedSite) {
+    return allSites;
+  }
+
+  const sameClientSites = allSites.filter(record => record.clientId === assignment.clientId);
+  const deduped = new Map([[assignedSite.id, assignedSite]]);
+  sameClientSites.forEach(record => deduped.set(record.id, record));
+  return [...deduped.values()];
+}
+
+function approvalStatusLabel(timesheet) {
+  if (timesheet.clientStatus === "rejected") return "Rejected";
+  if (timesheet.clientStatus === "approved" && timesheet.agencyStatus === "finalized") return "Final Approved";
+  if (timesheet.clientStatus === "approved") return "Client Approved";
+  return "Pending Approval";
+}
+
+function approvalStatusClass(timesheet) {
+  if (timesheet.clientStatus === "rejected") return "status-danger";
+  if (timesheet.clientStatus === "approved" && timesheet.agencyStatus === "finalized") return "status-final";
+  if (timesheet.clientStatus === "approved") return "status-approved";
+  return "status-warning";
+}
+
+function punchStatus(punch) {
+  const assignment = activeAssignmentForWorker(punch.workerId);
+  if (punch.type !== "Clock In" || !assignment) {
+    return "Saved";
+  }
+
+  const scheduled = parseTimestampOnSameDay(punch.timestamp, assignment.shiftStart);
+  const minutesLate = Math.round((new Date(punch.timestamp) - scheduled) / 60000);
+  return minutesLate > 5 ? "Late" : "Saved";
+}
+
+function applyUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  const agencyId = params.get("agency");
+  const clientId = params.get("client");
+  const workerId = params.get("worker");
+  const siteId = params.get("site");
+  const view = params.get("view");
+  const role = params.get("role");
+
+  if (role && ROLE_LABELS[role]) {
+    state.currentRole = role;
+  }
+
+  if (agencyId && state.agencies.some(record => record.id === agencyId)) {
+    state.currentAgencyId = agencyId;
+  }
+
+  if (clientId && state.clients.some(record => record.id === clientId)) {
+    state.currentClientId = clientId;
+  }
+
+  if (workerId && state.workers.some(record => record.id === workerId)) {
+    state.currentWorkerId = workerId;
+  }
+
+  if (siteId && state.sites.some(record => record.id === siteId)) {
+    state.punchSiteId = siteId;
+  }
+
+  if (view && NAV_ITEMS.some(item => item.id === view)) {
+    state.currentView = view;
+  }
+
+  saveState();
+}
+
+function toggleMobileMenu() {
+  document.body.classList.toggle("sidebar-open");
+}
+
+function closeMobileMenu() {
+  document.body.classList.remove("sidebar-open");
+}
+
+function copyText(value, message) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(value)
+      .then(() => toast(message))
+      .catch(() => toast("Copy failed. You can copy the link manually."));
+    return;
+  }
+
+  toast("Copy failed. You can copy the link manually.");
 }
 
 function toCsv(rows) {
   const keys = Object.keys(rows[0]);
   return [
     keys.join(","),
-    ...rows.map(row => keys.map(k => JSON.stringify(row[k] ?? "")).join(","))
+    ...rows.map(row => keys.map(key => JSON.stringify(row[key] ?? "")).join(","))
   ].join("\n");
 }
 
-function copyText(text) {
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(text);
-    toast("QR link copied.");
-  } else {
-    toast("Copy this link manually.");
-  }
+function downloadFile(fileName, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function toast(message) {
@@ -1447,51 +2784,158 @@ function toast(message) {
   el.textContent = message;
   el.classList.add("show");
 
-  clearTimeout(window.toastTimer);
-  window.toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
-}
-// ===== MOBILE SIDEBAR MENU =====
-
-const mobileMenuBtn = document.getElementById("mobileMenuBtn");
-const mobileOverlay = document.getElementById("mobileOverlay");
-const sidebar = document.getElementById("sidebar");
-
-function openMobileMenu() {
-  sidebar.classList.add("open");
-  mobileOverlay.classList.add("show");
-  mobileMenuBtn.textContent = "×";
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    el.classList.remove("show");
+  }, 2400);
 }
 
-function closeMobileMenu() {
-  sidebar.classList.remove("open");
-  mobileOverlay.classList.remove("show");
-  mobileMenuBtn.textContent = "☰";
+function emptyState(message) {
+  return `<div class="empty-state">${safe(message)}</div>`;
 }
 
-function toggleMobileMenu() {
-  if (sidebar.classList.contains("open")) {
-    closeMobileMenu();
-  } else {
-    openMobileMenu();
-  }
+function statusBadge(label, className) {
+  return `<span class="status-badge ${className}">${safe(label)}</span>`;
 }
 
-if (mobileMenuBtn && mobileOverlay && sidebar) {
-  mobileMenuBtn.addEventListener("click", toggleMobileMenu);
-  mobileOverlay.addEventListener("click", closeMobileMenu);
+function fullWorkerName(workerId) {
+  const worker = state.workers.find(record => record.id === workerId);
+  return worker ? `${worker.firstName} ${worker.lastName}` : "Unknown Worker";
+}
 
-  document.addEventListener("click", function (e) {
-    const clickedNavItem = e.target.closest("#nav button, #nav a, [data-view]");
-    const isMobile = window.innerWidth <= 700;
+function countLabel(count, singular) {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
 
-    if (clickedNavItem && isMobile) {
-      closeMobileMenu();
-    }
+function formatCurrency(value) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number(value || 0));
+}
+
+function formatHours(value) {
+  return Number(value || 0).toFixed(2);
+}
+
+function formatPercent(value) {
+  return `${Number(value || 0).toFixed(1)}%`;
+}
+
+function formatDate(isoDate) {
+  return parseISODate(isoDate).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
   });
+}
 
-  window.addEventListener("resize", function () {
-    if (window.innerWidth > 700) {
-      closeMobileMenu();
-    }
+function formatDateTime(timestamp) {
+  return new Date(timestamp).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
   });
+}
+
+function toISODate(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function parseISODate(value) {
+  const [year, month, day] = String(value).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function addDays(date, amount) {
+  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds());
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function startOfWeek(date) {
+  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = next.getDay();
+  const shift = day === 0 ? -6 : 1 - day;
+  next.setDate(next.getDate() + shift);
+  return next;
+}
+
+function makeTimestamp(dayOffset, time) {
+  const base = addDays(new Date(), dayOffset);
+  const [hours, minutes] = String(time).split(":").map(Number);
+  const local = new Date(base.getFullYear(), base.getMonth(), base.getDate(), hours, minutes, 0, 0);
+  return local.toISOString();
+}
+
+function parseTimestampOnSameDay(timestamp, time) {
+  const date = new Date(timestamp);
+  const [hours, minutes] = String(time).split(":").map(Number);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes, 0, 0);
+}
+
+function pad(value) {
+  return String(value).padStart(2, "0");
+}
+
+function round2(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function safe(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function initials(value, maxLength) {
+  const parts = String(value || "")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!parts.length) return "PT";
+  return parts.map(part => part[0]).join("").slice(0, maxLength || 2).toUpperCase();
+}
+
+function slugify(value) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function buildAgencyCode(name, index) {
+  const initialsValue = initials(name, 3) || "AGY";
+  return `${initialsValue}-${String(1200 + index).padStart(4, "0")}`;
+}
+
+function uid(prefix) {
+  const fallback = `${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+  const base = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, "") : fallback;
+  return `${prefix}_${base.slice(0, 12)}`;
+}
+
+function hexToRgb(hex) {
+  const normalized = String(hex || "#1f6fff").replace("#", "");
+  const full = normalized.length === 3
+    ? normalized.split("").map(char => char + char).join("")
+    : normalized;
+
+  const int = parseInt(full, 16);
+  return {
+    r: (int >> 16) & 255,
+    g: (int >> 8) & 255,
+    b: int & 255
+  };
+}
+
+function isTodayTimestamp(timestamp) {
+  return toISODate(new Date(timestamp)) === toISODate(new Date());
 }

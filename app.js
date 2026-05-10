@@ -102,6 +102,24 @@
       features: ["Multi-branch agencies", "Custom integrations", "Dedicated onboarding", "Contact sales"]
     }
   };
+  function getBillingConfig() {
+  return window.PORTALY_BILLING_CONFIG || null;
+}
+
+function getBillingPlans() {
+  const billing = getBillingConfig();
+
+  if (billing?.plans) {
+    return billing.plans;
+  }
+
+  return PLAN_DEFINITIONS;
+}
+
+function getPlanDefinition(planId) {
+  const plans = getBillingPlans();
+  return plans[planId] || PLAN_DEFINITIONS[planId] || null;
+}
 
   const NAV_ITEMS = [
     { id: "dashboard", label: "Dashboard", badge: "DB", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },

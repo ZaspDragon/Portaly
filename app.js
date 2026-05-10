@@ -17,6 +17,18 @@
     "settings"
   ];
 
+  const SAMPLE_DATA_COLLECTIONS = [
+    "clients",
+    "sites",
+    "workers",
+    "assignments",
+    "punches",
+    "timesheets",
+    "approvals",
+    "payrollRuns",
+    "auditLogs"
+  ];
+
   const STORAGE_KEYS = {
     demo: "portaly_demo_store_v6",
     session: "portaly_session_v6",
@@ -27,9 +39,9 @@
   const DEFAULT_SUPPORT_EMAIL = "support@portaly-demo.com";
   const DEFAULT_SUPPORT_PHONE = "(800) 555-0199";
   const BILLING_LOCK_STATUSES = new Set(["past_due", "unpaid", "expired_trial", "canceled"]);
-  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired"]);
+  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile"]);
   const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
-  const CLIENT_ROUTES = new Set(["approvals", "help", "billing-required"]);
+  const CLIENT_ROUTES = new Set(["approvals", "client-approval", "help", "billing-required"]);
   const DEFAULT_APP_URL = `${window.location.origin}${window.location.pathname}`;
   const BILLING_CONFIG = window.PORTALY_BILLING_CONFIG || {};
 
@@ -117,7 +129,7 @@
     { id: "exceptions", label: "Problems to Fix", badge: "PF", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "qr-codes", label: "QR Codes", badge: "QR", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "users", label: "Users", badge: "US", roles: ["platformOwner", "agencyOwner"] },
-    { id: "billing", label: "Billing", badge: "BL", roles: ["platformOwner", "agencyOwner"] },
+    { id: "billing", label: "Billing", badge: "BL", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "settings", label: "Settings", badge: "SE", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] }
   ];
 
@@ -128,6 +140,16 @@
     clockOut: "Clock Out"
   };
 
+  const CLIENT_CORRECTION_REASONS = [
+    "Missed clock in",
+    "Missed clock out",
+    "Wrong time selected",
+    "Lunch not recorded",
+    "Worker forgot to punch",
+    "Supervisor approved correction",
+    "Other"
+  ];
+
   const QR_PATTERN = [1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0];
 
   const state = {
@@ -137,11 +159,18 @@
     route: "landing",
     selectedPlan: "agency",
     selectedPayPeriod: "",
+    roi: {
+      workers: 48,
+      adminHours: 12,
+      disputes: 6
+    },
     now: new Date(),
     notice: loadStoredNotice(),
     modal: null,
     toasts: [],
     pendingLink: null,
+    profileRepair: null,
+    approvalViewLogKey: "",
     filters: {
       liveStatus: "all",
       liveClient: "all",
@@ -307,7 +336,8 @@
         resolve(null);
         return;
       }
-      const unsubscribe = state.firebase.auth.onAuthStateChanged(user => {
+      let unsubscribe = () => {};
+      unsubscribe = state.firebase.auth.onAuthStateChanged(user => {
         unsubscribe();
         resolve(user || null);
       });
@@ -456,6 +486,12 @@
     if (hash.startsWith("worker/")) {
       return "worker-punch";
     }
+    if (hash.startsWith("approve/")) {
+      return "approval-link";
+    }
+    if (hash.startsWith("client-approval/")) {
+      return "client-approval";
+    }
     return hash;
   }
 
@@ -467,7 +503,27 @@
     return hash.split("/")[1] || "";
   }
 
+  function parseApprovalHash() {
+    const hash = window.location.hash.replace(/^#\/?/, "").trim();
+    if (hash.startsWith("approve/")) {
+      return {
+        mode: "token",
+        value: hash.split("/")[1] || ""
+      };
+    }
+    if (hash.startsWith("client-approval/")) {
+      return {
+        mode: "id",
+        value: hash.split("/")[1] || ""
+      };
+    }
+    return null;
+  }
+
   function getHomeRoute() {
+    if (state.profileRepair && state.authUser) {
+      return "complete-profile";
+    }
     if (state.session.mode === "public" || !state.session.role) {
       return "landing";
     }
@@ -575,11 +631,18 @@
     const profile = await loadCloudUserProfile(authUser.uid);
 
     if (!profile) {
-      pushToast("Your user profile is missing in Firestore.", "danger");
+      state.profileRepair = {
+        uid: authUser.uid,
+        email: authUser.email || "",
+        agencyId: null
+      };
+      pushToast("Your sign-in worked, but your agency profile still needs to be created in Firestore.", "warning");
       setPublicSession();
+      navigate("complete-profile", { replace: true });
       return;
     }
 
+    state.profileRepair = null;
     state.session = buildSessionFromUser(profile, "cloud");
     state.session.email = authUser.email || profile.email || "";
     state.session.name = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || profile.email || "Cloud User";
@@ -656,7 +719,7 @@
     }
 
     if (role === "clientManager") {
-      return ["agencies", "users", "clients", "sites", "punches", "timesheets", "approvals", "settings"];
+      return ["agencies", "users", "clients", "sites", "workers", "punches", "timesheets", "approvals", "settings"];
     }
 
     return COLLECTIONS.slice();
@@ -859,8 +922,39 @@
     return deleteData(collectionName, id);
   }
 
-  async function createAuditLog(action, entityType, entityId, oldValue, newValue) {
-    return appendAuditLog(action, entityType, entityId, oldValue, newValue);
+  async function createAuditLog(action, entityType, entityId, oldValue, newValue, metadata) {
+    return appendAuditLog(action, entityType, entityId, oldValue, newValue, metadata);
+  }
+
+  function formatSignupAuthError(error) {
+    const code = String(error?.code || "");
+    if (code.includes("email-already-in-use")) {
+      return "That email is already in use. Try logging in or reset the password first.";
+    }
+    if (code.includes("invalid-email")) {
+      return "Enter a valid email address.";
+    }
+    if (code.includes("weak-password")) {
+      return "Choose a stronger password before starting the trial.";
+    }
+    if (code.includes("operation-not-allowed")) {
+      return "Email and Password sign-in is not enabled in Firebase Authentication yet.";
+    }
+    if (code.includes("network-request-failed")) {
+      return "We could not reach Firebase. Check your connection and try again.";
+    }
+    return error?.message || "We could not create your account right now.";
+  }
+
+  function formatSignupFirestoreError(error) {
+    const code = String(error?.code || "");
+    if (code.includes("permission-denied")) {
+      return "Firestore blocked the signup write. Deploy the updated Firestore rules and try again.";
+    }
+    if (code.includes("unavailable") || code.includes("network-request-failed")) {
+      return "We reached Firebase Auth, but Firestore was unavailable while setting up the agency.";
+    }
+    return error?.message || "We could not finish creating the agency in Firestore.";
   }
 
   function findRecord(collection, id) {
@@ -981,6 +1075,10 @@
     return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
   }
 
+  function canDeleteSampleData() {
+    return ["platformOwner", "agencyOwner"].includes(state.session.role);
+  }
+
   function canPermanentlyDeleteRecords() {
     return ["platformOwner", "agencyOwner"].includes(state.session.role);
   }
@@ -1011,6 +1109,10 @@
     return clientIds.includes(clientId) || siteIds.includes(siteId);
   }
 
+  function canClientCorrectPunch(punch) {
+    return !!punch && state.session.role === "clientManager" && recordMatchesAssignmentScope(punch.clientId, punch.siteId);
+  }
+
   function showToast(message, type = "success") {
     pushToast(message, type);
   }
@@ -1021,6 +1123,7 @@
       title,
       html,
       saveLabel: options.saveLabel || "Save",
+      saveTone: options.saveTone || "button-primary",
       cancelLabel: options.cancelLabel || "Cancel",
       formName: options.formName || "custom-modal-save",
       onSave: typeof onSave === "function" ? onSave : null,
@@ -1096,6 +1199,9 @@
             confirmTone: "button-danger"
           });
           break;
+        case "delete-sample-data":
+          openDeleteSampleDataModal();
+          break;
         case "open-worker-form":
           requirePermission(canManageWorkers(), "Only agency owners, admins, or platform owners can edit workers.");
           state.modal = { type: "worker-form", workerId: trigger.dataset.workerId || "" };
@@ -1170,6 +1276,12 @@
         case "open-approval-edit":
           openApprovalEditModal(trigger.dataset.timesheetId || "");
           break;
+        case "open-client-time-edit":
+          openClientTimecardCorrectionModal(trigger.dataset.timesheetId || "");
+          break;
+        case "open-client-missing-punch":
+          openClientMissingPunchModal(trigger.dataset.timesheetId || "");
+          break;
         case "view-approval":
           openApprovalDetailModal(trigger.dataset.timesheetId || "");
           break;
@@ -1190,7 +1302,11 @@
           }
           break;
         case "approve-timesheet":
-          await approveTimesheet(trigger.dataset.timesheetId || "", "");
+          if (state.session.role === "clientManager") {
+            openClientApprovalSignatureModal(trigger.dataset.timesheetId || "");
+          } else {
+            await approveTimesheet(trigger.dataset.timesheetId || "", "");
+          }
           break;
         case "reject-timesheet":
           await rejectTimesheet(trigger.dataset.timesheetId || "", trigger.dataset.note || "");
@@ -1290,6 +1406,9 @@
         case "trial":
           await submitTrialSignup(values);
           break;
+        case "complete-profile":
+          await submitCompleteProfile(values);
+          break;
         case "worker-save":
           await saveWorkerForm(values);
           break;
@@ -1362,6 +1481,19 @@
       return;
     }
 
+    if (target.name === "roiWorkers" || target.name === "roiAdminHours" || target.name === "roiDisputes") {
+      const nextValue = Number(target.value || 0);
+      const safeValue = Number.isFinite(nextValue) && nextValue >= 0 ? nextValue : 0;
+      state.roi = {
+        ...state.roi,
+        workers: target.name === "roiWorkers" ? safeValue : state.roi.workers,
+        adminHours: target.name === "roiAdminHours" ? safeValue : state.roi.adminHours,
+        disputes: target.name === "roiDisputes" ? safeValue : state.roi.disputes
+      };
+      renderApp();
+      return;
+    }
+
     if (target.name === "primaryColor") {
       applyTheme(target.value || DEFAULT_BRAND);
     }
@@ -1374,6 +1506,7 @@
       await state.firebase.auth.signOut();
       state.authUser = null;
     }
+    state.profileRepair = null;
     setPublicSession();
     state.cache = emptyStore();
     navigate("landing", { replace: true });
@@ -1393,6 +1526,12 @@
     await establishCloudSession(result.user);
     await refreshSessionData();
     persistSession();
+
+    if (state.profileRepair) {
+      navigate("complete-profile", { replace: true });
+      pushToast("Finish setting up your Firestore workspace to continue.", "warning");
+      return;
+    }
 
     if (state.pendingLink && state.pendingLink.type === "worker" && state.session.role === "worker" && state.session.workerId === state.pendingLink.workerId) {
       state.pendingLink = null;
@@ -1440,7 +1579,25 @@
     const trialStart = new Date();
     const trialEnd = addDays(trialStart, trialDays);
     const agencyId = createId("agency");
-    const authResult = await state.firebase.auth.createUserWithEmailAndPassword(values.email, values.password);
+    const createdAt = new Date().toISOString();
+    const updatedAt = createdAt;
+    const agencySettings = buildAgencySettings({
+      agencyName: values.agencyName,
+      logoInitials: initials(values.agencyName),
+      primaryColor: DEFAULT_BRAND,
+      supportEmail: values.email,
+      supportPhone: values.phone,
+      payrollContact: values.email,
+      defaultPayPeriod: "Weekly"
+    });
+
+    let authResult;
+    try {
+      authResult = await state.firebase.auth.createUserWithEmailAndPassword(values.email, values.password);
+    } catch (error) {
+      throw new Error(formatSignupAuthError(error));
+    }
+
     const uid = authResult.user.uid;
 
     const agencyDoc = {
@@ -1451,17 +1608,12 @@
       subscriptionStatus: "trialing",
       trialStart: trialStart.toISOString(),
       trialEnd: trialEnd.toISOString(),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      settings: buildAgencySettings({
-        agencyName: values.agencyName,
-        logoInitials: initials(values.agencyName),
-        primaryColor: DEFAULT_BRAND,
-        supportEmail: values.email,
-        supportPhone: values.phone,
-        payrollContact: values.email,
-        defaultPayPeriod: "Weekly"
-      })
+      billingProvider: "square",
+      squareCustomerId: "",
+      squareSubscriptionId: "",
+      createdAt,
+      updatedAt,
+      settings: agencySettings
     };
 
     const userDoc = {
@@ -1476,46 +1628,218 @@
       assignedClientIds: [],
       assignedSiteIds: [],
       workerId: "",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      createdAt,
+      updatedAt
     };
 
     const settingDoc = {
       id: createId("setting"),
       agencyId,
-      ...agencyDoc.settings,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      ...agencySettings,
+      createdAt,
+      updatedAt
     };
 
     const subscriptionDoc = {
       id: createId("subscription"),
       agencyId,
+      billingProvider: "square",
+      squareCustomerId: "",
+      squareSubscriptionId: "",
       planId: selectedPlan,
       status: "trialing",
       currentPeriodStart: "",
       currentPeriodEnd: "",
       trialStart: trialStart.toISOString(),
       trialEnd: trialEnd.toISOString(),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      createdAt,
+      updatedAt
     };
 
-    const batch = state.firebase.db.batch();
-    batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
-    batch.set(state.firebase.db.collection("users").doc(uid), userDoc);
-    batch.set(state.firebase.db.collection("settings").doc(settingDoc.id), settingDoc);
-    batch.set(state.firebase.db.collection("subscriptions").doc(subscriptionDoc.id), subscriptionDoc);
-    await batch.commit();
+    try {
+      const batch = state.firebase.db.batch();
+      batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
+      batch.set(state.firebase.db.collection("users").doc(uid), userDoc);
+      batch.set(state.firebase.db.collection("settings").doc(settingDoc.id), settingDoc);
+      batch.set(state.firebase.db.collection("subscriptions").doc(subscriptionDoc.id), subscriptionDoc);
+      await batch.commit();
+    } catch (error) {
+      console.error(error);
+      await authResult.user.delete().catch(async () => {
+        if (state.firebase.auth?.signOut) {
+          await state.firebase.auth.signOut().catch(() => {});
+        }
+      });
+      state.authUser = null;
+      setPublicSession();
+      state.cache = emptyStore();
+      throw new Error(`Your login account was created, but Portaly could not finish the Firestore setup. ${formatSignupFirestoreError(error)}`);
+    }
 
+    let sampleDataError = null;
     if (values.loadSampleData === "on") {
-      await loadSampleDataIntoCloud(agencyId, uid, values.agencyName, selectedPlan);
+      try {
+        await loadSampleDataIntoCloud(agencyId, uid, values.agencyName, selectedPlan);
+      } catch (error) {
+        console.error(error);
+        sampleDataError = error;
+      }
     }
 
     await establishCloudSession(authResult.user);
     await refreshSessionData();
     navigate("trial-success", { replace: true });
-    pushToast("Your 14-day free trial is ready.", "success");
+    if (sampleDataError) {
+      pushToast("Your free trial is ready, but sample data could not be loaded.", "warning");
+      return;
+    }
+    pushToast(`Your ${trialDays}-day free trial is ready.`, "success");
+  }
+
+  async function submitCompleteProfile(values) {
+    if (!state.firebase.ready) {
+      throw new Error("Cloud Mode is not configured yet. Add your Firebase config first.");
+    }
+
+    const authUser = state.authUser || state.firebase.auth?.currentUser || null;
+    if (!authUser) {
+      throw new Error("Sign in first so Portaly can finish creating your workspace.");
+    }
+
+    const required = ["agencyName", "ownerFirstName", "ownerLastName", "phone", "selectedPlan"];
+    required.forEach(field => {
+      if (!values[field]) {
+        throw new Error("Please complete every required field.");
+      }
+    });
+
+    const uid = authUser.uid;
+    const email = authUser.email || values.email || "";
+    const existingAgency = await findAgencyOwnedBy(uid);
+    const trialDays = Number((state.firebase.config && state.firebase.config.trialDays) || 14);
+    const now = new Date();
+    const trialStartIso = existingAgency?.trialStart || now.toISOString();
+    const trialEndIso = existingAgency?.trialEnd || addDays(new Date(trialStartIso), trialDays).toISOString();
+    const createdAt = existingAgency?.createdAt || now.toISOString();
+    const updatedAt = now.toISOString();
+    const agencyId = existingAgency?.id || createId("agency");
+    const agencySettings = buildAgencySettings({
+      agencyName: values.agencyName,
+      logoInitials: initials(values.agencyName),
+      primaryColor: DEFAULT_BRAND,
+      supportEmail: email,
+      supportPhone: values.phone,
+      payrollContact: email,
+      defaultPayPeriod: "Weekly"
+    });
+    const existingSettings = await findAgencyScopedRecord("settings", agencyId);
+    const existingSubscription = await findAgencyScopedRecord("subscriptions", agencyId);
+
+    const userDoc = {
+      id: uid,
+      agencyId,
+      role: "agencyOwner",
+      firstName: values.ownerFirstName,
+      lastName: values.ownerLastName,
+      email,
+      phone: values.phone,
+      status: "active",
+      assignedClientIds: [],
+      assignedSiteIds: [],
+      workerId: "",
+      createdAt,
+      updatedAt
+    };
+
+    const agencyDoc = {
+      id: agencyId,
+      name: values.agencyName,
+      ownerUserId: uid,
+      planId: values.selectedPlan,
+      subscriptionStatus: "trialing",
+      trialStart: trialStartIso,
+      trialEnd: trialEndIso,
+      billingProvider: "square",
+      squareCustomerId: existingAgency?.squareCustomerId || "",
+      squareSubscriptionId: existingAgency?.squareSubscriptionId || "",
+      createdAt,
+      updatedAt,
+      settings: agencySettings
+    };
+
+    const settingDoc = {
+      id: existingSettings?.id || createId("setting"),
+      agencyId,
+      ...agencySettings,
+      createdAt: existingSettings?.createdAt || createdAt,
+      updatedAt
+    };
+
+    const subscriptionDoc = {
+      id: existingSubscription?.id || createId("subscription"),
+      agencyId,
+      billingProvider: "square",
+      squareCustomerId: existingSubscription?.squareCustomerId || "",
+      squareSubscriptionId: existingSubscription?.squareSubscriptionId || "",
+      planId: values.selectedPlan,
+      status: "trialing",
+      currentPeriodStart: existingSubscription?.currentPeriodStart || "",
+      currentPeriodEnd: existingSubscription?.currentPeriodEnd || "",
+      trialStart: trialStartIso,
+      trialEnd: trialEndIso,
+      createdAt: existingSubscription?.createdAt || createdAt,
+      updatedAt
+    };
+
+    try {
+      const batch = state.firebase.db.batch();
+      batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
+      batch.set(state.firebase.db.collection("users").doc(uid), userDoc);
+      batch.set(state.firebase.db.collection("settings").doc(settingDoc.id), settingDoc);
+      batch.set(state.firebase.db.collection("subscriptions").doc(subscriptionDoc.id), subscriptionDoc);
+      await batch.commit();
+    } catch (error) {
+      console.error(error);
+      throw new Error(`Portaly could not finish creating your Firestore workspace. ${formatSignupFirestoreError(error)}`);
+    }
+
+    let sampleDataError = null;
+    if (values.loadSampleData === "on") {
+      try {
+        await loadSampleDataIntoCloud(agencyId, uid, values.agencyName, values.selectedPlan);
+      } catch (error) {
+        console.error(error);
+        sampleDataError = error;
+      }
+    }
+
+    state.profileRepair = null;
+    await establishCloudSession(authUser);
+    await refreshSessionData();
+    navigate("trial-success", { replace: true });
+    if (sampleDataError) {
+      pushToast("Your workspace is ready, but sample data could not be loaded.", "warning");
+      return;
+    }
+    pushToast("Your agency workspace is ready.", "success");
+  }
+
+  async function findAgencyOwnedBy(ownerUserId) {
+    if (!state.firebase.ready || !ownerUserId) {
+      return null;
+    }
+    const snapshot = await state.firebase.db.collection("agencies").where("ownerUserId", "==", ownerUserId).limit(1).get();
+    const record = snapshot.docs && snapshot.docs[0];
+    return record ? { id: record.id, ...record.data() } : null;
+  }
+
+  async function findAgencyScopedRecord(collectionName, agencyId) {
+    if (!state.firebase.ready || !agencyId) {
+      return null;
+    }
+    const snapshot = await state.firebase.db.collection(collectionName).where("agencyId", "==", agencyId).limit(1).get();
+    const record = snapshot.docs && snapshot.docs[0];
+    return record ? { id: record.id, ...record.data() } : null;
   }
 
   async function loadSampleDataIntoCloud(agencyId, ownerUserId, agencyName, planId) {
@@ -1557,7 +1881,9 @@
       assignedSiteId: values.assignedSiteId || "",
       userId: existing?.userId || values.userId || "",
       loginEmail: values.loginEmail || values.email || "",
-      notes: values.notes || ""
+      workerNoteType: normalizeWorkerNoteType(values.workerNoteType || existing?.workerNoteType || ""),
+      notes: values.notes || "",
+      terminationReason: values.terminationReason || ""
     };
 
     await saveData("workers", workerId, worker);
@@ -1588,7 +1914,9 @@
       phone: values.phone || "",
       status: values.status || "active",
       billingContact: values.billingContact || "",
-      notes: values.notes || ""
+      notes: values.notes || "",
+      internalNotes: values.internalNotes || "",
+      clientVisibleNotes: values.clientVisibleNotes || ""
     };
     await saveData("clients", clientId, client);
     await appendAuditLog("client_saved", "clients", clientId, existing, client);
@@ -1702,6 +2030,10 @@
     if (!existing) {
       throw new Error("That timesheet could not be found.");
     }
+    const overrideReason = String(values.overrideReason || "").trim();
+    if (existing.status === "approved" && ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role) && !overrideReason) {
+      throw new Error("Approved timecards require an admin override reason before editing.");
+    }
 
     const updated = {
       approvedHours: Number(values.approvedHours || 0),
@@ -1712,9 +2044,12 @@
       clientId: values.clientId || existing.clientId,
       siteId: values.siteId || existing.siteId,
       status: values.status || existing.status,
-      adminNotes: values.adminNotes || "",
+      adminNotes: values.adminNotes || existing.adminNotes || "",
       clientNotes: values.clientNotes || existing.clientNotes || ""
     };
+    if (overrideReason) {
+      updated.adminNotes = [updated.adminNotes, `Override reason: ${overrideReason}`].filter(Boolean).join("\n");
+    }
 
     await updateData("timesheets", existing.id, updated);
     const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === existing.id);
@@ -1722,10 +2057,15 @@
       await updateData("approvals", approvalRecord.id, {
         workerId: updated.workerId,
         clientId: updated.clientId,
-        siteId: updated.siteId
+        siteId: updated.siteId,
+        note: updated.clientNotes || updated.adminNotes || approvalRecord.note || ""
       });
     }
-    await appendAuditLog("timesheet_edited", "timesheets", existing.id, existing, updated);
+    await appendAuditLog(existing.status === "approved" && overrideReason ? "approval_overridden" : "timesheet_edited", "timesheets", existing.id, existing, updated, {
+      reason: overrideReason,
+      actorId: state.session.userId,
+      actorRole: state.session.role
+    });
     state.modal = null;
     await refreshCurrentView();
     pushToast("Payroll row updated.", "success");
@@ -1738,26 +2078,65 @@
     }
     requirePermission(canEditTimesheets(timesheet), "You do not have permission to edit these hours.");
 
+    const nowIso = new Date().toISOString();
+    const clientEditReason = values.clientEditReason || values.correctionReason || "";
+    const overrideReason = String(values.overrideReason || "").trim();
+    if (state.session.role === "clientManager" && !clientEditReason) {
+      throw new Error("Choose a correction reason before saving.");
+    }
+    if (state.session.role === "clientManager" && timesheet.status === "approved") {
+      throw new Error("This timecard is locked after approval. Ask the agency admin for an override.");
+    }
+    if (state.session.role !== "clientManager" && timesheet.status === "approved" && !overrideReason) {
+      throw new Error("Approved timecards require an admin override reason before editing.");
+    }
+
     const updated = {
       approvedHours: Number(values.approvedHours || 0),
       regularHours: Number(values.regularHours || 0),
       overtimeHours: Number(values.overtimeHours || 0),
       status: values.status || timesheet.status,
       adminNotes: values.adminNotes || timesheet.adminNotes || "",
-      clientNotes: values.clientNotes || timesheet.clientNotes || ""
+      clientNotes: values.clientNotes || timesheet.clientNotes || "",
+      updatedAt: nowIso
     };
+
+    if (state.session.role === "clientManager") {
+      updated.clientEdited = true;
+      updated.clientEditedBy = state.session.userId;
+      updated.clientEditedAt = nowIso;
+      updated.clientEditReason = clientEditReason;
+      updated.originalApprovedHours = timesheet.originalApprovedHours ?? Number(timesheet.approvedHours || 0);
+      updated.originalRegularHours = timesheet.originalRegularHours ?? Number(timesheet.regularHours || 0);
+      updated.originalOvertimeHours = timesheet.originalOvertimeHours ?? Number(timesheet.overtimeHours || 0);
+    } else if (overrideReason) {
+      updated.adminNotes = [updated.adminNotes, `Override reason: ${overrideReason}`].filter(Boolean).join("\n");
+    }
 
     await updateData("timesheets", timesheet.id, updated);
     const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === timesheet.id);
     if (approvalRecord) {
-      await updateData("approvals", approvalRecord.id, {
+      await updateData("approvals", approvalRecord.id, state.session.role === "clientManager" ? {
+        note: values.clientNotes || values.adminNotes || approvalRecord.note || "",
+        clientEdited: true,
+        clientEditedBy: state.session.userId,
+        clientEditedAt: nowIso,
+        clientEditReason: clientEditReason
+      } : {
         note: values.clientNotes || values.adminNotes || approvalRecord.note || ""
       });
     }
-    await appendAuditLog("timesheet_hours_edited", "timesheets", timesheet.id, timesheet, updated);
+    await appendAuditLog(state.session.role === "clientManager"
+      ? "client_timecard_corrected"
+      : (timesheet.status === "approved" && overrideReason ? "approval_overridden" : "timesheet_hours_edited"), "timesheets", timesheet.id, timesheet, updated, {
+      reason: clientEditReason || overrideReason,
+      actorId: state.session.userId,
+      actorRole: state.session.role,
+      createdAt: nowIso
+    });
     state.modal = null;
     await refreshCurrentView();
-    pushToast("Timesheet hours updated.", "success");
+    pushToast(state.session.role === "clientManager" ? "Timecard correction saved." : "Timesheet hours updated.", "success");
   }
 
   async function saveQrForm(values) {
@@ -1883,6 +2262,110 @@
     pushToast("Settings saved.", "success");
   }
 
+  function openDeleteSampleDataModal() {
+    requirePermission(canDeleteSampleData(), "Only agency owners or platform owners can delete sample data.");
+    const agencies = state.session.role === "platformOwner"
+      ? ((state.cache.agencies && state.cache.agencies.length ? state.cache.agencies : state.demoStore.agencies) || [])
+      : [];
+    const currentAgency = getCurrentAgency();
+    const selectedAgencyId = state.session.role === "platformOwner" ? "" : (state.session.agencyId || currentAgency?.id || "");
+    const targetAgencyName = selectedAgencyId ? (getAgencyName(selectedAgencyId) || currentAgency?.name || "Current agency") : "";
+
+    openModal("Delete Sample Data", `
+      <div class="notice-card danger">
+        <div>
+          <strong>This will delete sample workers, clients, sites, assignments, punches, timesheets, approvals, payroll runs, and audit logs for this agency.</strong>
+          <p>This will NOT delete your agency account, users, settings, or subscription.</p>
+        </div>
+      </div>
+      ${state.session.role === "platformOwner" ? `
+        <div class="field-group">
+          <label for="delete-sample-agency">Agency workspace</label>
+          <select id="delete-sample-agency" name="targetAgencyId">
+            ${renderSelectOptions(agencies, "", "Select agency")}
+          </select>
+        </div>
+      ` : `
+        <input name="targetAgencyId" type="hidden" value="${escapeAttribute(selectedAgencyId)}" />
+        <div class="field-group">
+          <label>Agency workspace</label>
+          <input type="text" value="${escapeAttribute(targetAgencyName || "Current agency")}" readonly />
+        </div>
+      `}
+      <div class="field-group">
+        <label for="delete-sample-confirm">Type DELETE SAMPLE DATA to continue</label>
+        <input id="delete-sample-confirm" name="confirmText" type="text" placeholder="DELETE SAMPLE DATA" />
+      </div>
+    `, submitDeleteSampleData, {
+      saveLabel: "Delete Sample Data",
+      saveTone: "button-danger",
+      size: "small"
+    });
+  }
+
+  async function submitDeleteSampleData(values) {
+    requirePermission(canDeleteSampleData(), "Only agency owners or platform owners can delete sample data.");
+    const confirmation = String(values.confirmText || "").trim();
+    if (confirmation !== "DELETE SAMPLE DATA") {
+      throw new Error("Type DELETE SAMPLE DATA to confirm.");
+    }
+
+    const targetAgencyId = state.session.role === "platformOwner"
+      ? String(values.targetAgencyId || "").trim()
+      : String(values.targetAgencyId || state.session.agencyId || getCurrentAgency()?.id || "").trim();
+
+    if (!targetAgencyId) {
+      throw new Error(state.session.role === "platformOwner"
+        ? "Select an agency workspace first."
+        : "Current agency workspace could not be found.");
+    }
+
+    if (state.session.mode === "cloud") {
+      await deleteAgencySampleDataFromCloud(targetAgencyId);
+    } else {
+      deleteAgencySampleDataFromDemo(targetAgencyId);
+    }
+
+    await appendAuditLog("sample_data_deleted", "agency_workspace", targetAgencyId, {
+      agencyId: targetAgencyId,
+      collections: SAMPLE_DATA_COLLECTIONS.slice()
+    }, {
+      agencyId: targetAgencyId,
+      collectionsCleared: SAMPLE_DATA_COLLECTIONS.slice()
+    }, {
+      reason: "DELETE SAMPLE DATA",
+      actorId: state.session.userId,
+      actorRole: state.session.role
+    });
+
+    state.modal = null;
+    navigate("dashboard", { replace: true });
+    await refreshCurrentView();
+    pushToast("Sample data deleted.", "success");
+  }
+
+  async function deleteAgencySampleDataFromCloud(agencyId) {
+    const db = state.firebase.db;
+    if (!db) {
+      throw new Error("Cloud data is not connected right now.");
+    }
+
+    for (const collectionName of SAMPLE_DATA_COLLECTIONS) {
+      const snapshot = await db.collection(collectionName).where("agencyId", "==", agencyId).get();
+      await Promise.all((snapshot.docs || []).map(record => db.collection(collectionName).doc(record.id).delete()));
+    }
+  }
+
+  function deleteAgencySampleDataFromDemo(agencyId) {
+    const store = loadDemoStore();
+    SAMPLE_DATA_COLLECTIONS.forEach(collectionName => {
+      store[collectionName] = (store[collectionName] || []).filter(record => record.agencyId !== agencyId);
+    });
+    writeDemoStore(store);
+    state.demoStore = store;
+    state.cache = deepClone(store);
+  }
+
   async function submitRejectNote(values) {
     if (!state.modal) {
       return;
@@ -1892,32 +2375,68 @@
     }
   }
 
-  async function approveTimesheet(timesheetId, note) {
+  async function approveTimesheet(timesheetId, note, signatureDetails = null) {
     const timesheet = findRecord("timesheets", timesheetId);
     if (!timesheet) {
       throw new Error("That timesheet could not be found.");
     }
     requirePermission(canApproveRecord(timesheet), "You do not have permission to approve this timesheet.");
 
+    if (state.session.role === "clientManager" && !signatureDetails?.signatureDataUrl) {
+      throw new Error("A manager signature is required before approving this timesheet.");
+    }
+
     const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === timesheetId);
+    const approvedAt = signatureDetails?.signedAt || new Date().toISOString();
+    const managerSignature = signatureDetails ? {
+      signedByName: signatureDetails.managerName || state.session.name || "",
+      signedByEmail: signatureDetails.managerEmail || state.session.email || "",
+      signedAt: approvedAt,
+      signatureDataUrl: signatureDetails.signatureDataUrl || "",
+      approvalNote: signatureDetails.approvalNote || note || "",
+      clientId: timesheet.clientId,
+      siteId: timesheet.siteId,
+      timesheetId
+    } : null;
     const updated = {
       status: "approved",
-      approvedAt: new Date().toISOString(),
+      approvedAt,
       approvedBy: state.session.userId,
       adminNotes: note || timesheet.adminNotes || "",
-      clientNotes: note || timesheet.clientNotes || ""
+      clientNotes: note || timesheet.clientNotes || "",
+      updatedAt: approvedAt,
+      managerSignature: managerSignature || timesheet.managerSignature || null
     };
 
     await updateData("timesheets", timesheetId, updated);
     if (approvalRecord) {
       await updateData("approvals", approvalRecord.id, {
         status: "approved",
-        reviewedAt: new Date().toISOString(),
+        reviewedAt: approvedAt,
         reviewedBy: state.session.userId,
-        note: note || approvalRecord.note || ""
+        note: note || approvalRecord.note || "",
+        managerName: signatureDetails?.managerName || approvalRecord.managerName || "",
+        managerEmail: signatureDetails?.managerEmail || approvalRecord.managerEmail || "",
+        signatureDataUrl: signatureDetails?.signatureDataUrl || approvalRecord.signatureDataUrl || "",
+        signedAt: approvedAt,
+        approvalNote: signatureDetails?.approvalNote || note || approvalRecord.approvalNote || "",
+        managerSignature: managerSignature || approvalRecord.managerSignature || null
       });
     }
-    await appendAuditLog("timesheet_approved", "timesheets", timesheetId, timesheet, updated);
+    if (managerSignature) {
+      await appendAuditLog("signature_captured", "approvals", approvalRecord?.id || timesheetId, approvalRecord || timesheet, managerSignature, {
+        reason: managerSignature.approvalNote || "",
+        actorId: state.session.userId,
+        actorRole: state.session.role,
+        createdAt: approvedAt
+      });
+    }
+    await appendAuditLog("timesheet_approved", "timesheets", timesheetId, timesheet, updated, {
+      reason: signatureDetails?.approvalNote || note || "",
+      actorId: state.session.userId,
+      actorRole: state.session.role,
+      createdAt: approvedAt
+    });
     state.modal = null;
     await refreshCurrentView();
     pushToast("Timesheet approved.", "success");
@@ -1952,7 +2471,11 @@
         note
       });
     }
-    await appendAuditLog("timesheet_rejected", "timesheets", timesheetId, timesheet, updated);
+    await appendAuditLog("timesheet_rejected", "timesheets", timesheetId, timesheet, updated, {
+      reason: note,
+      actorId: state.session.userId,
+      actorRole: state.session.role
+    });
     state.modal = null;
     await refreshCurrentView();
     pushToast("Timesheet rejected with note.", "warning");
@@ -2219,8 +2742,23 @@
     if (!client) {
       return;
     }
-    openModal(`${client.name} Sites`, `
-      ${sites.length ? `
+    openModal(`${client.name} Details`, `
+      <div class="detail-grid">
+        ${renderDetailBox("Client", client.name || "-")}
+        ${renderDetailBox("Contact", client.contactName || "-")}
+        ${renderDetailBox("Contact email", client.contactEmail || "-")}
+        ${renderDetailBox("Phone", client.phone || "-")}
+        ${renderDetailBox("Billing contact", client.billingContact || "-")}
+        ${renderDetailBox("Status", formatStatusLabel(client.status || "active"))}
+      </div>
+      <div class="stack-md" style="margin-top: 18px;">
+        ${client.notes ? `<div>${renderDetailBox("Notes", client.notes)}</div>` : ""}
+        ${client.internalNotes && state.session.role !== "clientManager" ? `<div>${renderDetailBox("Internal notes", client.internalNotes)}</div>` : ""}
+        ${client.clientVisibleNotes ? `<div>${renderDetailBox("Client-visible notes", client.clientVisibleNotes)}</div>` : ""}
+      </div>
+      <div style="margin-top: 18px;">
+        <p class="eyebrow">Sites</p>
+        ${sites.length ? `
         <ul class="history-list">
           ${sites.map(site => `
             <li class="history-item">
@@ -2232,7 +2770,8 @@
             </li>
           `).join("")}
         </ul>
-      ` : renderEmptyState("No sites for this client", "Add a site to start placing workers and client approvals.") }
+        ` : renderEmptyState("No sites for this client", "Add a site to start placing workers and client approvals.") }
+      </div>
     `, null, {
       readOnly: true,
       cancelLabel: "Close",
@@ -2415,8 +2954,16 @@
     if (!timesheet) {
       return;
     }
-    openModal("Edit Hours", `
+    openModal(state.session.role === "clientManager" ? "Correct Approved Hours" : "Edit Hours", `
       <input name="id" type="hidden" value="${escapeAttribute(timesheet.id)}" />
+      ${timesheet.status === "approved" ? `
+        <div class="notice-card warning">
+          <div>
+            <strong>This timecard is already approved.</strong>
+            <p>${state.session.role === "clientManager" ? "Approved timecards are locked after signature. Ask the agency admin for an override." : "Agency staff can still edit this timecard, but an override reason is required."}</p>
+          </div>
+        </div>
+      ` : ""}
       <div class="form-row two">
         <div class="field-group">
           <label for="approval-approved-hours">Approved hours</label>
@@ -2443,15 +2990,29 @@
         <label for="approval-client-notes">Approval note</label>
         <textarea id="approval-client-notes" name="clientNotes">${escapeHtml(timesheet.clientNotes || timesheet.adminNotes || "")}</textarea>
       </div>
+      ${state.session.role === "clientManager" ? `
+        <div class="field-group">
+          <label for="approval-correction-reason">Correction reason</label>
+          <select id="approval-correction-reason" name="clientEditReason">
+            ${renderStaticOptions(CLIENT_CORRECTION_REASONS, "", value => value)}
+          </select>
+        </div>
+      ` : ""}
       ${state.session.role !== "clientManager" ? `
         <div class="field-group">
           <label for="approval-admin-notes">Admin notes</label>
           <textarea id="approval-admin-notes" name="adminNotes">${escapeHtml(timesheet.adminNotes || "")}</textarea>
         </div>
+        ${timesheet.status === "approved" ? `
+          <div class="field-group">
+            <label for="approval-override-reason">Admin override reason</label>
+            <textarea id="approval-override-reason" name="overrideReason" placeholder="Explain why approved hours are being changed."></textarea>
+          </div>
+        ` : ""}
       ` : ""}
     `, null, {
       formName: "approval-hours-save",
-      saveLabel: "Save Hours"
+      saveLabel: state.session.role === "clientManager" ? "Save Correction" : "Save Hours"
     });
   }
 
@@ -2461,6 +3022,7 @@
       return;
     }
     const approval = getScopedData().approvals.find(item => item.timesheetId === timesheetId);
+    const correctionSummary = buildApprovalCorrectionSummary(timesheet, approval, getScopedData());
     openModal("Approval Details", `
       <div class="detail-grid">
         ${renderDetailBox("Worker", getWorkerName(timesheet.workerId))}
@@ -2469,14 +3031,394 @@
         ${renderDetailBox("Hours submitted", formatHours(timesheet.approvedHours))}
         ${renderDetailBox("Regular hours", formatHours(timesheet.regularHours))}
         ${renderDetailBox("Overtime hours", formatHours(timesheet.overtimeHours))}
-        ${renderDetailBox("Punch details", buildPunchSummaryText(timesheet.workerId, getScopedData().punches))}
+        ${renderDetailBox("Punch details", buildTimesheetPunchSummaryText(timesheet, getScopedData().punches))}
         ${renderDetailBox("Approval note", approval?.note || timesheet.clientNotes || timesheet.adminNotes || "-")}
+        ${renderDetailBox("Correction status", correctionSummary.status)}
+        ${renderDetailBox("Latest correction reason", correctionSummary.reason)}
+        ${renderDetailBox("Manager signature", correctionSummary.signature)}
       </div>
     `, null, {
       readOnly: true,
       cancelLabel: "Close",
       size: "small"
     });
+  }
+
+  function openClientTimecardCorrectionModal(timesheetId) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      return;
+    }
+    requirePermission(state.session.role === "clientManager", "Only client managers can use this correction flow.");
+    requirePermission(canApproveRecord(timesheet), "You do not have permission to correct this timecard.");
+    const scoped = getScopedData();
+    const defaultDate = getClientCorrectionDate(timesheet, scoped.punches);
+    const punchMap = getPunchMapForDate(timesheet, scoped.punches, defaultDate);
+    openModal("Edit Time", `
+      <input name="timesheetId" type="hidden" value="${escapeAttribute(timesheet.id)}" />
+      <div class="field-group">
+        <label for="client-correction-date">Correction date</label>
+        <input id="client-correction-date" name="correctionDate" type="date" value="${escapeAttribute(defaultDate)}" />
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="client-clock-in">Edit Clock In</label>
+          <input id="client-clock-in" name="clockInTime" type="time" value="${escapeAttribute(formatTimeInput(punchMap.clockIn?.timestamp || ""))}" />
+        </div>
+        <div class="field-group">
+          <label for="client-clock-out">Edit Clock Out</label>
+          <input id="client-clock-out" name="clockOutTime" type="time" value="${escapeAttribute(formatTimeInput(punchMap.clockOut?.timestamp || ""))}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="client-start-lunch">Edit Start Lunch</label>
+          <input id="client-start-lunch" name="startLunchTime" type="time" value="${escapeAttribute(formatTimeInput(punchMap.startLunch?.timestamp || ""))}" />
+        </div>
+        <div class="field-group">
+          <label for="client-end-lunch">Edit End Lunch</label>
+          <input id="client-end-lunch" name="endLunchTime" type="time" value="${escapeAttribute(formatTimeInput(punchMap.endLunch?.timestamp || ""))}" />
+        </div>
+      </div>
+      <div class="form-row three">
+        <div class="field-group">
+          <label for="client-approved-hours">Approved hours</label>
+          <input id="client-approved-hours" name="approvedHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.approvedHours || 0))}" />
+        </div>
+        <div class="field-group">
+          <label for="client-regular-hours">Edit approved regular hours</label>
+          <input id="client-regular-hours" name="regularHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.regularHours || 0))}" />
+        </div>
+        <div class="field-group">
+          <label for="client-overtime-hours">Edit approved overtime hours</label>
+          <input id="client-overtime-hours" name="overtimeHours" type="number" step="0.01" value="${escapeAttribute(String(timesheet.overtimeHours || 0))}" />
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="client-correction-reason-select">Correction reason</label>
+        <select id="client-correction-reason-select" name="correctionReason">
+          ${renderStaticOptions(CLIENT_CORRECTION_REASONS, "", value => value)}
+        </select>
+      </div>
+      <div class="field-group">
+        <label for="client-correction-notes">Correction reason details</label>
+        <textarea id="client-correction-notes" name="correctionNotes" placeholder="Tell the agency what was corrected and why."></textarea>
+      </div>
+    `, async values => {
+      await saveClientTimecardCorrection(timesheetId, values);
+    }, {
+      saveLabel: "Save Correction"
+    });
+  }
+
+  function openClientMissingPunchModal(timesheetId) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      return;
+    }
+    requirePermission(state.session.role === "clientManager", "Only client managers can add a missing punch here.");
+    requirePermission(canApproveRecord(timesheet), "You do not have permission to add a missing punch.");
+    const defaultDate = getClientCorrectionDate(timesheet, getScopedData().punches);
+    openModal("Add Missing Punch", `
+      <input name="timesheetId" type="hidden" value="${escapeAttribute(timesheet.id)}" />
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="missing-punch-action">Missing punch type</label>
+          <select id="missing-punch-action" name="action">
+            ${renderStaticOptions(Object.keys(PUNCH_LABELS), "clockIn", key => PUNCH_LABELS[key] || key)}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="missing-punch-date">Punch date</label>
+          <input id="missing-punch-date" name="punchDate" type="date" value="${escapeAttribute(defaultDate)}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="missing-punch-time">Punch time</label>
+          <input id="missing-punch-time" name="punchTime" type="time" value="${escapeAttribute(formatTimeInput(state.now))}" />
+        </div>
+        <div class="field-group">
+          <label for="missing-punch-reason">Correction reason</label>
+          <select id="missing-punch-reason" name="correctionReason">
+            ${renderStaticOptions(CLIENT_CORRECTION_REASONS, "", value => value)}
+          </select>
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="missing-punch-notes">Correction details</label>
+        <textarea id="missing-punch-notes" name="correctionNotes" placeholder="Explain why the punch is being added."></textarea>
+      </div>
+    `, async values => {
+      await saveClientMissingPunch(timesheetId, values);
+    }, {
+      saveLabel: "Save Correction"
+    });
+  }
+
+  function openClientApprovalSignatureModal(timesheetId) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      return;
+    }
+    requirePermission(state.session.role === "clientManager", "Only client managers can sign this approval flow.");
+    requirePermission(canApproveRecord(timesheet), "You do not have permission to approve this timesheet.");
+    openModal("Approve and Sign", `
+      <div class="notice-card">
+        <div>
+          <strong>Manager signature is required before approval.</strong>
+          <p>Portaly will save the manager name, email, signature, site, and timestamp with this timesheet approval.</p>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="approval-manager-name">Manager name</label>
+          <input id="approval-manager-name" name="managerName" type="text" value="${escapeAttribute(state.session.name || "")}" />
+        </div>
+        <div class="field-group">
+          <label for="approval-manager-email">Manager email</label>
+          <input id="approval-manager-email" name="managerEmail" type="email" value="${escapeAttribute(state.session.email || "")}" />
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="approval-signature">Type your full name to sign</label>
+        <input id="approval-signature" name="signatureText" type="text" placeholder="Type your full name" />
+      </div>
+      <div class="field-group">
+        <label for="approval-signature-note">Approval note</label>
+        <textarea id="approval-signature-note" name="approvalNote" placeholder="Optional approval note"></textarea>
+      </div>
+    `, async values => {
+      const managerName = String(values.managerName || "").trim();
+      const managerEmail = String(values.managerEmail || "").trim();
+      const signatureText = String(values.signatureText || "").trim();
+      if (!managerName || !managerEmail || !signatureText) {
+        throw new Error("Manager name, email, and signature are required.");
+      }
+      await approveTimesheet(timesheetId, values.approvalNote || "", {
+        managerName,
+        managerEmail,
+        signatureDataUrl: buildSignatureDataUrl(signatureText),
+        signedAt: new Date().toISOString(),
+        approvalNote: values.approvalNote || ""
+      });
+    }, {
+      saveLabel: "Approve and Sign"
+    });
+  }
+
+  async function saveClientTimecardCorrection(timesheetId, values) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      throw new Error("That timesheet could not be found.");
+    }
+    requirePermission(state.session.role === "clientManager", "Only client managers can save this correction.");
+    requirePermission(canApproveRecord(timesheet), "You do not have permission to correct this timecard.");
+    if (timesheet.status === "approved") {
+      throw new Error("This timecard is locked after approval. Ask the agency admin for an override.");
+    }
+    const correctionReason = String(values.correctionReason || "").trim();
+    if (!correctionReason) {
+      throw new Error("Choose a correction reason before saving.");
+    }
+    const noteText = String(values.correctionNotes || "").trim();
+    if (!noteText) {
+      throw new Error("Add correction details before saving.");
+    }
+
+    const correctionDate = values.correctionDate || getClientCorrectionDate(timesheet, getScopedData().punches);
+    const scoped = getScopedData();
+    const existingPunchMap = getPunchMapForDate(timesheet, scoped.punches, correctionDate);
+    const nowIso = new Date().toISOString();
+    let changed = false;
+
+    for (const actionKey of Object.keys(PUNCH_LABELS)) {
+      const timeField = `${actionKey}Time`;
+      const timeValue = String(values[timeField] || "").trim();
+      const existingPunch = existingPunchMap[actionKey] || null;
+      if (!timeValue) {
+        continue;
+      }
+
+      const correctedTimestamp = new Date(`${correctionDate}T${timeValue}:00`).toISOString();
+      if (existingPunch && existingPunch.timestamp === correctedTimestamp && existingPunch.action === actionKey && Number(existingPunch.edited ? 1 : 0) === 1) {
+        continue;
+      }
+
+      const punchPayload = buildClientCorrectionPunchPayload(timesheet, existingPunch, actionKey, correctedTimestamp, correctionReason, noteText, nowIso);
+      const punchId = existingPunch?.id || createId("punch");
+      await saveData("punches", punchId, punchPayload);
+      await appendAuditLog("client_timecard_corrected", "punches", punchId, existingPunch, punchPayload, {
+        reason: correctionReason,
+        actorId: state.session.userId,
+        actorRole: "clientManager",
+        createdAt: nowIso
+      });
+      changed = true;
+    }
+
+    const nextApprovedHours = Number(values.approvedHours || 0);
+    const nextRegularHours = Number(values.regularHours || 0);
+    const nextOvertimeHours = Number(values.overtimeHours || 0);
+    const hoursChanged = nextApprovedHours !== Number(timesheet.approvedHours || 0)
+      || nextRegularHours !== Number(timesheet.regularHours || 0)
+      || nextOvertimeHours !== Number(timesheet.overtimeHours || 0);
+
+    if (hoursChanged) {
+      const updatedTimesheet = {
+        approvedHours: nextApprovedHours,
+        regularHours: nextRegularHours,
+        overtimeHours: nextOvertimeHours,
+        clientEdited: true,
+        clientEditedBy: state.session.userId,
+        clientEditedAt: nowIso,
+        clientEditReason: correctionReason,
+        originalApprovedHours: timesheet.originalApprovedHours ?? Number(timesheet.approvedHours || 0),
+        originalRegularHours: timesheet.originalRegularHours ?? Number(timesheet.regularHours || 0),
+        originalOvertimeHours: timesheet.originalOvertimeHours ?? Number(timesheet.overtimeHours || 0),
+        clientNotes: noteText || timesheet.clientNotes || "",
+        updatedAt: nowIso
+      };
+      await updateData("timesheets", timesheet.id, updatedTimesheet);
+      await appendAuditLog("client_timecard_corrected", "timesheets", timesheet.id, timesheet, updatedTimesheet, {
+        reason: correctionReason,
+        actorId: state.session.userId,
+        actorRole: "clientManager",
+        createdAt: nowIso
+      });
+      changed = true;
+    }
+
+    const approvalRecord = scoped.approvals.find(approval => approval.timesheetId === timesheet.id);
+    if (approvalRecord && changed) {
+      await updateData("approvals", approvalRecord.id, {
+        note: noteText || approvalRecord.note || correctionReason,
+        clientEdited: true,
+        clientEditedBy: state.session.userId,
+        clientEditedAt: nowIso,
+        clientEditReason: correctionReason,
+        updatedAt: nowIso
+      });
+    }
+
+    if (!changed) {
+      throw new Error("Make at least one correction before saving.");
+    }
+
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast("Timecard correction saved.", "success");
+  }
+
+  async function saveClientMissingPunch(timesheetId, values) {
+    const timesheet = findRecord("timesheets", timesheetId);
+    if (!timesheet) {
+      throw new Error("That timesheet could not be found.");
+    }
+    requirePermission(state.session.role === "clientManager", "Only client managers can add this missing punch.");
+    requirePermission(canApproveRecord(timesheet), "You do not have permission to add a missing punch.");
+    if (timesheet.status === "approved") {
+      throw new Error("This timecard is locked after approval. Ask the agency admin for an override.");
+    }
+    const correctionReason = String(values.correctionReason || "").trim();
+    if (!correctionReason) {
+      throw new Error("Choose a correction reason before saving.");
+    }
+    if (!values.punchDate || !values.punchTime) {
+      throw new Error("Choose the missing punch date and time.");
+    }
+    if (!String(values.correctionNotes || "").trim()) {
+      throw new Error("Add correction details before saving.");
+    }
+
+    const nowIso = new Date().toISOString();
+    const correctedTimestamp = new Date(`${values.punchDate}T${values.punchTime}:00`).toISOString();
+    const punchPayload = buildClientCorrectionPunchPayload(timesheet, null, values.action || "clockIn", correctedTimestamp, correctionReason, values.correctionNotes || "", nowIso);
+    const punchId = createId("punch");
+    await saveData("punches", punchId, punchPayload);
+    await appendAuditLog("client_timecard_corrected", "punches", punchId, null, punchPayload, {
+      reason: correctionReason,
+      actorId: state.session.userId,
+      actorRole: "clientManager",
+      createdAt: nowIso
+    });
+
+    const approvalRecord = getScopedData().approvals.find(approval => approval.timesheetId === timesheet.id);
+    if (approvalRecord) {
+      await updateData("approvals", approvalRecord.id, {
+        note: values.correctionNotes || approvalRecord.note || correctionReason,
+        clientEdited: true,
+        clientEditedBy: state.session.userId,
+        clientEditedAt: nowIso,
+        clientEditReason: correctionReason,
+        updatedAt: nowIso
+      });
+    }
+
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast("Missing punch added.", "success");
+  }
+
+  function buildClientCorrectionPunchPayload(timesheet, existingPunch, actionKey, correctedTimestamp, correctionReason, notes, nowIso) {
+    return {
+      agencyId: timesheet.agencyId,
+      workerId: timesheet.workerId,
+      workerName: getWorkerName(timesheet.workerId),
+      assignmentId: timesheet.assignmentId || existingPunch?.assignmentId || "",
+      clientId: timesheet.clientId,
+      clientName: getClientName(timesheet.clientId),
+      siteId: timesheet.siteId,
+      siteName: getSiteName(timesheet.siteId),
+      action: actionKey,
+      timestamp: correctedTimestamp,
+      source: existingPunch?.source || "client-correction",
+      createdBy: existingPunch?.createdBy || state.session.userId || "client-manager",
+      edited: true,
+      editedBy: state.session.userId,
+      editedByRole: "clientManager",
+      editedAt: nowIso,
+      editReason: correctionReason,
+      originalTimestamp: existingPunch?.originalTimestamp || existingPunch?.timestamp || "",
+      correctedTimestamp,
+      originalAction: existingPunch?.originalAction || existingPunch?.action || actionKey,
+      correctedAction: actionKey,
+      notes: notes || existingPunch?.notes || "",
+      updatedAt: nowIso
+    };
+  }
+
+  function getClientCorrectionDate(timesheet, punches) {
+    const relevantPunches = getTimesheetPunches(timesheet, punches);
+    const latest = relevantPunches.slice().sort((left, right) => compareDates(right.timestamp, left.timestamp))[0];
+    return formatDateInput(latest?.timestamp || timesheet.payPeriodEnd || state.now);
+  }
+
+  function getPunchMapForDate(timesheet, punches, dateValue) {
+    const rows = getTimesheetPunches(timesheet, punches).filter(punch => formatDateInput(punch.timestamp) === dateValue);
+    return Object.keys(PUNCH_LABELS).reduce((accumulator, actionKey) => {
+      const matches = rows.filter(punch => punch.action === actionKey).sort((left, right) => compareDates(right.timestamp, left.timestamp));
+      accumulator[actionKey] = matches[0] || null;
+      return accumulator;
+    }, {});
+  }
+
+  function buildSignatureDataUrl(signatureText) {
+    return `data:text/plain,${encodeURIComponent(signatureText)}`;
+  }
+
+  function buildApprovalCorrectionSummary(timesheet, approval, scoped) {
+    const editedPunches = getTimesheetPunches(timesheet, scoped.punches).filter(punch => punch.edited);
+    const editedBy = timesheet.clientEditedBy ? getUserName(timesheet.clientEditedBy) : (approval?.clientEditedBy ? getUserName(approval.clientEditedBy) : "");
+    return {
+      status: editedPunches.length || timesheet.clientEdited || approval?.clientEdited
+        ? `Client Edited${editedBy ? ` by ${editedBy}` : ""}`
+        : "No client corrections",
+      reason: timesheet.clientEditReason || approval?.clientEditReason || (editedPunches[0]?.editReason || "-"),
+      signature: approval?.managerName
+        ? `${approval.managerName} · ${approval.managerEmail || "-"} · ${formatDateTime(approval.signedAt)}`
+        : "Not signed yet"
+    };
   }
 
   async function copyTimesheetCsv(timesheetId) {
@@ -2855,20 +3797,25 @@
     }
   }
 
-  async function appendAuditLog(action, entityType, entityId, oldValue, newValue) {
+  async function appendAuditLog(action, entityType, entityId, oldValue, newValue, metadata = {}) {
     if (!state.session.role || state.session.mode === "public") {
       return;
     }
+    const timestamp = metadata.createdAt || new Date().toISOString();
     const audit = {
       agencyId: state.session.agencyId || newValue?.agencyId || oldValue?.agencyId || "",
-      userId: state.session.userId || "",
-      role: state.session.role || "",
+      userId: metadata.actorId || state.session.userId || "",
+      actorId: metadata.actorId || state.session.userId || "",
+      role: metadata.actorRole || state.session.role || "",
+      actorRole: metadata.actorRole || state.session.role || "",
       action,
       entityType,
       entityId,
       oldValue: oldValue || null,
       newValue: newValue || null,
-      timestamp: new Date().toISOString()
+      reason: metadata.reason || "",
+      createdAt: timestamp,
+      timestamp
     };
     await saveData("auditLogs", createId("audit"), audit);
   }
@@ -2889,6 +3836,9 @@
     localStorage.setItem("portaly_selected_plan_price", plan.price ? `$${plan.price}/month` : "Custom");
     localStorage.setItem("portaly_selected_plan_link", plan.squarePaymentLink);
 
+    // TODO: Add a Firebase Function that receives Square webhook events.
+    // TODO: Watch payment.updated, subscription.created, subscription.updated, and invoice.payment_made.
+    // TODO: Update Firestore agency and subscription planId/subscriptionStatus automatically after Square events.
     window.location.href = plan.squarePaymentLink;
   }
 
@@ -2907,7 +3857,9 @@
     applyBodyState();
 
     let html = "";
-    if (state.session.role === "worker" && state.session.mode !== "public") {
+    if (state.route === "approval-link") {
+      html = renderApprovalLinkShell();
+    } else if (state.session.role === "worker" && state.session.mode !== "public") {
       html = renderWorkerShell();
     } else if (state.session.mode === "public" || !state.session.role) {
       html = renderPublicShell();
@@ -2925,6 +3877,9 @@
   }
 
   function getLayoutMode() {
+    if (state.route === "approval-link") {
+      return "public";
+    }
     if (state.session.role === "worker" && state.session.mode !== "public") {
       return "worker";
     }
@@ -2972,6 +3927,10 @@
 
   function renderPublicPage() {
     switch (state.route) {
+      case "approval-link":
+        return renderPublicApprovalPage();
+      case "complete-profile":
+        return renderCompleteProfilePage();
       case "pricing":
         return renderMarketingLanding(true);
       case "demo":
@@ -2995,34 +3954,67 @@
   }
 
   function renderMarketingLanding(focusPricing) {
-    const planCards = Object.values(PLAN_DEFINITIONS).map(plan => renderPricingCard(plan, focusPricing && plan.id === state.selectedPlan)).join("");
+    const preview = getMarketingPreviewData();
+    const roi = getMarketingRoiEstimate();
+    const activePlanId = state.selectedPlan || "agency";
+    const planCards = Object.values(PLAN_DEFINITIONS).map(plan => renderPricingCard(plan, plan.id === activePlanId, "marketing")).join("");
     return `
       <main class="hero-shell">
         <section class="section">
           <div class="container hero-grid">
             <div class="hero-copy">
-              <p class="eyebrow">QR Timeclock & Staffing Agency Operations Platform</p>
-              <h2>QR Timeclock & Staffing Agency Operations Platform</h2>
-              <p>Track worker punches, client approvals, payroll exports, and gross margin from one clean platform.</p>
+              <p class="eyebrow">Built for staffing agencies, warehouses, and light industrial teams</p>
+              <h2>QR Timeclock & Payroll Approval Software for Staffing Agencies</h2>
+              <p>Track temp workers, approve hours, capture client signatures, and export payroll without paper timesheets.</p>
               <div class="hero-actions">
-                <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
-                <button class="button button-secondary button-large" data-action="go-route" data-route="demo" type="button">Try Demo</button>
-                <button class="button button-ghost button-large" data-action="go-route" data-route="login" type="button">Login</button>
-                <button class="button button-ghost button-large" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
+                <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start 14-Day Free Trial</button>
+                <button class="button button-secondary button-large" data-action="go-route" data-route="demo" type="button">View Demo</button>
+              </div>
+              <div class="hero-link-row">
+                <button class="marketing-link" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
+                <button class="marketing-link" data-action="go-route" data-route="login" type="button">Login</button>
               </div>
               <div class="hero-stat-grid">
-                ${renderHeroStat("14-day trial", "Create a real agency account and start in Cloud Mode.")}
-                ${renderHeroStat("Open demo", "Walk through owner, client, and worker roles with sample data.")}
-                ${renderHeroStat("Worker-first UX", "Clock in and out in seconds from a simple kiosk screen.")}
+                ${renderHeroStat("14-day free trial", "Launch a real agency workspace first, then convert to a paid Square plan when ready.")}
+                ${renderHeroStat("Worker-first QR flow", "Clock in, lunch, and clock out from a punch screen built for warehouse phones and kiosks.")}
+                ${renderHeroStat("Client-signed payroll", "Capture approvals, signatures, and timestamped audit history before payroll export.")}
               </div>
             </div>
-            <div class="hero-panel">
-              <p class="eyebrow">How It Works</p>
-              <div class="hero-flow">
-                ${renderFlowStep(1, "Workers punch with QR or login", "Keep clock in, lunch, and clock out simple on phone or kiosk.")}
-                ${renderFlowStep(2, "Clients approve hours", "Client managers review submitted labor without seeing pay or margin data.")}
-                ${renderFlowStep(3, "Admins export payroll", "Edit timesheets, export CSV, and review exceptions in one place.")}
-                ${renderFlowStep(4, "Owners watch margin", "See revenue, labor cost, and gross profit by worker, client, and site.")}
+            <div class="hero-panel hero-preview-panel">
+              <p class="eyebrow">Worker QR Preview</p>
+              <div class="worker-preview-card">
+                <div class="worker-preview-top">
+                  <div>
+                    <strong>Clock In / Clock Out</strong>
+                    <p>${escapeHtml(preview.agencyName)}</p>
+                  </div>
+                  <span class="status-badge ${escapeHtml(preview.statusTone)}">${escapeHtml(preview.statusLabel)}</span>
+                </div>
+                <div class="worker-preview-grid">
+                  <div class="worker-preview-item">
+                    <span>Worker</span>
+                    <strong>${escapeHtml(preview.workerName)}</strong>
+                  </div>
+                  <div class="worker-preview-item">
+                    <span>Client</span>
+                    <strong>${escapeHtml(preview.clientName)}</strong>
+                  </div>
+                  <div class="worker-preview-item">
+                    <span>Site</span>
+                    <strong>${escapeHtml(preview.siteName)}</strong>
+                  </div>
+                  <div class="worker-preview-item">
+                    <span>Current time</span>
+                    <strong>${escapeHtml(preview.currentTime)}</strong>
+                  </div>
+                </div>
+                <div class="worker-preview-buttons">
+                  <div class="preview-button ${preview.allowed.clockIn ? "is-active" : ""}">Clock In</div>
+                  <div class="preview-button ${preview.allowed.startLunch ? "is-active" : ""}">Start Lunch</div>
+                  <div class="preview-button ${preview.allowed.endLunch ? "is-active" : ""}">End Lunch</div>
+                  <div class="preview-button ${preview.allowed.clockOut ? "is-active" : ""}">Clock Out</div>
+                </div>
+                <p class="helper-copy">Built for fast punch-ins on a phone, a shared kiosk, or a QR code posted at the site.</p>
               </div>
             </div>
           </div>
@@ -3032,18 +4024,70 @@
           <div class="container">
             <div class="section-header">
               <div>
-                <p class="eyebrow">Built for Staffing Agencies</p>
-                <h2 class="section-title">Built for staffing agencies that still chase paper timecards</h2>
+                <p class="eyebrow">Live Operations Preview</p>
+                <h2 class="section-title">See the kind of shift-day visibility agency owners want by 8 AM</h2>
+              </div>
+              <p class="section-copy">These preview numbers mirror a live staffing desk view: who is on site, what needs attention, and how close payroll is to being ready.</p>
+            </div>
+            <div class="metrics-grid marketing-metrics-grid">
+              ${renderMetricCard("Active Workers Clocked In", preview.metrics.clockedInNow, "Workers currently active across live assignments", "CI")}
+              ${renderMetricCard("Active Client Sites", preview.metrics.activeSites, "Sites with active staffing coverage", "SI")}
+              ${renderMetricCard("Missed Punch Alerts", preview.metrics.missingClockOuts, "Workers who still need a punch review", "MP")}
+              ${renderMetricCard("Overtime Alerts", preview.metrics.overtimeAlerts, "Assignments already pushing overtime this week", "OT")}
+              ${renderMetricCard("Payroll Ready This Week", formatHours(preview.metrics.payrollReadyHours), "Approved or submitted time ready for export", "PY")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">How Portaly Works</p>
+                <h2 class="section-title">Replace paper timecards with one simple agency workflow</h2>
+              </div>
+              <p class="section-copy">Portaly keeps the worker experience fast while giving operations teams and warehouse managers the controls they need.</p>
+            </div>
+            <div class="flow-grid">
+              ${renderFlowStep(1, "Worker scans QR code", "A temp opens the worker punch screen from a phone-friendly QR link at the site.")}
+              ${renderFlowStep(2, "Hours are tracked automatically", "Clock in, lunch, and clock out events build clean punch history and exception visibility.")}
+              ${renderFlowStep(3, "Client manager reviews and signs", "Warehouse or site managers approve hours, reject problems, and save a digital signature with every approval.")}
+              ${renderFlowStep(4, "Agency exports payroll", "Owners and admins review payroll, fix issues, and export approved time without manual spreadsheet cleanup.")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Problems Portaly Solves</p>
+                <h2 class="section-title">Fix the day-to-day breakdowns that slow staffing payroll down</h2>
               </div>
               <p class="section-copy">Portaly gives owners, payroll teams, client approvers, and workers separate experiences that still stay connected.</p>
             </div>
             <div class="feature-grid">
-              ${renderFeatureCard("QR worker punches", "Clock in and out from a mobile-first punch screen with clear status and recent history.")}
-              ${renderFeatureCard("Client approvals", "Route submitted hours to client managers without exposing pay rate or margin details.")}
-              ${renderFeatureCard("Payroll export", "Review weekly time, edit payroll rows, and export CSV from one clean queue.")}
-              ${renderFeatureCard("Gross margin visibility", "Track pay rate, bill rate, revenue, labor cost, and gross profit by assignment.")}
-              ${renderFeatureCard("Multi-site tracking", "Manage agencies with multiple clients, sites, and assignment flows from one workspace.")}
-              ${renderFeatureCard("Audit trail", "Keep a history of punches, payroll edits, approvals, and manual changes.")}
+              ${renderFeatureCard("Paper timesheets", "Replace stacks of handwritten timecards with site-level QR punch capture and digital history.")}
+              ${renderFeatureCard("Buddy punching", "Tie worker punches to a clear assignment, site, and timestamp so questionable time is easier to review.")}
+              ${renderFeatureCard("Payroll disputes", "Give payroll staff punch history, notes, signatures, and approvals in one place before export.")}
+              ${renderFeatureCard("Missed punches", "Surface clock-out gaps, missing lunch events, late punches, and manual edits before payroll closes.")}
+              ${renderFeatureCard("Client approval delays", "Route weekly hours directly to the right warehouse or site manager for faster signoff.")}
+              ${renderFeatureCard("Manual Excel payroll", "Move from approved hours to export-ready payroll without rebuilding time in spreadsheets each week.")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Built For</p>
+                <h2 class="section-title">Built for the staffing environments where timekeeping gets messy fast</h2>
+              </div>
+              <p class="section-copy">Use the same platform across one warehouse, one client network, or a wider light industrial book of business.</p>
+            </div>
+            <div class="audience-grid">
+              ${["Staffing agencies", "Warehouses", "Distribution centers", "Manufacturing sites", "3PL operations", "Light industrial staffing"].map(item => `<div class="audience-pill">${escapeHtml(item)}</div>`).join("")}
             </div>
           </div>
         </section>
@@ -3051,24 +4095,119 @@
         <section class="section">
           <div class="container info-grid">
             <div class="surface-card">
-              <p class="eyebrow">Worker QR Clock-In</p>
-              <h2 class="page-heading">Simple enough for the warehouse floor</h2>
-              <p class="section-copy">Workers see one large screen with their name, assignment, site, current time, status, and four large buttons: Clock In, Start Lunch, End Lunch, and Clock Out.</p>
+              <p class="eyebrow">Client Manager Approval + Signature</p>
+              <h2 class="page-heading">Get a signed approval trail before payroll runs</h2>
+              <p class="section-copy">Warehouse and site managers can log in, review weekly hours, approve or reject timesheets, and save a digital signature with manager name, email, site, timestamp, and timesheet ID.</p>
+              <ul class="list compact-list">
+                <li>Review weekly hours by worker and site</li>
+                <li>Approve or reject with notes</li>
+                <li>Capture manager name and email</li>
+                <li>Store site, timestamp, and timesheet ID with the signature record</li>
+              </ul>
             </div>
             <div class="surface-card">
-              <p class="eyebrow">Client Approvals</p>
-              <h2 class="page-heading">Approvals without agency financial noise</h2>
-              <p class="section-copy">Client managers review hours, approve or reject timesheets with notes, and stay scoped to their own client or site only.</p>
+              <p class="eyebrow">White Label Your Agency</p>
+              <h2 class="page-heading">Make the worker and client experience feel like your agency</h2>
+              <p class="section-copy">Set your agency logo initials, brand colors, client portal language, worker portal copy, and support contact so Portaly fits the way your operation already presents itself.</p>
+              <ul class="list compact-list">
+                <li>Agency logo and initials</li>
+                <li>Brand color and support contact</li>
+                <li>Client portal approval experience</li>
+                <li>Worker portal and punch screen branding</li>
+              </ul>
             </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container split-grid">
             <div class="surface-card">
-              <p class="eyebrow">Payroll Export</p>
-              <h2 class="page-heading">Move from approved time to payroll faster</h2>
-              <p class="section-copy">Payroll teams can edit approved hours, regular hours, overtime, pay rate, and notes, then export CSV or print a weekly PDF view.</p>
+              <p class="eyebrow">ROI Calculator</p>
+              <h2 class="page-heading">Estimate the hours and labor cost Portaly can give back each month</h2>
+              <p class="section-copy">Use your own staffing desk numbers to see how much payroll prep time and dispute cleanup can shrink when hours are captured digitally.</p>
+              <div class="form-grid" style="margin-top: 18px;">
+                <div class="form-row three">
+                  <div class="field-group">
+                    <label for="roi-workers">Number of workers</label>
+                    <input id="roi-workers" name="roiWorkers" type="number" min="0" value="${escapeAttribute(String(state.roi.workers))}" />
+                  </div>
+                  <div class="field-group">
+                    <label for="roi-admin-hours">Weekly payroll admin hours</label>
+                    <input id="roi-admin-hours" name="roiAdminHours" type="number" min="0" step="0.5" value="${escapeAttribute(String(state.roi.adminHours))}" />
+                  </div>
+                  <div class="field-group">
+                    <label for="roi-disputes">Monthly payroll disputes</label>
+                    <input id="roi-disputes" name="roiDisputes" type="number" min="0" value="${escapeAttribute(String(state.roi.disputes))}" />
+                  </div>
+                </div>
+              </div>
+              <p class="inline-note" style="margin-top: 12px;">Estimate based on reduced payroll rework, fewer punch corrections, and faster approval follow-up.</p>
             </div>
-            <div class="surface-card">
-              <p class="eyebrow">Gross Margin Visibility</p>
-              <h2 class="page-heading">Owners get a clean margin picture</h2>
-              <p class="section-copy">See revenue, labor cost, gross profit, margin percent, usage limits, and subscription status from the same dashboard.</p>
+            <div class="surface-card roi-results-card">
+              <p class="eyebrow">Estimated ROI</p>
+              <div class="summary-grid" style="margin-top: 18px;">
+                <div class="summary-card">
+                  <div class="summary-top">
+                    <div>
+                      <span class="summary-label">Estimated monthly time saved</span>
+                      <strong class="summary-value">${escapeHtml(formatHours(roi.monthlyHoursSaved))}</strong>
+                    </div>
+                    <span class="metric-icon">TS</span>
+                  </div>
+                </div>
+                <div class="summary-card">
+                  <div class="summary-top">
+                    <div>
+                      <span class="summary-label">Estimated monthly labor savings</span>
+                      <strong class="summary-value">${escapeHtml(formatCurrency(roi.monthlyLaborSavings))}</strong>
+                    </div>
+                    <span class="metric-icon">LS</span>
+                  </div>
+                </div>
+                <div class="summary-card">
+                  <div class="summary-top">
+                    <div>
+                      <span class="summary-label">Estimated disputes avoided</span>
+                      <strong class="summary-value">${escapeHtml(String(roi.disputesReduced))}</strong>
+                    </div>
+                    <span class="metric-icon">DA</span>
+                  </div>
+                </div>
+              </div>
+              <p class="helper-copy" style="margin-top: 16px;">Teams with more workers and more manual payroll cleanup usually see the biggest time savings first.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Comparison</p>
+                <h2 class="section-title">Portaly gives staffing teams more control than paper or Excel can</h2>
+              </div>
+              <p class="section-copy">Use this as the before-and-after story when you show the platform to agency owners, warehouse managers, and investors.</p>
+            </div>
+            <div class="table-shell comparison-shell">
+              <table class="comparison-table">
+                <thead>
+                  <tr>
+                    <th>Workflow</th>
+                    <th>Paper / Excel</th>
+                    <th>Portaly</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${renderComparisonRow("QR timeclock", "Manual sign-in sheets", "Included with worker and site punch links")}
+                  ${renderComparisonRow("Digital signatures", "Usually missing or emailed later", "Saved with manager name, email, site, and timestamp")}
+                  ${renderComparisonRow("Client approvals", "Phone calls and email follow-up", "Built-in approval queue")}
+                  ${renderComparisonRow("Payroll export", "Manual spreadsheet cleanup", "Export-ready payroll queue")}
+                  ${renderComparisonRow("Live workforce visibility", "No real-time status", "Live dashboard and punch status")}
+                  ${renderComparisonRow("Missed punch alerts", "Found after payroll problems", "Visible before payroll closes")}
+                  ${renderComparisonRow("Multi-site tracking", "Hard to keep organized", "One view across clients and sites")}
+                  ${renderComparisonRow("Agency branding", "Not available", "White-label agency settings")}
+                </tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -3085,6 +4224,26 @@
             <div class="pricing-grid">
               ${planCards}
             </div>
+            <div class="notice-card" style="margin-top: 18px;">
+              <div>
+                <strong>Payments are processed securely through Square checkout.</strong>
+                <p>After payment, your agency plan can be activated in Portaly.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="support-card marketing-callout">
+              <p class="eyebrow">Demo Access</p>
+              <h3>Show the owner view, client approval view, and worker punch flow in one demo</h3>
+              <p>Use the public demo to walk through staffing operations without creating a live agency account first.</p>
+              <div class="page-actions" style="margin-top: 18px;">
+                <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">View Demo</button>
+                <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start 14-Day Free Trial</button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -3097,14 +4256,24 @@
               </div>
             </div>
             <div class="feature-grid">
-              ${renderFaq("Can I keep a public demo open?", "Yes. Demo Mode runs on sample data in localStorage and never touches Firestore or billing.")}
-              ${renderFaq("Can workers log in directly?", "Yes. Worker accounts go straight to the punch screen and only see their own punch history.")}
-        ${renderFaq("How do subscriptions work?", "Real agencies start with a 14-day trial, then move into monthly billing using secure Square payment links.")}
+              ${renderFaq("Can I keep a public demo open?", "Yes. Demo Mode runs on sample data in localStorage and never touches Firestore or Square billing.")}
+              ${renderFaq("Can workers log in directly?", "Yes. Worker accounts can go straight to the punch screen and only see their own punch history.")}
+              ${renderFaq("How do subscriptions work?", "Real agencies start with a 14-day trial, then move into monthly billing using secure Square payment links.")}
+              ${renderFaq("Do warehouse managers have to see pay rates or margin?", "No. Client managers can stay limited to approvals, notes, and signatures for their own site only.")}
               ${renderFaq("Will this still deploy on GitHub Pages?", "Yes. The frontend stays plain HTML, CSS, and JavaScript with no npm or build step required.")}
+              ${renderFaq("Can Portaly be white-labeled for an agency brand?", "Yes. Agency settings can control brand color, logo initials, support contact details, and the client and worker portal presentation.")}
             </div>
           </div>
         </section>
       </main>
+    `;
+  }
+
+  function renderApprovalLinkShell() {
+    return `
+      <div class="public-root approval-shell">
+        ${renderPublicApprovalPage()}
+      </div>
     `;
   }
 
@@ -3323,7 +4492,7 @@
                 </select>
               </div>
               <label class="checkbox-row">
-                <input type="checkbox" name="loadSampleData" checked />
+                <input type="checkbox" name="loadSampleData" />
                 <span>Load sample clients, sites, workers, timesheets, and punches into the new agency.</span>
               </label>
               <div class="page-actions">
@@ -3347,6 +4516,83 @@
               <p class="eyebrow">Billing</p>
               <h3>Square billing starts after the trial</h3>
               <p>Portaly uses secure Square payment links for subscription checkout. The frontend does not store payment secrets.</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderCompleteProfilePage() {
+    const authUser = state.authUser || state.firebase.auth?.currentUser || null;
+    return `
+      <main class="auth-shell">
+        <div class="container auth-grid">
+          <div class="auth-card">
+            <p class="eyebrow">Complete Profile</p>
+            <h3>Finish creating your agency workspace</h3>
+            <p>Your Firebase Auth login exists, but Portaly still needs to create the Firestore records for your agency, settings, and subscription.</p>
+            <form class="form-grid" data-form="complete-profile">
+              <div class="field-group">
+                <label for="complete-agency-name">Agency name</label>
+                <input id="complete-agency-name" name="agencyName" type="text" placeholder="Harbor Staffing Group" />
+              </div>
+              <div class="form-row two">
+                <div class="field-group">
+                  <label for="complete-owner-first">Owner first name</label>
+                  <input id="complete-owner-first" name="ownerFirstName" type="text" placeholder="Jamie" />
+                </div>
+                <div class="field-group">
+                  <label for="complete-owner-last">Owner last name</label>
+                  <input id="complete-owner-last" name="ownerLastName" type="text" placeholder="Waters" />
+                </div>
+              </div>
+              <div class="form-row two">
+                <div class="field-group">
+                  <label for="complete-email">Email</label>
+                  <input id="complete-email" name="email" type="email" value="${escapeAttribute(authUser?.email || "")}" readonly />
+                </div>
+                <div class="field-group">
+                  <label for="complete-phone">Phone</label>
+                  <input id="complete-phone" name="phone" type="text" placeholder="(555) 555-0123" />
+                </div>
+              </div>
+              <div class="field-group">
+                <label for="complete-plan">Selected plan</label>
+                <select id="complete-plan" name="selectedPlan">
+                  <option value="starter">Starter - $99/month</option>
+                  <option value="agency" selected>Agency - $249/month</option>
+                  <option value="growth">Growth - $499/month</option>
+                  <option value="enterprise">Enterprise - Custom</option>
+                </select>
+              </div>
+              <label class="checkbox-row">
+                <input type="checkbox" name="loadSampleData" />
+                <span>Load sample data into this new agency workspace.</span>
+              </label>
+              <div class="page-actions">
+                <button class="button button-primary button-block" type="submit">Create My Workspace</button>
+              </div>
+            </form>
+          </div>
+          <div class="stack-md">
+            <div class="support-card">
+              <p class="eyebrow">What Portaly will create</p>
+              <h3>Required Firestore records</h3>
+              <ul class="list">
+                <li><code>users/{uid}</code> using your Firebase Auth UID</li>
+                <li><code>agencies/{agencyId}</code> with you as owner</li>
+                <li><code>settings/{settingId}</code> for white-label defaults</li>
+                <li><code>subscriptions/{subscriptionId}</code> in trialing status</li>
+              </ul>
+            </div>
+            <div class="support-card">
+              <p class="eyebrow">Need a different login?</p>
+              <h3>You can sign out safely</h3>
+              <p>If this is not the right account, sign out and return to login or trial signup.</p>
+              <div class="page-actions" style="margin-top: 16px;">
+                <button class="button button-secondary" data-action="logout" type="button">Logout</button>
+              </div>
             </div>
           </div>
         </div>
@@ -3586,6 +4832,7 @@
     const attentionItems = buildAttentionItems(scoped).slice(0, 6);
     const usage = getUsageStats(scoped, state.session.agencyId);
     const plan = getPlanDefinition(getCurrentAgency()?.planId || "agency");
+    const showOnboarding = shouldShowEmptyWorkspaceOnboarding(scoped);
 
     return `
       <section class="stack-lg">
@@ -3601,6 +4848,8 @@
           ${renderMetricCard("Active Sites", metrics.activeSites, "Sites currently in service", "SI")}
           ${renderMetricCard("Subscription Status", formatStatusLabel(metrics.subscriptionStatus), `${escapeHtml(plan.label)} plan`, "SS")}
         </div>
+
+        ${showOnboarding ? renderEmptyWorkspaceOnboarding() : ""}
 
         <div class="split-grid">
           <div class="surface-card">
@@ -3638,6 +4887,7 @@
                 <button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Approvals</button>
                 <button class="button button-ghost" data-action="go-route" data-route="payroll" type="button">Export Payroll</button>
                 ${canManageBilling() ? `<button class="button button-ghost" data-action="go-route" data-route="billing" type="button">Manage Billing</button>` : ""}
+                ${canDeleteSampleData() ? `<button class="button button-danger" data-action="delete-sample-data" type="button">Delete Sample Data</button>` : ""}
               </div>
             </div>
 
@@ -3718,6 +4968,205 @@
     `;
   }
 
+  function normalizeWorkerNoteType(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (["best", "best-to-work-with", "standout", "joy", "great"].includes(normalized)) {
+      return "best";
+    }
+    if (["terminated", "fired", "do-not-return", "ended"].includes(normalized)) {
+      return "terminated";
+    }
+    if (normalized) {
+      return "general";
+    }
+    return "";
+  }
+
+  function getWorkerNoteLabel(value) {
+    const type = normalizeWorkerNoteType(value);
+    switch (type) {
+      case "best":
+        return "Best To Work With";
+      case "terminated":
+        return "Ended / Fired";
+      case "general":
+        return "General Note";
+      default:
+        return "";
+    }
+  }
+
+  function getWorkerNoteTone(value) {
+    const type = normalizeWorkerNoteType(value);
+    switch (type) {
+      case "best":
+        return "status-approved";
+      case "terminated":
+        return "status-danger";
+      default:
+        return "status-warning";
+    }
+  }
+
+  function summarizeText(value, maxLength = 120) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return "";
+    }
+    if (text.length <= maxLength) {
+      return text;
+    }
+    return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+  }
+
+  function getWorkerPrimaryNote(worker) {
+    if (!worker) {
+      return "";
+    }
+    const type = normalizeWorkerNoteType(worker.workerNoteType);
+    const managerNote = String(worker.notes || "").trim();
+    const terminationReason = String(worker.terminationReason || "").trim();
+    if (type === "terminated") {
+      return terminationReason || managerNote || "Marked as not eligible to return.";
+    }
+    return managerNote || terminationReason;
+  }
+
+  function renderWorkerNoteBadge(value) {
+    const label = getWorkerNoteLabel(value);
+    if (!label) {
+      return "";
+    }
+    return `<span class="status-badge ${getWorkerNoteTone(value)}">${escapeHtml(label)}</span>`;
+  }
+
+  function getWorkerHoursByCompany(workerId, scoped = getScopedData()) {
+    const rows = (scoped.timesheets || []).filter(timesheet => timesheet.workerId === workerId);
+    const map = new Map();
+
+    rows.forEach(timesheet => {
+      const clientId = timesheet.clientId || "unassigned";
+      const clientName = timesheet.clientName || getClientName(timesheet.clientId) || "Company";
+      const trackedHours = Number(timesheet.approvedHours || (Number(timesheet.regularHours || 0) + Number(timesheet.overtimeHours || 0)) || 0);
+      const regularHours = Number(timesheet.regularHours || 0);
+      const overtimeHours = Number(timesheet.overtimeHours || 0);
+      const current = map.get(clientId) || {
+        clientId,
+        clientName: clientName === "Unknown Client" ? "Company" : clientName,
+        trackedHours: 0,
+        regularHours: 0,
+        overtimeHours: 0,
+        latestPayPeriodEnd: "",
+        latestStatus: ""
+      };
+
+      current.clientName = current.clientName || clientName;
+      current.trackedHours += trackedHours;
+      current.regularHours += regularHours;
+      current.overtimeHours += overtimeHours;
+      current.latestStatus = timesheet.status || current.latestStatus || "";
+
+      if (!current.latestPayPeriodEnd || compareDates(timesheet.payPeriodEnd || timesheet.updatedAt || timesheet.createdAt || "", current.latestPayPeriodEnd) > 0) {
+        current.latestPayPeriodEnd = timesheet.payPeriodEnd || timesheet.updatedAt || timesheet.createdAt || "";
+      }
+
+      map.set(clientId, current);
+    });
+
+    return Array.from(map.values()).sort((left, right) => {
+      if (right.trackedHours !== left.trackedHours) {
+        return right.trackedHours - left.trackedHours;
+      }
+      return left.clientName.localeCompare(right.clientName);
+    });
+  }
+
+  function getWorkerOverallTrackedHours(workerId, scoped = getScopedData()) {
+    return sumNumbers(getWorkerHoursByCompany(workerId, scoped).map(row => row.trackedHours));
+  }
+
+  function renderWorkerHoursSummaryCard(workerId, options = {}) {
+    const scoped = options.scoped || getScopedData();
+    const rows = getWorkerHoursByCompany(workerId, scoped);
+    const totalHours = sumNumbers(rows.map(row => row.trackedHours));
+    const cardClass = options.cardClass || "worker-card";
+    const eyebrow = options.eyebrow || "Hours Worked";
+    const title = options.title || "Hours by company";
+    const copy = options.copy || "Track your processed hours across every company you have worked for.";
+
+    return `
+      <div class="${cardClass}">
+        <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+        <h3>${escapeHtml(title)}</h3>
+        <p class="helper-copy">${escapeHtml(copy)}</p>
+        ${rows.length ? `
+          <div class="hours-summary-list" style="margin-top: 16px;">
+            ${rows.map(row => `
+              <div class="hours-summary-row">
+                <div>
+                  <strong>${escapeHtml(row.clientName)}</strong>
+                  <p class="helper-copy">${escapeHtml(formatHours(row.trackedHours))} total · ${escapeHtml(formatHours(row.overtimeHours))} OT${row.latestPayPeriodEnd ? ` · Latest period ${escapeHtml(formatDate(row.latestPayPeriodEnd))}` : ""}</p>
+                </div>
+                <span class="hours-summary-total">${escapeHtml(formatHours(row.trackedHours))}</span>
+              </div>
+            `).join("")}
+          </div>
+          <div class="info-row" style="margin-top: 14px;">
+            <strong>Overall hours</strong>
+            <span class="helper-copy">${escapeHtml(formatHours(totalHours))}</span>
+          </div>
+        ` : `<p class="helper-copy" style="margin-top: 14px;">Tracked hours will show here after time has been approved or processed.</p>`}
+      </div>
+    `;
+  }
+
+  function renderWorkerNotesSection(scoped) {
+    const workersWithNotes = scoped.workers
+      .filter(worker => getWorkerPrimaryNote(worker))
+      .sort((left, right) => {
+        const leftType = normalizeWorkerNoteType(left.workerNoteType);
+        const rightType = normalizeWorkerNoteType(right.workerNoteType);
+        if (leftType === rightType) {
+          return fullName(left).localeCompare(fullName(right));
+        }
+        if (leftType === "terminated") {
+          return -1;
+        }
+        if (rightType === "terminated") {
+          return 1;
+        }
+        if (leftType === "best") {
+          return -1;
+        }
+        if (rightType === "best") {
+          return 1;
+        }
+        return fullName(left).localeCompare(fullName(right));
+      });
+
+    return `
+      <div class="support-card">
+        <p class="eyebrow">Worker Notes</p>
+        <h3>Standout temps and separation reasons</h3>
+        <p class="helper-copy">Keep quick notes on who was great to work with and why someone should not be returned to a site.</p>
+        ${workersWithNotes.length ? `
+          <div class="worker-note-list" style="margin-top: 16px;">
+            ${workersWithNotes.map(worker => `
+              <div class="worker-note-card">
+                <div class="info-row">
+                  <strong>${escapeHtml(fullName(worker))}</strong>
+                  ${renderWorkerNoteBadge(worker.workerNoteType)}
+                </div>
+                <p class="helper-copy">${escapeHtml(getWorkerPrimaryNote(worker))}</p>
+                <p class="inline-note">${escapeHtml(getClientName(worker.assignedClientId))} · ${escapeHtml(getSiteName(worker.assignedSiteId))} · ${escapeHtml(formatHours(getWorkerOverallTrackedHours(worker.id, scoped)))} overall</p>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<p class="helper-copy" style="margin-top: 14px;">No standout or separation notes have been added yet.</p>`}
+      </div>
+    `;
+  }
+
   function renderWorkersPage() {
     const scoped = getScopedData();
     const workers = scoped.workers.slice().sort((left, right) => fullName(left).localeCompare(fullName(right)));
@@ -3755,11 +5204,13 @@
                     const punchState = getWorkerPunchState(worker.id, scoped);
                     const lastPunch = getWorkerLatestPunch(worker.id, scoped.punches);
                     const weekHours = timesheets.filter(timesheet => timesheet.workerId === worker.id).reduce((sum, timesheet) => sum + Number(timesheet.approvedHours || 0), 0);
+                    const notePreview = summarizeText(getWorkerPrimaryNote(worker), 92);
                     return `
                       <tr>
                         <td>
                           <strong>${escapeHtml(fullName(worker))}</strong>
                           <div class="inline-note">${escapeHtml(worker.phone || worker.email || "No contact info")}</div>
+                          ${notePreview ? `<div class="worker-note-inline">${renderWorkerNoteBadge(worker.workerNoteType)}<span>${escapeHtml(notePreview)}</span></div>` : ""}
                         </td>
                         <td>${renderInlineStatus(punchState.label)}</td>
                         <td>${escapeHtml(getClientName(worker.assignedClientId))}</td>
@@ -3784,6 +5235,7 @@
             </div>
           ` : renderEmptyState("No workers yet", "Add your first worker to start assignments, punch capture, and payroll tracking.")}
         </div>
+        ${renderWorkerNotesSection(scoped)}
       </section>
     `;
   }
@@ -3826,7 +5278,7 @@
                       <td>
                         <div class="table-actions">
                           <button class="button button-ghost" data-action="open-client-form" data-client-id="${escapeHtml(client.id)}" type="button">Edit</button>
-                          <button class="button button-ghost" data-action="view-client-sites" data-client-id="${escapeHtml(client.id)}" type="button">View Sites</button>
+                          <button class="button button-ghost" data-action="view-client-sites" data-client-id="${escapeHtml(client.id)}" type="button">View Details</button>
                           ${canDeactivateEntity("clients") ? `<button class="button button-ghost" data-action="deactivate-client" data-client-id="${escapeHtml(client.id)}" type="button">Deactivate</button>` : ""}
                           ${canPermanentlyDeleteRecords() ? `<button class="button button-danger" data-action="delete-client" data-client-id="${escapeHtml(client.id)}" type="button">Delete</button>` : ""}
                         </div>
@@ -4092,20 +5544,32 @@
                 <tbody>
                   ${pending.map(approval => {
                     const timesheet = scoped.timesheets.find(item => item.id === approval.timesheetId);
+                    const actions = state.session.role === "clientManager"
+                      ? `
+                        <button class="button button-ghost" data-action="view-approval" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">View Details</button>
+                        <button class="button button-ghost" data-action="open-client-time-edit" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Edit Time</button>
+                        <button class="button button-secondary" data-action="open-client-missing-punch" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Add Missing Punch</button>
+                        <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Approve</button>
+                        <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(approval.timesheetId)}" type="button">Reject</button>
+                      `
+                      : `
+                        <button class="button button-ghost" data-action="view-approval" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">View Details</button>
+                        <button class="button button-ghost" data-action="open-approval-edit" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Edit Hours</button>
+                        <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Approve</button>
+                        <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(approval.timesheetId)}" type="button">Reject</button>
+                        <button class="button button-ghost" data-action="view-timesheet-history" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">View History</button>
+                      `;
                     return `
                       <tr>
                         <td>${escapeHtml(getWorkerName(approval.workerId))}</td>
                         <td>${escapeHtml(getClientName(approval.clientId))}</td>
                         <td>${escapeHtml(getSiteName(approval.siteId))}</td>
                         <td>${escapeHtml(formatHours(timesheet?.approvedHours || 0))}</td>
-                        <td>${escapeHtml(buildPunchSummaryText(approval.workerId, scoped.punches))}</td>
-                        <td>${renderInlineStatus(approval.status)}</td>
+                        <td>${escapeHtml(buildTimesheetPunchSummaryText(timesheet, scoped.punches))}</td>
+                        <td>${renderApprovalStatusCell(approval, timesheet, scoped)}</td>
                         <td>
                           <div class="table-actions">
-                            <button class="button button-ghost" data-action="view-approval" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">View Details</button>
-                            <button class="button button-ghost" data-action="open-approval-edit" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Edit Hours</button>
-                            <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Approve</button>
-                            <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(approval.timesheetId)}" type="button">Reject</button>
+                            ${actions}
                           </div>
                         </td>
                       </tr>
@@ -4132,7 +5596,10 @@
                     <strong>${escapeHtml(getWorkerName(approval.workerId))} - ${escapeHtml(getSiteName(approval.siteId))}</strong>
                     <p class="inline-note">${escapeHtml(approval.note || "No note added")} · ${escapeHtml(formatDateTime(approval.reviewedAt || approval.updatedAt))}</p>
                   </div>
-                  ${renderInlineStatus(approval.status)}
+                  <div class="page-actions">
+                    ${renderInlineStatus(approval.status)}
+                    ${(approval.clientEdited || scoped.timesheets.find(item => item.id === approval.timesheetId)?.clientEdited) ? `<span class="status-badge status-warning">Client Edited</span>` : ""}
+                  </div>
                 </li>
               `).join("")}
             </ul>
@@ -4609,6 +6076,17 @@
             </div>
           </form>
         </div>
+        ${canDeleteSampleData() ? `
+          <div class="notice-card danger">
+            <div>
+              <strong>Delete Sample Data</strong>
+              <p>Clear sample workers, clients, sites, assignments, punches, timesheets, approvals, payroll runs, and audit logs from this agency workspace without deleting the owner account, settings, or subscription.</p>
+            </div>
+            <div class="page-actions" style="margin-top: 18px;">
+              <button class="button button-danger" data-action="delete-sample-data" type="button">Delete Sample Data</button>
+            </div>
+          </div>
+        ` : ""}
       </section>
     `;
   }
@@ -4697,6 +6175,12 @@
             ` : `<p class="helper-copy" style="margin-top: 12px;">No punches have been saved yet today.</p>`}
           </div>
 
+          ${renderWorkerHoursSummaryCard(worker.id, {
+            eyebrow: "Hours Worked",
+            title: "Hours by company",
+            copy: "Track your processed hours across the companies where you have worked."
+          })}
+
           <div class="support-card">
             <p class="eyebrow">Need help?</p>
             <h3>Contact your supervisor or staffing agency</h3>
@@ -4730,10 +6214,17 @@
             </div>
           ` : `<p class="helper-copy" style="margin-top: 16px;">Your punch history will appear here after you start using the timeclock.</p>`}
         </div>
-        <div class="support-card">
-          <p class="eyebrow">Help</p>
-          <h3>Need a correction?</h3>
-          <p>If a punch is missing or wrong, reach out to your agency so they can correct the record and keep payroll accurate.</p>
+        <div class="stack-md">
+          ${worker ? renderWorkerHoursSummaryCard(worker.id, {
+            eyebrow: "Hours Worked",
+            title: "Overall hours by company",
+            copy: "Use this summary to keep track of your hours across each company."
+          }) : ""}
+          <div class="support-card">
+            <p class="eyebrow">Help</p>
+            <h3>Need a correction?</h3>
+            <p>If a punch is missing or wrong, reach out to your agency so they can correct the record and keep payroll accurate.</p>
+          </div>
         </div>
       </div>
     `;
@@ -4802,7 +6293,7 @@
       </div>
     ` : `
       <div class="modal-actions">
-        <button class="button button-primary" type="submit">${escapeHtml(state.modal.saveLabel || "Save")}</button>
+        <button class="button ${escapeHtml(state.modal.saveTone || "button-primary")}" type="submit">${escapeHtml(state.modal.saveLabel || "Save")}</button>
         <button class="button button-ghost" data-action="close-modal" type="button">${escapeHtml(state.modal.cancelLabel || "Cancel")}</button>
       </div>
     `;
@@ -4931,6 +6422,23 @@
               <label for="worker-notes">Notes</label>
               <textarea id="worker-notes" name="notes">${escapeHtml(worker?.notes || "")}</textarea>
             </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-note-type">Worker note type</label>
+                <select id="worker-note-type" name="workerNoteType">
+                  ${renderStaticOptions(["", "general", "best", "terminated"], normalizeWorkerNoteType(worker?.workerNoteType || ""), value => {
+                    if (!value) {
+                      return "No special note";
+                    }
+                    return getWorkerNoteLabel(value);
+                  })}
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="worker-termination-reason">If fired or ended, reason</label>
+                <input id="worker-termination-reason" name="terminationReason" type="text" value="${escapeAttribute(worker?.terminationReason || "")}" placeholder="Example: Client requested removal after repeated no-show." />
+              </div>
+            </div>
             <div class="modal-actions">
               <button class="button button-primary" type="submit">Save Worker</button>
               <button class="button button-ghost" data-action="close-modal" type="button">Cancel</button>
@@ -4965,6 +6473,19 @@
             ${renderDetailBox("Phone", worker.phone || "-")}
             ${renderDetailBox("Email", worker.email || "-")}
           </div>
+          ${getWorkerPrimaryNote(worker) ? `
+            <div class="support-card" style="margin-top: 18px;">
+              <p class="eyebrow">Manager Note</p>
+              <h3>${escapeHtml(getWorkerNoteLabel(worker.workerNoteType) || "General note")}</h3>
+              <p>${escapeHtml(getWorkerPrimaryNote(worker))}</p>
+            </div>
+          ` : ""}
+          ${renderWorkerHoursSummaryCard(worker.id, {
+            eyebrow: "Hours Worked",
+            title: "Overall hours by company",
+            copy: "See the processed hours tied to each company for this worker.",
+            cardClass: "support-card"
+          })}
         </div>
       </div>
     `;
@@ -5058,6 +6579,14 @@
             <div class="field-group">
               <label for="client-notes">Notes</label>
               <textarea id="client-notes" name="notes">${escapeHtml(client?.notes || "")}</textarea>
+            </div>
+            <div class="field-group">
+              <label for="client-internal-notes">Internal notes</label>
+              <textarea id="client-internal-notes" name="internalNotes">${escapeHtml(client?.internalNotes || "")}</textarea>
+            </div>
+            <div class="field-group">
+              <label for="client-visible-notes">Client-visible notes</label>
+              <textarea id="client-visible-notes" name="clientVisibleNotes">${escapeHtml(client?.clientVisibleNotes || "")}</textarea>
             </div>
             <div class="modal-actions">
               <button class="button button-primary" type="submit">Save Client</button>
@@ -5664,6 +7193,14 @@
     return embedded?.workerName || embedded?.workerDisplayName || "Unknown Worker";
   }
 
+  function getUserName(userId) {
+    const scoped = getScopedData();
+    const user = scoped.users.find(item => item.id === userId)
+      || state.cache.users.find(item => item.id === userId)
+      || state.demoStore.users.find(item => item.id === userId);
+    return user ? fullName(user) || user.email || user.id : "Unknown User";
+  }
+
   function getClientName(clientId) {
     const scoped = getScopedData();
     const client = scoped.clients.find(item => item.id === clientId)
@@ -5735,6 +7272,38 @@
     return getWorkerPunches(workerId, punches).filter(punch => formatDateInput(new Date(punch.timestamp)) === today);
   }
 
+  function getWorkerPunchesForDate(workerId, punches, dateValue) {
+    return getWorkerPunches(workerId, punches).filter(punch => formatDateInput(punch.timestamp) === dateValue);
+  }
+
+  function getTimesheetPunches(timesheet, punches) {
+    if (!timesheet) {
+      return [];
+    }
+    const start = timesheet.payPeriodStart ? new Date(timesheet.payPeriodStart) : null;
+    const end = timesheet.payPeriodEnd ? new Date(timesheet.payPeriodEnd) : null;
+    return getWorkerPunches(timesheet.workerId, punches).filter(punch => {
+      if (timesheet.clientId && punch.clientId && punch.clientId !== timesheet.clientId) {
+        return false;
+      }
+      if (timesheet.siteId && punch.siteId && punch.siteId !== timesheet.siteId) {
+        return false;
+      }
+      const timestamp = new Date(punch.timestamp);
+      if (start && timestamp < start) {
+        return false;
+      }
+      if (end) {
+        const endOfDay = new Date(end);
+        endOfDay.setHours(23, 59, 59, 999);
+        if (timestamp > endOfDay) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
   function calculateHoursFromPunches(punches, now) {
     let hours = 0;
     let clockAnchor = null;
@@ -5775,6 +7344,14 @@
       return "No punches today";
     }
     return todayPunches.map(punch => `${PUNCH_LABELS[punch.action]} ${formatTime(punch.timestamp)}`).join(", ");
+  }
+
+  function buildTimesheetPunchSummaryText(timesheet, punches) {
+    const rows = getTimesheetPunches(timesheet, punches);
+    if (!rows.length) {
+      return "No punches in this pay period";
+    }
+    return rows.map(punch => `${PUNCH_LABELS[punch.action]} ${formatDate(punch.timestamp)} ${formatTime(punch.timestamp)}`).join(", ");
   }
 
   function getUsageStats(scoped, agencyId) {
@@ -5949,11 +7526,14 @@
     `;
   }
 
-  function renderPricingCard(plan, highlight) {
+  function renderPricingCard(plan, highlight, context = "app") {
     const label = plan.price === null ? "Custom" : `$${plan.price}/month`;
-    const action = plan.id === "enterprise"
-      ? `<a class="button button-ghost" href="mailto:sales@portaly-demo.com?subject=Portaly%20Enterprise">Contact Sales</a>`
-      : `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="select-plan" data-plan="${escapeHtml(plan.id)}" type="button">${highlight ? "Selected Plan" : "Choose Plan"}</button>`;
+    const marketingActionLabel = plan.id === "enterprise" ? "Request Enterprise" : "Start with Square";
+    const action = context === "marketing"
+      ? `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">${escapeHtml(marketingActionLabel)}</button>`
+      : (plan.id === "enterprise"
+        ? `<button class="button button-ghost" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">Contact Sales</button>`
+        : `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="select-plan" data-plan="${escapeHtml(plan.id)}" type="button">${highlight ? "Selected Plan" : "Choose Plan"}</button>`);
 
     return `
       <div class="pricing-card ${highlight ? "is-highlighted" : ""}">
@@ -5965,7 +7545,7 @@
         </ul>
         <div class="page-actions" style="margin-top: 18px;">
           ${action}
-          ${plan.id !== "enterprise" ? `<button class="button button-ghost" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>` : ""}
+          ${context === "marketing" ? `<button class="button button-ghost" data-action="go-route" data-route="trial" type="button">Start 14-Day Trial</button>` : (plan.id !== "enterprise" ? `<button class="button button-ghost" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>` : "")}
         </div>
       </div>
     `;
@@ -6001,6 +7581,98 @@
     `;
   }
 
+  function renderComparisonRow(label, legacyValue, portalyValue) {
+    return `
+      <tr>
+        <th>${escapeHtml(label)}</th>
+        <td>${escapeHtml(legacyValue)}</td>
+        <td>${escapeHtml(portalyValue)}</td>
+      </tr>
+    `;
+  }
+
+  function getMarketingPreviewData() {
+    const store = state.demoStore || emptyStore();
+    const previewAgency = (store.agencies || [])[0] || null;
+    const previewAgencyId = previewAgency?.id || "";
+    const filterAgency = rows => (rows || []).filter(row => !row.agencyId || row.agencyId === previewAgencyId);
+    const scoped = {
+      agencies: previewAgency ? [previewAgency] : [],
+      users: filterAgency(store.users),
+      clients: filterAgency(store.clients),
+      sites: filterAgency(store.sites),
+      workers: filterAgency(store.workers),
+      assignments: filterAgency(store.assignments),
+      punches: filterAgency(store.punches),
+      timesheets: filterAgency(store.timesheets),
+      approvals: filterAgency(store.approvals),
+      payrollRuns: filterAgency(store.payrollRuns),
+      subscriptions: filterAgency(store.subscriptions),
+      auditLogs: filterAgency(store.auditLogs),
+      settings: filterAgency(store.settings)
+    };
+    const metrics = buildAgencyDashboardMetrics(scoped);
+    const liveRows = buildLivePunchRows(scoped);
+    const featuredRow = liveRows.find(row => row.baseStatusKey === "clocked-in" || row.baseStatusKey === "on-lunch") || liveRows[0] || null;
+    const featuredWorker = featuredRow ? scoped.workers.find(worker => worker.id === featuredRow.workerId) : scoped.workers[0];
+    const featuredPunchState = featuredWorker ? getWorkerPunchState(featuredWorker.id, scoped) : {
+      key: "not-started",
+      statusKey: "not-started",
+      label: "Not Clocked In",
+      allowed: {
+        clockIn: true,
+        startLunch: false,
+        endLunch: false,
+        clockOut: false
+      }
+    };
+    const featuredClientName = featuredWorker?.assignedClientId ? getClientNameFromStore(featuredWorker.assignedClientId, scoped.clients) : "Client Site";
+    const featuredSiteName = featuredWorker?.assignedSiteId ? getSiteNameFromStore(featuredWorker.assignedSiteId, scoped.sites) : "Warehouse Site";
+    return {
+      agencyName: previewAgency?.name || "Portaly Demo Agency",
+      workerName: featuredWorker ? fullName(featuredWorker) : "Shift worker",
+      clientName: featuredClientName,
+      siteName: featuredSiteName,
+      currentTime: formatDateTime(state.now),
+      statusLabel: featuredPunchState.label || "Ready to Punch",
+      statusKey: featuredPunchState.statusKey || "not-started",
+      statusTone: featuredPunchState.statusKey === "on-lunch" ? "status-warning" : featuredPunchState.statusKey === "clocked-in" ? "status-success" : "status-neutral",
+      allowed: featuredPunchState.allowed,
+      metrics: {
+        clockedInNow: metrics.clockedInNow,
+        activeSites: metrics.activeSites,
+        missingClockOuts: metrics.missingClockOuts,
+        overtimeAlerts: scoped.timesheets.filter(timesheet => Number(timesheet.overtimeHours || 0) > 0).length,
+        payrollReadyHours: sumNumbers(scoped.timesheets
+          .filter(timesheet => ["approved", "submitted"].includes(String(timesheet.status || "").toLowerCase()))
+          .map(timesheet => Number(timesheet.approvedHours || 0)))
+      }
+    };
+  }
+
+  function getMarketingRoiEstimate() {
+    const workers = Number.isFinite(Number(state.roi.workers)) ? Math.max(Number(state.roi.workers), 0) : 0;
+    const adminHours = Number.isFinite(Number(state.roi.adminHours)) ? Math.max(Number(state.roi.adminHours), 0) : 0;
+    const disputes = Number.isFinite(Number(state.roi.disputes)) ? Math.max(Number(state.roi.disputes), 0) : 0;
+    const monthlyHoursSaved = (adminHours * 0.62 * 4.33) + (disputes * 0.75) + (workers * 0.08);
+    const monthlyLaborSavings = monthlyHoursSaved * 31;
+    return {
+      monthlyHoursSaved,
+      monthlyLaborSavings,
+      disputesReduced: Math.max(Math.round(disputes * 0.5), disputes > 0 ? 1 : 0)
+    };
+  }
+
+  function getClientNameFromStore(clientId, clients) {
+    const client = (clients || []).find(item => item.id === clientId);
+    return client ? client.name : "Unknown Client";
+  }
+
+  function getSiteNameFromStore(siteId, sites) {
+    const site = (sites || []).find(item => item.id === siteId);
+    return site ? site.name : "Unknown Site";
+  }
+
   function renderDemoRoleCard(title, copy, role) {
     return `
       <div class="auth-card">
@@ -6019,6 +7691,70 @@
       <div class="empty-state">
         <h3>${escapeHtml(title)}</h3>
         <p>${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderApprovalStatusCell(approval, timesheet, scoped) {
+    const hasEditedPunches = !!timesheet && getTimesheetPunches(timesheet, scoped.punches).some(punch => punch.edited);
+    const showClientEdited = approval?.clientEdited || timesheet?.clientEdited || hasEditedPunches;
+    return `
+      <div class="stack-sm">
+        ${renderInlineStatus(approval?.status || timesheet?.status || "pending")}
+        ${showClientEdited ? `<span class="status-badge status-warning">Client Edited</span>` : ""}
+        ${hasEditedPunches ? `<span class="status-badge status-neutral">Edited Punch</span>` : ""}
+      </div>
+    `;
+  }
+
+  function shouldShowEmptyWorkspaceOnboarding(scoped) {
+    return !scoped.clients.length && !scoped.sites.length && !scoped.workers.length && !scoped.assignments.length;
+  }
+
+  function renderEmptyWorkspaceOnboarding() {
+    return `
+      <div class="surface-card">
+        <div class="card-top">
+          <div>
+            <p class="eyebrow">Get Started</p>
+            <h2 class="page-heading">This workspace is ready for your first live records</h2>
+          </div>
+        </div>
+        <p class="section-copy">Your sample records are gone. Use these steps to start building the agency workspace with real clients, sites, and workers.</p>
+        <div class="feature-grid" style="margin-top: 18px;">
+          <div class="feature-card">
+            <p class="eyebrow">Step 1</p>
+            <h3>Add first client</h3>
+            <p>Create the company record that workers, sites, approvals, and payroll will tie back to.</p>
+            <div class="page-actions" style="margin-top: 16px;">
+              <button class="button button-primary" data-action="open-client-form" type="button">Add Client</button>
+            </div>
+          </div>
+          <div class="feature-card">
+            <p class="eyebrow">Step 2</p>
+            <h3>Add first site</h3>
+            <p>Create the warehouse or job location so Portaly can route punches and approvals correctly.</p>
+            <div class="page-actions" style="margin-top: 16px;">
+              <button class="button button-secondary" data-action="open-site-form" type="button">Add Site</button>
+            </div>
+          </div>
+          <div class="feature-card">
+            <p class="eyebrow">Step 3</p>
+            <h3>Add first worker</h3>
+            <p>Create a worker record so you can assign them, track time, and prepare payroll.</p>
+            <div class="page-actions" style="margin-top: 16px;">
+              <button class="button button-secondary" data-action="open-worker-form" type="button">Add Worker</button>
+            </div>
+          </div>
+          <div class="feature-card">
+            <p class="eyebrow">Step 4</p>
+            <h3>Create QR code</h3>
+            <p>Generate a worker or site punch link once the first live record is ready.</p>
+            <div class="page-actions" style="margin-top: 16px;">
+              <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Create QR Code</button>
+            </div>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -6276,13 +8012,13 @@
     const workers = [
       buildWorker("worker_maria_ortiz", "agency_harbor", "Maria", "Ortiz", 18.5, "client_northstar", "site_dallas_dock_1", "demo_worker"),
       buildWorker("worker_james_carter", "agency_harbor", "James", "Carter", 19.25, "client_northstar", "site_dallas_dock_2"),
-      buildWorker("worker_alana_nguyen", "agency_harbor", "Alana", "Nguyen", 20.0, "client_apex", "site_fort_worth_cold_hub"),
-      buildWorker("worker_eric_johnson", "agency_harbor", "Eric", "Johnson", 18.0, "client_apex", "site_fort_worth_cold_hub"),
+      { ...buildWorker("worker_alana_nguyen", "agency_harbor", "Alana", "Nguyen", 20.0, "client_apex", "site_fort_worth_cold_hub"), workerNoteType: "best", notes: "A joy to work with. Great attendance, helps train new temps, and clients ask for her by name." },
+      { ...buildWorker("worker_eric_johnson", "agency_harbor", "Eric", "Johnson", 18.0, "client_apex", "site_fort_worth_cold_hub"), workerNoteType: "terminated", notes: "Do not return to this site.", terminationReason: "Client requested removal after repeated no-call/no-show issues and missed lunch documentation.", status: "inactive" },
       buildWorker("worker_tasha_brown", "agency_harbor", "Tasha", "Brown", 17.75, "client_northstar", "site_dallas_dock_1"),
       buildWorker("worker_leo_martinez", "agency_harbor", "Leo", "Martinez", 19.5, "client_northstar", "site_dallas_dock_2"),
       buildWorker("worker_nina_patel", "agency_summit", "Nina", "Patel", 21.0, "client_blueline", "site_arlington_crossdock"),
       buildWorker("worker_andre_lewis", "agency_summit", "Andre", "Lewis", 20.25, "client_blueline", "site_arlington_crossdock"),
-      buildWorker("worker_sofia_ramirez", "agency_summit", "Sofia", "Ramirez", 22.0, "client_blueline", "site_arlington_crossdock"),
+      { ...buildWorker("worker_sofia_ramirez", "agency_summit", "Sofia", "Ramirez", 22.0, "client_blueline", "site_arlington_crossdock"), workerNoteType: "best", notes: "Best to work with on first shift. Reliable, fast learner, and requested by site supervisors." },
       buildWorker("worker_omar_hassan", "agency_summit", "Omar", "Hassan", 21.5, "client_blueline", "site_arlington_crossdock")
     ];
 
@@ -6618,7 +8354,10 @@
       status: "active",
       assignedClientId: clientId,
       assignedSiteId: siteId,
-      userId
+      userId,
+      workerNoteType: "",
+      notes: "",
+      terminationReason: ""
     };
   }
 
@@ -6654,7 +8393,14 @@
       approvedBy: "",
       approvedAt: "",
       adminNotes,
-      payRate
+      payRate,
+      clientEdited: false,
+      clientEditedBy: "",
+      clientEditedAt: "",
+      clientEditReason: "",
+      originalApprovedHours: approvedHours,
+      originalRegularHours: regularHours,
+      originalOvertimeHours: overtimeHours
     };
   }
 
@@ -6670,7 +8416,16 @@
       submittedAt: addDays(new Date(), -1).toISOString(),
       reviewedBy: "",
       reviewedAt: "",
-      note
+      note,
+      clientEdited: false,
+      clientEditedBy: "",
+      clientEditedAt: "",
+      clientEditReason: "",
+      managerName: "",
+      managerEmail: "",
+      signatureDataUrl: "",
+      signedAt: "",
+      approvalNote: ""
     };
   }
 

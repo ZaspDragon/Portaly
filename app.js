@@ -61,47 +61,70 @@
   };
 
   const PLAN_DEFINITIONS = {
-    starter: {
-      id: "starter",
-      name: "Starter",
-      label: "Starter",
-      price: 99,
-      workerLimit: 25,
-      siteLimit: 1,
-      stripePriceId: "SQUARE_PRICE_STARTER",
-      features: ["QR punches", "Basic payroll export", "Up to 25 workers", "1 client site"]
-    },
-    agency: {
-      id: "agency",
-      name: "Agency",
-      label: "Agency",
-      price: 249,
-      workerLimit: 100,
-      siteLimit: 5,
-      stripePriceId: "SQUARE_PRICE_AGENCY",
-      features: ["Client approvals", "Payroll exports", "Exception alerts", "Up to 100 workers"]
-    },
-    growth: {
-      id: "growth",
-      name: "Growth",
-      label: "Growth",
-      price: 499,
-      workerLimit: null,
-      siteLimit: null,
-      stripePriceId: "SQUARE_PRICE_GROWTH",
-      features: ["Unlimited workers", "Unlimited clients and sites", "White-label branding", "Advanced reports"]
-    },
-    enterprise: {
-      id: "enterprise",
-      name: "Enterprise",
-      label: "Enterprise",
-      price: null,
-      workerLimit: null,
-      siteLimit: null,
-      stripePriceId: "CUSTOM",
-      features: ["Multi-branch agencies", "Custom integrations", "Dedicated onboarding", "Contact sales"]
-    }
-  };
+  starter: {
+    id: "starter",
+    name: "Starter",
+    label: "Starter",
+    price: 99,
+    workerLimit: 25,
+    siteLimit: 1,
+    squarePaymentLink: "https://square.link/u/mfu6eun7",
+    features: [
+      "QR punches",
+      "Basic payroll export",
+      "Up to 25 workers",
+      "1 client site"
+    ]
+  },
+
+  agency: {
+    id: "agency",
+    name: "Agency",
+    label: "Agency",
+    price: 249,
+    workerLimit: 100,
+    siteLimit: 5,
+    squarePaymentLink: "https://square.link/u/ojz2a1Au",
+    features: [
+      "Client approvals",
+      "Payroll exports",
+      "Exception alerts",
+      "Up to 100 workers"
+    ]
+  },
+
+  growth: {
+    id: "growth",
+    name: "Growth",
+    label: "Growth",
+    price: 499,
+    workerLimit: null,
+    siteLimit: null,
+    squarePaymentLink: "https://square.link/u/Iy99LyYg",
+    features: [
+      "Unlimited workers",
+      "Unlimited clients and sites",
+      "White-label branding",
+      "Advanced reports"
+    ]
+  },
+
+  enterprise: {
+    id: "enterprise",
+    name: "Enterprise",
+    label: "Enterprise",
+    price: null,
+    workerLimit: null,
+    siteLimit: null,
+    squarePaymentLink: "https://square.link/u/96br6x5W",
+    features: [
+      "Multi-branch agencies",
+      "Custom integrations",
+      "Dedicated onboarding",
+      "Contact sales"
+    ]
+  }
+};
   function getBillingConfig() {
   return window.PORTALY_BILLING_CONFIG || null;
 }

@@ -4,27 +4,44 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#1f6fff" />
+
   <meta
     name="description"
     content="Portaly is a QR timeclock, approvals, payroll, and margin platform built for staffing agencies."
   />
+
   <title>Portaly | Staffing Agency Operating System</title>
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
   <link
     href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
     rel="stylesheet"
   />
+
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body data-layout="public">
   <div id="app"></div>
-  <div class="toast-root" id="toastRoot" aria-live="polite" aria-atomic="true"></div>
 
+  <div
+    class="toast-root"
+    id="toastRoot"
+    aria-live="polite"
+    aria-atomic="true"
+  ></div>
+
+  <!-- Frontend-safe config files -->
   <script src="firebase-config.js"></script>
+  <script src="billing-config.js"></script>
+
+  <!-- Firebase browser module setup -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
     import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-analytics.js";
+
     import {
       getAuth,
       onAuthStateChanged,
@@ -33,6 +50,7 @@
       sendPasswordResetEmail,
       signOut
     } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+
     import {
       getFirestore,
       collection,
@@ -70,31 +88,43 @@
 
     function applyQueryState(sourceRef, state) {
       let current = sourceRef;
+
       state.whereClauses.forEach(args => {
         current = query(current, where(...args));
       });
+
       state.orderClauses.forEach(args => {
         current = query(current, orderBy(...args));
       });
+
       if (state.limitValue !== null) {
         current = query(current, limit(state.limitValue));
       }
+
       return current;
     }
 
     function createDocumentRef(db, collectionName, id) {
       return {
         id,
+        collectionName,
+        _collectionName: collectionName,
+        __collectionName: collectionName,
+        path: `${collectionName}/${id}`,
+
         async get() {
           const snapshot = await getDoc(doc(db, collectionName, id));
           return createSnapshotAdapter(snapshot);
         },
+
         async set(data, options = {}) {
           await setDoc(doc(db, collectionName, id), data, options);
         },
+
         async update(data) {
           await updateDoc(doc(db, collectionName, id), data);
         },
+
         async delete() {
           await deleteDoc(doc(db, collectionName, id));
         }
@@ -109,31 +139,38 @@
       };
 
       return {
+        collectionName,
+
         doc(id) {
           return createDocumentRef(db, collectionName, id);
         },
+
         where(field, operator, value) {
           return createCollectionRef(db, collectionName, {
             ...state,
             whereClauses: [...state.whereClauses, [field, operator, value]]
           });
         },
+
         orderBy(field, direction = "asc") {
           return createCollectionRef(db, collectionName, {
             ...state,
             orderClauses: [...state.orderClauses, [field, direction]]
           });
         },
+
         limit(value) {
           return createCollectionRef(db, collectionName, {
             ...state,
             limitValue: value
           });
         },
+
         async get() {
           const ref = applyQueryState(collection(db, collectionName), state);
           return createQuerySnapshotAdapter(await getDocs(ref));
         },
+
         async add(data) {
           const response = await addDoc(collection(db, collectionName), data);
           return { id: response.id };
@@ -143,32 +180,47 @@
 
     function createBatchAdapter(db) {
       const batch = writeBatch(db);
+
+      function getCollectionName(targetRef) {
+        if (targetRef.collectionName) return targetRef.collectionName;
+        if (targetRef._collectionName) return targetRef._collectionName;
+        if (targetRef.__collectionName) return targetRef.__collectionName;
+        if (targetRef.path) return targetRef.path.split("/")[0];
+
+        throw new Error("Missing collection name for batch operation.");
+      }
+
       return {
         set(targetRef, data, options = {}) {
-          batch.set(doc(db, targetRef.collectionName || targetRef._collectionName || targetRef.__collectionName || targetRef.path.split("/")[0], targetRef.id), data, options);
+          batch.set(
+            doc(db, getCollectionName(targetRef), targetRef.id),
+            data,
+            options
+          );
         },
+
         update(targetRef, data) {
-          batch.update(doc(db, targetRef.collectionName || targetRef._collectionName || targetRef.__collectionName || targetRef.path.split("/")[0], targetRef.id), data);
+          batch.update(
+            doc(db, getCollectionName(targetRef), targetRef.id),
+            data
+          );
         },
+
         delete(targetRef) {
-          batch.delete(doc(db, targetRef.collectionName || targetRef._collectionName || targetRef.__collectionName || targetRef.path.split("/")[0], targetRef.id));
+          batch.delete(
+            doc(db, getCollectionName(targetRef), targetRef.id)
+          );
         },
+
         commit() {
           return batch.commit();
         }
       };
     }
 
-    function attachCollectionName(target, collectionName) {
-      target.collectionName = collectionName;
-      target._collectionName = collectionName;
-      target.__collectionName = collectionName;
-      target.path = `${collectionName}/${target.id}`;
-      return target;
-    }
-
     try {
       const config = window.PORTALY_FIREBASE_CONFIG || {};
+
       const firebaseConfig = config.firebaseConfig || {
         apiKey: config.apiKey,
         authDomain: config.authDomain,
@@ -184,13 +236,18 @@
           ready: false,
           disabled: true,
           error: "",
-          config
+          config,
+          waitForReady() {
+            return Promise.resolve(window.PortalyFirebase);
+          }
         };
+
         window.dispatchEvent(new Event("portaly-firebase-ready"));
       } else {
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
+
         let analytics = null;
 
         try {
@@ -201,18 +258,23 @@
 
         const authBridge = {
           raw: auth,
+
           onAuthStateChanged(callback) {
             return onAuthStateChanged(auth, callback);
           },
+
           signInWithEmailAndPassword(email, password) {
             return signInWithEmailAndPassword(auth, email, password);
           },
+
           createUserWithEmailAndPassword(email, password) {
             return createUserWithEmailAndPassword(auth, email, password);
           },
+
           sendPasswordResetEmail(email) {
             return sendPasswordResetEmail(auth, email);
           },
+
           signOut() {
             return signOut(auth);
           }
@@ -226,12 +288,11 @@
 
         const dbBridge = {
           raw: db,
+
           collection(collectionName) {
-            const ref = createCollectionRef(db, collectionName);
-            const originalDoc = ref.doc;
-            ref.doc = id => attachCollectionName(originalDoc(id), collectionName);
-            return ref;
+            return createCollectionRef(db, collectionName);
           },
+
           batch() {
             return createBatchAdapter(db);
           }
@@ -242,10 +303,12 @@
           disabled: false,
           error: "",
           config,
+
           app,
           analytics,
           auth: authBridge,
           db: dbBridge,
+
           initializeApp,
           getAnalytics,
           getAuth,
@@ -254,6 +317,7 @@
           createUserWithEmailAndPassword,
           sendPasswordResetEmail,
           signOut,
+
           getFirestore,
           collection,
           doc,
@@ -266,7 +330,10 @@
           query,
           where,
           orderBy,
+          limit,
+          writeBatch,
           serverTimestamp,
+
           waitForReady() {
             return Promise.resolve(window.PortalyFirebase);
           }
@@ -276,18 +343,22 @@
       }
     } catch (error) {
       console.error(error);
+
       window.PortalyFirebase = {
         ready: false,
         disabled: false,
         error: error.message || "Firebase failed to initialize.",
-        config: window.PORTALY_FIREBASE_CONFIG || {}
+        config: window.PORTALY_FIREBASE_CONFIG || {},
+        waitForReady() {
+          return Promise.resolve(window.PortalyFirebase);
+        }
       };
+
       window.dispatchEvent(new Event("portaly-firebase-ready"));
     }
   </script>
- <script src="firebase-config.js"></script>
-<script src="billing-config.js"></script>
-<script src="app.js"></script>
+
+  <!-- Main app must load after Firebase and billing config -->
+  <script src="app.js"></script>
 </body>
 </html>
-

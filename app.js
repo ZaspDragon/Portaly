@@ -194,7 +194,7 @@ function getPlanDefinition(planId) {
       auth: null,
       db: null,
       api: null,
-      stripe: null,
+      square: null,
       error: ""
     },
     session: {
@@ -334,8 +334,8 @@ function getPlanDefinition(planId) {
       state.firebase.ready = !!bridge.ready;
       state.firebase.error = bridge.error || "";
 
-      if (config.stripePublishableKey && window.Stripe) {
-        state.firebase.stripe = window.Stripe(config.stripePublishableKey);
+      if (config.squarePublishableKey && window.Square) {
+        state.firebase.square = window.Square(config.squarePublishableKey);
       }
     } catch (error) {
       console.error(error);
@@ -386,8 +386,8 @@ function getPlanDefinition(planId) {
       trialDays: Number(config.trialDays || 14),
       appUrl: config.appUrl || DEFAULT_APP_URL,
       functionsBaseUrl: config.functionsBaseUrl || "",
-      stripePublishableKey: config.stripePublishableKey || "",
-      stripePriceIds: config.stripePriceIds || {}
+      squarePublishableKey: config.squarePublishableKey || "",
+      squarePriceIds: config.squarePriceIds || {}
     };
 
     if (!normalized.firebaseConfig) {
@@ -1497,8 +1497,8 @@ function getPlanDefinition(planId) {
       subscriptionStatus: "trialing",
       trialStart: trialStart.toISOString(),
       trialEnd: trialEnd.toISOString(),
-      stripeCustomerId: "",
-      stripeSubscriptionId: "",
+      squareCustomerId: "",
+      squareSubscriptionId: "",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       settings: buildAgencySettings({
@@ -1539,8 +1539,8 @@ function getPlanDefinition(planId) {
     const subscriptionDoc = {
       id: createId("subscription"),
       agencyId,
-      stripeCustomerId: "",
-      stripeSubscriptionId: "",
+      squareCustomerId: "",
+      squareSubscriptionId: "",
       planId: selectedPlan,
       status: "trialing",
       currentPeriodStart: "",
@@ -2865,7 +2865,7 @@ function getPlanDefinition(planId) {
     }
     state.selectedPlan = planId;
     if (!state.firebase.config.functionsBaseUrl) {
-      handleBillingPlaceholder("Stripe backend is not connected yet.");
+      handleBillingPlaceholder("Square backend is not connected yet.");
       if (state.session.mode === "demo") {
         const agency = getCurrentAgency();
         const subscription = getCurrentSubscription();
@@ -3195,7 +3195,7 @@ async function openBillingPortal() {
             <div class="feature-grid">
               ${renderFaq("Can I keep a public demo open?", "Yes. Demo Mode runs on sample data in localStorage and never touches Firestore or billing.")}
               ${renderFaq("Can workers log in directly?", "Yes. Worker accounts go straight to the punch screen and only see their own punch history.")}
-              ${renderFaq("How do subscriptions work?", "Real agencies start with a 14-day trial, then move into Stripe-managed monthly billing.")}
+              ${renderFaq("How do subscriptions work?", "Real agencies start with a 14-day trial, then move into Square-managed monthly billing.")}
               ${renderFaq("Will this still deploy on GitHub Pages?", "Yes. The frontend stays plain HTML, CSS, and JavaScript with no npm or build step required.")}
             </div>
           </div>
@@ -3298,12 +3298,12 @@ async function openBillingPortal() {
             <div class="support-card">
               <p class="eyebrow">Two Data Modes</p>
               <h3>Demo Mode stays local. Cloud Mode syncs.</h3>
-              <p>Demo Mode uses localStorage only and does not create real accounts or billing records. Cloud Mode uses Firebase Authentication, Firestore, and Stripe-ready billing.</p>
+              <p>Demo Mode uses localStorage only and does not create real accounts or billing records. Cloud Mode uses Firebase Authentication, Firestore, and Square-ready billing.</p>
             </div>
             <div class="support-card">
               <p class="eyebrow">Need a quick walkthrough?</p>
               <h3>Use the public demo first</h3>
-              <p>Try the owner, client manager, and worker flows before you connect Firebase or Stripe.</p>
+              <p>Try the owner, client manager, and worker flows before you connect Firebase or Square.</p>
               <div class="page-actions" style="margin-top: 16px;">
                 <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
                 <button class="button button-ghost" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
@@ -3441,8 +3441,8 @@ async function openBillingPortal() {
             </div>
             <div class="support-card">
               <p class="eyebrow">Billing</p>
-              <h3>Stripe starts after the trial</h3>
-              <p>Portaly only uses Stripe secret keys inside Firebase Functions or your backend. The frontend never stores secret billing credentials.</p>
+              <h3>Square starts after the trial</h3>
+              <p>Portaly only uses Square secret keys inside Firebase Functions or your backend. The frontend never stores secret billing credentials.</p>
             </div>
           </div>
         </div>
@@ -4588,7 +4588,7 @@ async function openBillingPortal() {
         <div class="metrics-grid">
           ${renderMetricCard("Current Plan", plan.label, "Monthly plan tier", "PL")}
           ${renderMetricCard("Trial Days Remaining", Math.max(getTrialDaysRemaining(), 0), "Days left before billing starts", "TD")}
-          ${renderMetricCard("Subscription Status", formatStatusLabel(subscription?.status || agency?.subscriptionStatus || "trialing"), "Stripe and Firestore status", "SS")}
+          ${renderMetricCard("Subscription Status", formatStatusLabel(subscription?.status || agency?.subscriptionStatus || "trialing"), "Square and Firestore status", "SS")}
           ${renderMetricCard("Worker / Site Usage", `${usage.activeWorkers}${plan.workerLimit ? ` / ${plan.workerLimit}` : ""} workers`, `${usage.activeSites}${plan.siteLimit ? ` / ${plan.siteLimit}` : ""} sites`, "US")}
         </div>
 
@@ -4605,7 +4605,7 @@ async function openBillingPortal() {
           <p class="eyebrow">Billing</p>
           <h3>${escapeHtml(plan.label)} plan</h3>
           <p class="helper-copy">Next billing date placeholder: ${escapeHtml(formatDate(nextBillingDate))}</p>
-          ${!state.firebase.config.functionsBaseUrl ? `<p class="helper-copy">Stripe backend is not connected yet.</p>` : ""}
+          ${!state.firebase.config.functionsBaseUrl ? `<p class="helper-copy">Square backend is not connected yet.</p>` : ""}
           <div class="page-actions" style="margin-top: 18px;">
             <button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">Start Paid Subscription</button>
             <button class="button button-secondary" data-action="manage-billing" type="button">Manage Billing</button>
@@ -5441,7 +5441,7 @@ async function openBillingPortal() {
         <div class="notice-card">
           <div>
             <strong>Cloud Mode: data syncs across devices</strong>
-            <p>Real users, live agency records, and subscription status now come from Firebase and Stripe-ready backend endpoints.</p>
+            <p>Real users, live agency records, and subscription status now come from Firebase and Square-ready backend endpoints.</p>
           </div>
         </div>
       `;
@@ -6313,8 +6313,8 @@ async function openBillingPortal() {
         subscriptionStatus: "trialing",
         trialStart: addDays(now, -4).toISOString(),
         trialEnd: addDays(now, 10).toISOString(),
-        stripeCustomerId: "",
-        stripeSubscriptionId: "",
+        squareCustomerId: "",
+        squareSubscriptionId: "",
         createdAt: addDays(now, -22).toISOString(),
         updatedAt: now.toISOString(),
         settings: buildAgencySettings({
@@ -6335,8 +6335,8 @@ async function openBillingPortal() {
         subscriptionStatus: "active",
         trialStart: addDays(now, -90).toISOString(),
         trialEnd: addDays(now, -76).toISOString(),
-        stripeCustomerId: "cus_demo_summit",
-        stripeSubscriptionId: "sub_demo_summit",
+        squareCustomerId: "cus_demo_summit",
+        squareSubscriptionId: "sub_demo_summit",
         createdAt: addDays(now, -120).toISOString(),
         updatedAt: addDays(now, -2).toISOString(),
         settings: buildAgencySettings({
@@ -6475,8 +6475,8 @@ async function openBillingPortal() {
       {
         id: "subscription_harbor",
         agencyId: "agency_harbor",
-        stripeCustomerId: "",
-        stripeSubscriptionId: "",
+        squareCustomerId: "",
+        squareSubscriptionId: "",
         planId: "agency",
         status: "trialing",
         currentPeriodStart: "",
@@ -6489,8 +6489,8 @@ async function openBillingPortal() {
       {
         id: "subscription_summit",
         agencyId: "agency_summit",
-        stripeCustomerId: "cus_demo_summit",
-        stripeSubscriptionId: "sub_demo_summit",
+        squareCustomerId: "cus_demo_summit",
+        squareSubscriptionId: "sub_demo_summit",
         planId: "growth",
         status: "active",
         currentPeriodStart: addDays(now, -14).toISOString(),

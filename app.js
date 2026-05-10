@@ -2929,48 +2929,34 @@ function getPlanDefinition(planId) {
   }
 
   async function startBillingCheckout(planId) {
-    const plan = getPlanDefinition(planId);
-    if (!plan || plan.id === "enterprise") {
-      window.location.href = "mailto:sales@portaly-demo.com?subject=Portaly%20Enterprise%20Plan";
-      return;
-    }
+  const plan = getPlanDefinition(planId);
 
-    if (state.session.mode !== "cloud") {
-      pushToast("Billing is disabled in Demo Mode. Open Cloud Mode to test real subscriptions.", "warning");
-      return;
-    }
-
-    if (!state.firebase.config.functionsBaseUrl) {
-      handleBillingPlaceholder("Stripe backend is not connected yet.");
-      return;
-    }
-
-    const response = await authenticatedPost("/createCheckoutSession", {
-      planId,
-      trialDays: getTrialDaysRemaining()
-    });
-
-    if (response.url) {
-      window.location.href = response.url;
-      return;
-    }
-
-    if (response.checkoutUrl) {
-      window.location.href = response.checkoutUrl;
-      return;
-    }
-
-    throw new Error("Checkout session did not return a URL.");
+  if (!plan) {
+    throw new Error("Plan not found.");
   }
 
-  async function openBillingPortal() {
-    if (state.session.mode !== "cloud") {
-      pushToast("Billing is disabled in Demo Mode.", "warning");
-      return;
-    }
+  if (!plan.squarePaymentLink) {
+    throw new Error("Square payment link missing.");
+  }
+
+  localStorage.setItem("portaly_selected_plan", plan.id);
+  localStorage.setItem("portaly_selected_plan_name", plan.name);
+  localStorage.setItem(
+    "portaly_selected_plan_price",
+    plan.price ? `$${plan.price}/month` : "Custom"
+  );
+  localStorage.setItem("portaly_selected_plan_link", plan.squarePaymentLink);
+
+  window.location.href = plan.squarePaymentLink;
+}
+
+async function openBillingPortal() {
+  pushToast("Square billing is connected through secure Square payment links.", "success");
+  navigate("billing");
+}
 
     if (!state.firebase.config.functionsBaseUrl) {
-      handleBillingPlaceholder("Stripe backend is not connected yet.");
+      handleBillingPlaceholder("Square backend is not connected yet.");
       return;
     }
 

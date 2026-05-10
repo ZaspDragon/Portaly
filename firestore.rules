@@ -93,12 +93,51 @@ service cloud.firestore {
       return isWorker() && workerId() == targetWorkerId;
     }
 
+    function signupOwnerCreate(targetAgencyId) {
+      return signedIn()
+        && targetAgencyId is string
+        && existsAfter(/databases/$(database)/documents/agencies/$(targetAgencyId))
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/agencies/$(targetAgencyId)).data.ownerUserId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'agencyOwner'
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.agencyId == targetAgencyId;
+    }
+
     function clientApprovalFieldSet() {
       return request.resource.data.diff(resource.data).changedKeys().hasOnly([
         'status',
         'approvedBy',
         'approvedAt',
         'adminNotes',
+        'clientNotes',
+        'approvedHours',
+        'regularHours',
+        'overtimeHours',
+        'clientEdited',
+        'clientEditedBy',
+        'clientEditedAt',
+        'clientEditReason',
+        'originalApprovedHours',
+        'originalRegularHours',
+        'originalOvertimeHours',
+        'updatedAt'
+      ]);
+    }
+
+    function clientPunchFieldSet() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        'timestamp',
+        'action',
+        'notes',
+        'edited',
+        'editedBy',
+        'editedByRole',
+        'editedAt',
+        'editReason',
+        'originalTimestamp',
+        'correctedTimestamp',
+        'originalAction',
+        'correctedAction',
         'updatedAt'
       ]);
     }
@@ -109,6 +148,15 @@ service cloud.firestore {
         'reviewedBy',
         'reviewedAt',
         'note',
+        'clientEdited',
+        'clientEditedBy',
+        'clientEditedAt',
+        'clientEditReason',
+        'managerName',
+        'managerEmail',
+        'signatureDataUrl',
+        'signedAt',
+        'approvalNote',
         'updatedAt'
       ]);
     }
@@ -118,7 +166,9 @@ service cloud.firestore {
         isPlatformOwner()
         || ((isAgencyStaff() || isWorker()) && agencyId() == agencyDocId)
       );
-      allow create: if signedIn() && request.resource.data.ownerUserId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.id == agencyDocId
+        && request.resource.data.ownerUserId == request.auth.uid;
       allow update: if signedIn() && (
         isPlatformOwner()
         || (isAgencyStaff() && agencyId() == agencyDocId)
@@ -137,10 +187,15 @@ service cloud.firestore {
         isPlatformOwner()
         || (
           request.auth.uid == userIdDoc
+          && request.resource.data.id == request.auth.uid
           && request.resource.data.role == 'agencyOwner'
           && request.resource.data.agencyId is string
           && existsAfter(/databases/$(database)/documents/agencies/$(request.resource.data.agencyId))
           && getAfter(/databases/$(database)/documents/agencies/$(request.resource.data.agencyId)).data.ownerUserId == request.auth.uid
+        )
+        || (
+          isAgencyOwner()
+          && request.resource.data.agencyId == agencyId()
         )
       );
 
@@ -177,6 +232,7 @@ service cloud.firestore {
       allow read: if signedIn() && (
         isPlatformOwner()
         || (isAgencyStaff() && sameAgencyResource())
+        || (isClientManager() && sameAgencyResource() && (assignedClient(resource.data.assignedClientId) || assignedSite(resource.data.assignedSiteId)))
         || (workerOwnsRecord(workerDocId) && sameAgencyResource())
       );
       allow create, update, delete: if signedIn() && (isPlatformOwner() || (isAgencyStaff() && sameAgencyRequest()));
@@ -200,6 +256,14 @@ service cloud.firestore {
       allow create: if signedIn() && (
         isPlatformOwner()
         || (isAgencyStaff() && sameAgencyRequest())
+        || (
+          isClientManager()
+          && sameAgencyRequest()
+          && (assignedClient(request.resource.data.clientId) || assignedSite(request.resource.data.siteId))
+          && request.resource.data.edited == true
+          && request.resource.data.editedBy == request.auth.uid
+          && request.resource.data.editedByRole == 'clientManager'
+        )
         || (
           isWorker()
           && sameAgencyRequest()
@@ -307,6 +371,10 @@ service cloud.firestore {
       allow create: if signedIn() && (
         isPlatformOwner()
         || (isAgencyOwner() && sameAgencyRequest())
+        || (
+          request.resource.data.id == subscriptionId
+          && signupOwnerCreate(request.resource.data.agencyId)
+        )
       );
       allow update: if signedIn() && (
         isPlatformOwner()
@@ -320,7 +388,15 @@ service cloud.firestore {
         isPlatformOwner()
         || sameAgencyResource()
       );
-      allow create, update, delete: if signedIn() && (
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+        || (
+          request.resource.data.id == settingsId
+          && signupOwnerCreate(request.resource.data.agencyId)
+        )
+      );
+      allow update, delete: if signedIn() && (
         isPlatformOwner()
         || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
       );

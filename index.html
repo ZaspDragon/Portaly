@@ -33,11 +33,9 @@
     aria-atomic="true"
   ></div>
 
-  <!-- Frontend-safe config files -->
   <script src="firebase-config.js"></script>
   <script src="billing-config.js"></script>
 
-  <!-- Firebase browser module setup -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
     import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-analytics.js";
@@ -358,7 +356,6 @@
     }
   </script>
 
-  <!-- Main app must load after Firebase and billing config -->
   <script src="app.js"></script>
 </body>
 </html>

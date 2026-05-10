@@ -7212,4 +7212,60 @@ window.getBillingPlans = getBillingPlans;
 window.subscribeWithSquare = subscribeWithSquare;
 window.renderPricingCards = renderPricingCards;
 window.renderBillingView = renderBillingView;
+/* =========================================================
+   FINAL PORTALY SQUARE BILLING OVERRIDE
+   Paste this right BEFORE the final })();
+   ========================================================= */
+
+function getBillingConfig() {
+  return window.PORTALY_BILLING_CONFIG || null;
+}
+
+function getBillingPlans() {
+  const billing = getBillingConfig();
+
+  if (billing && billing.plans) {
+    return billing.plans;
+  }
+
+  return PLAN_DEFINITIONS;
+}
+
+function getPlanDefinition(planId) {
+  const plans = getBillingPlans();
+  return plans[planId] || PLAN_DEFINITIONS[planId] || null;
+}
+
+async function startBillingCheckout(planId) {
+  const plan = getPlanDefinition(planId);
+
+  if (!plan) {
+    throw new Error("Plan not found.");
+  }
+
+  if (!plan.squarePaymentLink) {
+    throw new Error("Square payment link missing.");
+  }
+
+  localStorage.setItem("portaly_selected_plan", plan.id);
+  localStorage.setItem("portaly_selected_plan_name", plan.name);
+  localStorage.setItem(
+    "portaly_selected_plan_price",
+    plan.price ? `$${plan.price}/month` : "Custom"
+  );
+  localStorage.setItem("portaly_selected_plan_link", plan.squarePaymentLink);
+
+  window.location.href = plan.squarePaymentLink;
+}
+
+async function openBillingPortal() {
+  pushToast(
+    "Square billing is connected through secure Square payment links.",
+    "success"
+  );
+
+  navigate("billing");
+}
+
+window.subscribeWithSquare = startBillingCheckout;
 })();

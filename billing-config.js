@@ -5,16 +5,9 @@
 window.PORTALY_BILLING_CONFIG = {
   provider: "square",
   environment: "sandbox",
-
   appUrl: "https://zaspdragon.github.io/Portaly/",
-
-  // This is safe for frontend use.
   squareApplicationId: "sandbox-sq0idb-gGTHXygVt5FwfcJXSeY69A",
-
-  // Get this from Square Developer Dashboard → Locations.
   squareLocationId: "L4QVEFPMEY582",
-
-  // Later this will be your Firebase Functions URL.
   functionsBaseUrl: "",
 
   plans: {
@@ -27,7 +20,6 @@ window.PORTALY_BILLING_CONFIG = {
       siteLimit: 1,
       squarePaymentLink: "https://square.link/u/mfu6eun7"
     },
-
     agency: {
       id: "agency",
       name: "Agency",
@@ -37,7 +29,6 @@ window.PORTALY_BILLING_CONFIG = {
       siteLimit: 5,
       squarePaymentLink: "https://square.link/u/ojz2a1Au"
     },
-
     growth: {
       id: "growth",
       name: "Growth",
@@ -47,7 +38,6 @@ window.PORTALY_BILLING_CONFIG = {
       siteLimit: null,
       squarePaymentLink: "https://square.link/u/Iy99LyYg"
     },
-
     enterprise: {
       id: "enterprise",
       name: "Enterprise",

@@ -15,7 +15,6 @@ window.PORTALY_FIREBASE_CONFIG = {
   trialDays: 14,
   appUrl: "https://zaspdragon.github.io/Portaly/",
   functionsBaseUrl: "",
-
   billingProvider: "square",
 
   apiKey: "AIzaSyDfF4mmLeI4IbOl3TsWJnCfMg_nsSfqTp0",

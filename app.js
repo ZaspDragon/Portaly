@@ -1299,7 +1299,7 @@ function getPlanDefinition(planId) {
           await handlePlanPreview(trigger.dataset.plan || "");
           break;
         case "cancel-subscription":
-          handleBillingPlaceholder("Stripe backend is not connected yet.");
+          handleBillingPlaceholder("Square backend is not connected yet.");
           break;
         case "manage-billing":
           await openBillingPortal();

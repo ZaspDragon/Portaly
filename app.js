@@ -68,7 +68,7 @@
       price: 99,
       workerLimit: 25,
       siteLimit: 1,
-      stripePriceId: "STRIPE_PRICE_STARTER",
+      stripePriceId: "SQUARE_PRICE_STARTER",
       features: ["QR punches", "Basic payroll export", "Up to 25 workers", "1 client site"]
     },
     agency: {
@@ -78,7 +78,7 @@
       price: 249,
       workerLimit: 100,
       siteLimit: 5,
-      stripePriceId: "STRIPE_PRICE_AGENCY",
+      stripePriceId: "SQUARE_PRICE_AGENCY",
       features: ["Client approvals", "Payroll exports", "Exception alerts", "Up to 100 workers"]
     },
     growth: {
@@ -88,7 +88,7 @@
       price: 499,
       workerLimit: null,
       siteLimit: null,
-      stripePriceId: "STRIPE_PRICE_GROWTH",
+      stripePriceId: "SQUARE_PRICE_GROWTH",
       features: ["Unlimited workers", "Unlimited clients and sites", "White-label branding", "Advanced reports"]
     },
     enterprise: {

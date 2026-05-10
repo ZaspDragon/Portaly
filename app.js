@@ -7033,4 +7033,156 @@
       </div>
     `;
   }
+  /* =========================================================
+   Portaly Square Billing Helpers
+   Uses billing-config.js
+   ========================================================= */
+
+function getBillingConfig() {
+  return window.PORTALY_BILLING_CONFIG || null;
+}
+
+function getBillingPlans() {
+  const billing = getBillingConfig();
+  return billing?.plans || {};
+}
+
+function showBillingMessage(message, type = "info") {
+  if (typeof showToast === "function") {
+    showToast(message, type);
+    return;
+  }
+
+  const toastRoot = document.getElementById("toastRoot");
+
+  if (toastRoot) {
+    const toast = document.createElement("div");
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    toastRoot.appendChild(toast);
+
+    setTimeout(() => {
+      toast.remove();
+    }, 3500);
+
+    return;
+  }
+
+  alert(message);
+}
+
+function subscribeWithSquare(planId) {
+  const billing = getBillingConfig();
+
+  if (!billing || billing.provider !== "square") {
+    showBillingMessage("Square billing is not configured yet.", "error");
+    return;
+  }
+
+  const plan = billing.plans?.[planId];
+
+  if (!plan) {
+    showBillingMessage("Plan not found.", "error");
+    return;
+  }
+
+  if (!plan.squarePaymentLink || plan.squarePaymentLink.includes("PASTE_")) {
+    showBillingMessage("Square payment link is missing for this plan.", "error");
+    return;
+  }
+
+  localStorage.setItem("portaly_selected_plan", plan.id);
+  localStorage.setItem("portaly_selected_plan_name", plan.name);
+  localStorage.setItem("portaly_selected_plan_price", plan.label);
+  localStorage.setItem("portaly_selected_plan_link", plan.squarePaymentLink);
+
+  window.location.href = plan.squarePaymentLink;
+}
+
+function renderPricingCards() {
+  const plans = getBillingPlans();
+  const planList = Object.values(plans);
+
+  if (!planList.length) {
+    return `
+      <section class="card">
+        <p class="eyebrow">Pricing</p>
+        <h3>Pricing is not configured yet</h3>
+        <p class="muted">Add plans inside billing-config.js.</p>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="card">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Pricing</p>
+          <h3>Choose your Portaly plan</h3>
+          <p>Pick the plan that fits your staffing agency. Payments open through Square checkout.</p>
+        </div>
+      </div>
+
+      <div class="pricing-grid">
+        ${planList.map(plan => `
+          <div class="pricing-card">
+            <h4>${plan.name}</h4>
+            <strong class="pricing-price">${plan.label}</strong>
+
+            <ul>
+              <li>${plan.workerLimit ? `Up to ${plan.workerLimit} workers` : "Unlimited workers"}</li>
+              <li>${plan.siteLimit ? `Up to ${plan.siteLimit} site${plan.siteLimit > 1 ? "s" : ""}` : "Unlimited sites"}</li>
+              <li>QR worker clock-in</li>
+              <li>Client approvals</li>
+              <li>Payroll-ready tracking</li>
+            </ul>
+
+            <button
+              class="button button-primary button-block"
+              type="button"
+              onclick="subscribeWithSquare('${plan.id}')"
+            >
+              Choose ${plan.name}
+            </button>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderBillingView() {
+  const selectedPlan = localStorage.getItem("portaly_selected_plan_name") || "No plan selected";
+  const selectedPrice = localStorage.getItem("portaly_selected_plan_price") || "";
+
+  return `
+    <section class="page-intro card">
+      <div>
+        <p class="eyebrow">Billing</p>
+        <h3>Manage your Portaly subscription</h3>
+        <p>Select a plan below and continue through Square checkout.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>Current Selection</h3>
+      <p>
+        <strong>${selectedPlan}</strong>
+        ${selectedPrice ? ` — ${selectedPrice}` : ""}
+      </p>
+      <p class="muted">
+        Square checkout opens on a secure Square payment page.
+      </p>
+    </section>
+
+    ${renderPricingCards()}
+  `;
+}
+
+/* Make these available to buttons rendered inside HTML strings */
+window.getBillingConfig = getBillingConfig;
+window.getBillingPlans = getBillingPlans;
+window.subscribeWithSquare = subscribeWithSquare;
+window.renderPricingCards = renderPricingCards;
+window.renderBillingView = renderBillingView;
 })();

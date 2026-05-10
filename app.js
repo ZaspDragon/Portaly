@@ -31,6 +31,7 @@
   const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
   const CLIENT_ROUTES = new Set(["approvals", "help", "billing-required"]);
   const DEFAULT_APP_URL = `${window.location.origin}${window.location.pathname}`;
+  const BILLING_CONFIG = window.PORTALY_BILLING_CONFIG || {};
 
   const ROLE_META = {
     platformOwner: {
@@ -61,88 +62,47 @@
   };
 
   const PLAN_DEFINITIONS = {
-  starter: {
-    id: "starter",
-    name: "Starter",
-    label: "Starter",
-    price: 99,
-    workerLimit: 25,
-    siteLimit: 1,
-    squarePaymentLink: "https://square.link/u/mfu6eun7",
-    features: [
-      "QR punches",
-      "Basic payroll export",
-      "Up to 25 workers",
-      "1 client site"
-    ]
-  },
-
-  agency: {
-    id: "agency",
-    name: "Agency",
-    label: "Agency",
-    price: 249,
-    workerLimit: 100,
-    siteLimit: 5,
-    squarePaymentLink: "https://square.link/u/ojz2a1Au",
-    features: [
-      "Client approvals",
-      "Payroll exports",
-      "Exception alerts",
-      "Up to 100 workers"
-    ]
-  },
-
-  growth: {
-    id: "growth",
-    name: "Growth",
-    label: "Growth",
-    price: 499,
-    workerLimit: null,
-    siteLimit: null,
-    squarePaymentLink: "https://square.link/u/Iy99LyYg",
-    features: [
-      "Unlimited workers",
-      "Unlimited clients and sites",
-      "White-label branding",
-      "Advanced reports"
-    ]
-  },
-
-  enterprise: {
-    id: "enterprise",
-    name: "Enterprise",
-    label: "Enterprise",
-    price: null,
-    workerLimit: null,
-    siteLimit: null,
-    squarePaymentLink: "https://square.link/u/96br6x5W",
-    features: [
-      "Multi-branch agencies",
-      "Custom integrations",
-      "Dedicated onboarding",
-      "Contact sales"
-    ]
-  }
-};
-  function getBillingConfig() {
-  return window.PORTALY_BILLING_CONFIG || null;
-}
-
-function getBillingPlans() {
-  const billing = getBillingConfig();
-
-  if (billing?.plans) {
-    return billing.plans;
-  }
-
-  return PLAN_DEFINITIONS;
-}
-
-function getPlanDefinition(planId) {
-  const plans = getBillingPlans();
-  return plans[planId] || PLAN_DEFINITIONS[planId] || null;
-}
+    starter: {
+      id: "starter",
+      name: "Starter",
+      label: "Starter",
+      price: 99,
+      workerLimit: 25,
+      siteLimit: 1,
+      squarePaymentLink: BILLING_CONFIG.starterPaymentLink || "https://square.link/u/mfu6eun7",
+      features: ["QR punches", "Basic payroll export", "Up to 25 workers", "1 client site"]
+    },
+    agency: {
+      id: "agency",
+      name: "Agency",
+      label: "Agency",
+      price: 249,
+      workerLimit: 100,
+      siteLimit: 5,
+      squarePaymentLink: BILLING_CONFIG.agencyPaymentLink || "https://square.link/u/ojz2a1Au",
+      features: ["Client approvals", "Payroll exports", "Exception alerts", "Up to 100 workers"]
+    },
+    growth: {
+      id: "growth",
+      name: "Growth",
+      label: "Growth",
+      price: 499,
+      workerLimit: null,
+      siteLimit: null,
+      squarePaymentLink: BILLING_CONFIG.growthPaymentLink || "https://square.link/u/Iy99LyYg",
+      features: ["Unlimited workers", "Unlimited clients and sites", "White-label branding", "Advanced reports"]
+    },
+    enterprise: {
+      id: "enterprise",
+      name: "Enterprise",
+      label: "Enterprise",
+      price: null,
+      workerLimit: null,
+      siteLimit: null,
+      squarePaymentLink: BILLING_CONFIG.enterprisePaymentLink || "https://square.link/u/96br6x5W",
+      features: ["Multi-branch agencies", "Custom integrations", "Dedicated onboarding", "Contact sales"]
+    }
+  };
 
   const NAV_ITEMS = [
     { id: "dashboard", label: "Dashboard", badge: "DB", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
@@ -194,7 +154,7 @@ function getPlanDefinition(planId) {
       auth: null,
       db: null,
       api: null,
-      square: null,
+      billing: "",
       error: ""
     },
     session: {
@@ -333,10 +293,7 @@ function getPlanDefinition(planId) {
       state.firebase.db = bridge.db || null;
       state.firebase.ready = !!bridge.ready;
       state.firebase.error = bridge.error || "";
-
-      if (config.squarePublishableKey && window.Square) {
-        state.firebase.square = window.Square(config.squarePublishableKey);
-      }
+      state.firebase.billing = "square";
     } catch (error) {
       console.error(error);
       state.firebase.error = error.message || "Unable to initialize Firebase.";
@@ -384,10 +341,7 @@ function getPlanDefinition(planId) {
       ...config,
       enabled: typeof config.enabled === "boolean" ? config.enabled : !!config.apiKey,
       trialDays: Number(config.trialDays || 14),
-      appUrl: config.appUrl || DEFAULT_APP_URL,
-      functionsBaseUrl: config.functionsBaseUrl || "",
-      squarePublishableKey: config.squarePublishableKey || "",
-      squarePriceIds: config.squarePriceIds || {}
+      appUrl: config.appUrl || DEFAULT_APP_URL
     };
 
     if (!normalized.firebaseConfig) {
@@ -1299,7 +1253,7 @@ function getPlanDefinition(planId) {
           await handlePlanPreview(trigger.dataset.plan || "");
           break;
         case "cancel-subscription":
-          handleBillingPlaceholder("Square backend is not connected yet.");
+          handleBillingPlaceholder("Square billing changes are handled through your Square payment link or agency support.");
           break;
         case "manage-billing":
           await openBillingPortal();
@@ -1497,8 +1451,6 @@ function getPlanDefinition(planId) {
       subscriptionStatus: "trialing",
       trialStart: trialStart.toISOString(),
       trialEnd: trialEnd.toISOString(),
-      squareCustomerId: "",
-      squareSubscriptionId: "",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       settings: buildAgencySettings({
@@ -1539,8 +1491,6 @@ function getPlanDefinition(planId) {
     const subscriptionDoc = {
       id: createId("subscription"),
       agencyId,
-      squareCustomerId: "",
-      squareSubscriptionId: "",
       planId: selectedPlan,
       status: "trialing",
       currentPeriodStart: "",
@@ -2864,21 +2814,16 @@ function getPlanDefinition(planId) {
       return;
     }
     state.selectedPlan = planId;
-    if (!state.firebase.config.functionsBaseUrl) {
-      handleBillingPlaceholder("Square backend is not connected yet.");
-      if (state.session.mode === "demo") {
-        const agency = getCurrentAgency();
-        const subscription = getCurrentSubscription();
-        if (agency) {
-          await updateData("agencies", agency.id, { planId });
-        }
-        if (subscription) {
-          await updateData("subscriptions", subscription.id, { planId });
-        }
-        await refreshCurrentView();
-      } else {
-        renderApp();
+    if (state.session.mode === "demo") {
+      const agency = getCurrentAgency();
+      const subscription = getCurrentSubscription();
+      if (agency) {
+        await updateData("agencies", agency.id, { planId });
       }
+      if (subscription) {
+        await updateData("subscriptions", subscription.id, { planId });
+      }
+      await refreshCurrentView();
       return;
     }
     await startBillingCheckout(planId);
@@ -2887,7 +2832,7 @@ function getPlanDefinition(planId) {
   function handleBillingPlaceholder(message) {
     state.notice = message;
     storeNotice(state.notice);
-    pushToast(message, "warning");
+    pushToast(message, "success");
     renderApp();
   }
 
@@ -2929,68 +2874,27 @@ function getPlanDefinition(planId) {
   }
 
   async function startBillingCheckout(planId) {
-  const plan = getPlanDefinition(planId);
+    const plan = getPlanDefinition(planId);
 
-  if (!plan) {
-    throw new Error("Plan not found.");
+    if (!plan) {
+      throw new Error("Plan not found.");
+    }
+
+    if (!plan.squarePaymentLink) {
+      throw new Error("Square payment link missing.");
+    }
+
+    localStorage.setItem("portaly_selected_plan", plan.id);
+    localStorage.setItem("portaly_selected_plan_name", plan.name);
+    localStorage.setItem("portaly_selected_plan_price", plan.price ? `$${plan.price}/month` : "Custom");
+    localStorage.setItem("portaly_selected_plan_link", plan.squarePaymentLink);
+
+    window.location.href = plan.squarePaymentLink;
   }
 
-  if (!plan.squarePaymentLink) {
-    throw new Error("Square payment link missing.");
-  }
-
-  localStorage.setItem("portaly_selected_plan", plan.id);
-  localStorage.setItem("portaly_selected_plan_name", plan.name);
-  localStorage.setItem(
-    "portaly_selected_plan_price",
-    plan.price ? `$${plan.price}/month` : "Custom"
-  );
-  localStorage.setItem("portaly_selected_plan_link", plan.squarePaymentLink);
-
-  window.location.href = plan.squarePaymentLink;
-}
-
-async function openBillingPortal() {
-  pushToast("Square billing is connected through secure Square payment links.", "success");
-  navigate("billing");
-}
-
-    if (!state.firebase.config.functionsBaseUrl) {
-      handleBillingPlaceholder("Square backend is not connected yet.");
-      return;
-    }
-
-    const response = await authenticatedPost("/createBillingPortalSession", {});
-    if (response.url) {
-      window.location.href = response.url;
-      return;
-    }
-
-    throw new Error("Billing portal did not return a URL.");
-  }
-
-  async function authenticatedPost(path, payload) {
-    const user = state.firebase.auth.currentUser;
-    if (!user) {
-      throw new Error("You need to log in again before opening billing.");
-    }
-
-    const token = await user.getIdToken();
-    const base = (state.firebase.config.functionsBaseUrl || "").replace(/\/$/, "");
-    const response = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify(payload || {})
-    });
-
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(body.error || `Request failed with status ${response.status}.`);
-    }
-    return body;
+  async function openBillingPortal() {
+    pushToast("Square billing is connected through secure Square payment links.", "success");
+    navigate("billing");
   }
 
   function renderApp() {
@@ -3195,7 +3099,7 @@ async function openBillingPortal() {
             <div class="feature-grid">
               ${renderFaq("Can I keep a public demo open?", "Yes. Demo Mode runs on sample data in localStorage and never touches Firestore or billing.")}
               ${renderFaq("Can workers log in directly?", "Yes. Worker accounts go straight to the punch screen and only see their own punch history.")}
-              ${renderFaq("How do subscriptions work?", "Real agencies start with a 14-day trial, then move into Square-managed monthly billing.")}
+        ${renderFaq("How do subscriptions work?", "Real agencies start with a 14-day trial, then move into monthly billing using secure Square payment links.")}
               ${renderFaq("Will this still deploy on GitHub Pages?", "Yes. The frontend stays plain HTML, CSS, and JavaScript with no npm or build step required.")}
             </div>
           </div>
@@ -3298,12 +3202,12 @@ async function openBillingPortal() {
             <div class="support-card">
               <p class="eyebrow">Two Data Modes</p>
               <h3>Demo Mode stays local. Cloud Mode syncs.</h3>
-              <p>Demo Mode uses localStorage only and does not create real accounts or billing records. Cloud Mode uses Firebase Authentication, Firestore, and Square-ready billing.</p>
+              <p>Demo Mode uses localStorage only and does not create real accounts or billing records. Cloud Mode uses Firebase Authentication, Firestore, and Square payment links.</p>
             </div>
             <div class="support-card">
               <p class="eyebrow">Need a quick walkthrough?</p>
               <h3>Use the public demo first</h3>
-              <p>Try the owner, client manager, and worker flows before you connect Firebase or Square.</p>
+              <p>Try the owner, client manager, and worker flows before you connect Firebase or Square billing links.</p>
               <div class="page-actions" style="margin-top: 16px;">
                 <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
                 <button class="button button-ghost" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
@@ -3441,8 +3345,8 @@ async function openBillingPortal() {
             </div>
             <div class="support-card">
               <p class="eyebrow">Billing</p>
-              <h3>Square starts after the trial</h3>
-              <p>Portaly only uses Square secret keys inside Firebase Functions or your backend. The frontend never stores secret billing credentials.</p>
+              <h3>Square billing starts after the trial</h3>
+              <p>Portaly uses secure Square payment links for subscription checkout. The frontend does not store payment secrets.</p>
             </div>
           </div>
         </div>
@@ -4588,7 +4492,7 @@ async function openBillingPortal() {
         <div class="metrics-grid">
           ${renderMetricCard("Current Plan", plan.label, "Monthly plan tier", "PL")}
           ${renderMetricCard("Trial Days Remaining", Math.max(getTrialDaysRemaining(), 0), "Days left before billing starts", "TD")}
-          ${renderMetricCard("Subscription Status", formatStatusLabel(subscription?.status || agency?.subscriptionStatus || "trialing"), "Square and Firestore status", "SS")}
+          ${renderMetricCard("Subscription Status", formatStatusLabel(subscription?.status || agency?.subscriptionStatus || "trialing"), "Square billing and Firestore status", "SS")}
           ${renderMetricCard("Worker / Site Usage", `${usage.activeWorkers}${plan.workerLimit ? ` / ${plan.workerLimit}` : ""} workers`, `${usage.activeSites}${plan.siteLimit ? ` / ${plan.siteLimit}` : ""} sites`, "US")}
         </div>
 
@@ -4605,7 +4509,7 @@ async function openBillingPortal() {
           <p class="eyebrow">Billing</p>
           <h3>${escapeHtml(plan.label)} plan</h3>
           <p class="helper-copy">Next billing date placeholder: ${escapeHtml(formatDate(nextBillingDate))}</p>
-          ${!state.firebase.config.functionsBaseUrl ? `<p class="helper-copy">Square backend is not connected yet.</p>` : ""}
+          <p class="helper-copy">Square billing is connected through secure Square payment links.</p>
           <div class="page-actions" style="margin-top: 18px;">
             <button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">Start Paid Subscription</button>
             <button class="button button-secondary" data-action="manage-billing" type="button">Manage Billing</button>
@@ -5441,7 +5345,7 @@ async function openBillingPortal() {
         <div class="notice-card">
           <div>
             <strong>Cloud Mode: data syncs across devices</strong>
-            <p>Real users, live agency records, and subscription status now come from Firebase and Square-ready backend endpoints.</p>
+            <p>Real users, live agency records, and subscription status now come from Firebase and Square payment links.</p>
           </div>
         </div>
       `;
@@ -6313,8 +6217,6 @@ async function openBillingPortal() {
         subscriptionStatus: "trialing",
         trialStart: addDays(now, -4).toISOString(),
         trialEnd: addDays(now, 10).toISOString(),
-        squareCustomerId: "",
-        squareSubscriptionId: "",
         createdAt: addDays(now, -22).toISOString(),
         updatedAt: now.toISOString(),
         settings: buildAgencySettings({
@@ -6335,8 +6237,6 @@ async function openBillingPortal() {
         subscriptionStatus: "active",
         trialStart: addDays(now, -90).toISOString(),
         trialEnd: addDays(now, -76).toISOString(),
-        squareCustomerId: "cus_demo_summit",
-        squareSubscriptionId: "sub_demo_summit",
         createdAt: addDays(now, -120).toISOString(),
         updatedAt: addDays(now, -2).toISOString(),
         settings: buildAgencySettings({
@@ -6475,8 +6375,6 @@ async function openBillingPortal() {
       {
         id: "subscription_harbor",
         agencyId: "agency_harbor",
-        squareCustomerId: "",
-        squareSubscriptionId: "",
         planId: "agency",
         status: "trialing",
         currentPeriodStart: "",
@@ -6489,8 +6387,6 @@ async function openBillingPortal() {
       {
         id: "subscription_summit",
         agencyId: "agency_summit",
-        squareCustomerId: "cus_demo_summit",
-        squareSubscriptionId: "sub_demo_summit",
         planId: "growth",
         status: "active",
         currentPeriodStart: addDays(now, -14).toISOString(),
@@ -6589,8 +6485,6 @@ async function openBillingPortal() {
       subscriptionStatus: "trialing",
       trialStart: addDays(new Date(), 0).toISOString(),
       trialEnd: addDays(new Date(), 14).toISOString(),
-      stripeCustomerId: "",
-      stripeSubscriptionId: "",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       settings: {
@@ -6670,8 +6564,6 @@ async function openBillingPortal() {
     const subscriptions = [{
       id: `subscription_${agencyId}`,
       agencyId,
-      stripeCustomerId: "",
-      stripeSubscriptionId: "",
       planId,
       status: "trialing",
       currentPeriodStart: "",
@@ -7060,212 +6952,4 @@ async function openBillingPortal() {
       </div>
     `;
   }
-  /* =========================================================
-   Portaly Square Billing Helpers
-   Uses billing-config.js
-   ========================================================= */
-
-function getBillingConfig() {
-  return window.PORTALY_BILLING_CONFIG || null;
-}
-
-function getBillingPlans() {
-  const billing = getBillingConfig();
-  return billing?.plans || {};
-}
-
-function showBillingMessage(message, type = "info") {
-  if (typeof showToast === "function") {
-    showToast(message, type);
-    return;
-  }
-
-  const toastRoot = document.getElementById("toastRoot");
-
-  if (toastRoot) {
-    const toast = document.createElement("div");
-    toast.className = `toast toast-${type}`;
-    toast.textContent = message;
-    toastRoot.appendChild(toast);
-
-    setTimeout(() => {
-      toast.remove();
-    }, 3500);
-
-    return;
-  }
-
-  alert(message);
-}
-
-function subscribeWithSquare(planId) {
-  const billing = getBillingConfig();
-
-  if (!billing || billing.provider !== "square") {
-    showBillingMessage("Square billing is not configured yet.", "error");
-    return;
-  }
-
-  const plan = billing.plans?.[planId];
-
-  if (!plan) {
-    showBillingMessage("Plan not found.", "error");
-    return;
-  }
-
-  if (!plan.squarePaymentLink || plan.squarePaymentLink.includes("PASTE_")) {
-    showBillingMessage("Square payment link is missing for this plan.", "error");
-    return;
-  }
-
-  localStorage.setItem("portaly_selected_plan", plan.id);
-  localStorage.setItem("portaly_selected_plan_name", plan.name);
-  localStorage.setItem("portaly_selected_plan_price", plan.label);
-  localStorage.setItem("portaly_selected_plan_link", plan.squarePaymentLink);
-
-  window.location.href = plan.squarePaymentLink;
-}
-
-function renderPricingCards() {
-  const plans = getBillingPlans();
-  const planList = Object.values(plans);
-
-  if (!planList.length) {
-    return `
-      <section class="card">
-        <p class="eyebrow">Pricing</p>
-        <h3>Pricing is not configured yet</h3>
-        <p class="muted">Add plans inside billing-config.js.</p>
-      </section>
-    `;
-  }
-
-  return `
-    <section class="card">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Pricing</p>
-          <h3>Choose your Portaly plan</h3>
-          <p>Pick the plan that fits your staffing agency. Payments open through Square checkout.</p>
-        </div>
-      </div>
-
-      <div class="pricing-grid">
-        ${planList.map(plan => `
-          <div class="pricing-card">
-            <h4>${plan.name}</h4>
-            <strong class="pricing-price">${plan.label}</strong>
-
-            <ul>
-              <li>${plan.workerLimit ? `Up to ${plan.workerLimit} workers` : "Unlimited workers"}</li>
-              <li>${plan.siteLimit ? `Up to ${plan.siteLimit} site${plan.siteLimit > 1 ? "s" : ""}` : "Unlimited sites"}</li>
-              <li>QR worker clock-in</li>
-              <li>Client approvals</li>
-              <li>Payroll-ready tracking</li>
-            </ul>
-
-            <button
-              class="button button-primary button-block"
-              type="button"
-              onclick="subscribeWithSquare('${plan.id}')"
-            >
-              Choose ${plan.name}
-            </button>
-          </div>
-        `).join("")}
-      </div>
-    </section>
-  `;
-}
-
-function renderBillingView() {
-  const selectedPlan = localStorage.getItem("portaly_selected_plan_name") || "No plan selected";
-  const selectedPrice = localStorage.getItem("portaly_selected_plan_price") || "";
-
-  return `
-    <section class="page-intro card">
-      <div>
-        <p class="eyebrow">Billing</p>
-        <h3>Manage your Portaly subscription</h3>
-        <p>Select a plan below and continue through Square checkout.</p>
-      </div>
-    </section>
-
-    <section class="card">
-      <h3>Current Selection</h3>
-      <p>
-        <strong>${selectedPlan}</strong>
-        ${selectedPrice ? ` — ${selectedPrice}` : ""}
-      </p>
-      <p class="muted">
-        Square checkout opens on a secure Square payment page.
-      </p>
-    </section>
-
-    ${renderPricingCards()}
-  `;
-}
-
-/* Make these available to buttons rendered inside HTML strings */
-window.getBillingConfig = getBillingConfig;
-window.getBillingPlans = getBillingPlans;
-window.subscribeWithSquare = subscribeWithSquare;
-window.renderPricingCards = renderPricingCards;
-window.renderBillingView = renderBillingView;
-/* =========================================================
-   FINAL PORTALY SQUARE BILLING OVERRIDE
-   Paste this right BEFORE the final })();
-   ========================================================= */
-
-function getBillingConfig() {
-  return window.PORTALY_BILLING_CONFIG || null;
-}
-
-function getBillingPlans() {
-  const billing = getBillingConfig();
-
-  if (billing && billing.plans) {
-    return billing.plans;
-  }
-
-  return PLAN_DEFINITIONS;
-}
-
-function getPlanDefinition(planId) {
-  const plans = getBillingPlans();
-  return plans[planId] || PLAN_DEFINITIONS[planId] || null;
-}
-
-async function startBillingCheckout(planId) {
-  const plan = getPlanDefinition(planId);
-
-  if (!plan) {
-    throw new Error("Plan not found.");
-  }
-
-  if (!plan.squarePaymentLink) {
-    throw new Error("Square payment link missing.");
-  }
-
-  localStorage.setItem("portaly_selected_plan", plan.id);
-  localStorage.setItem("portaly_selected_plan_name", plan.name);
-  localStorage.setItem(
-    "portaly_selected_plan_price",
-    plan.price ? `$${plan.price}/month` : "Custom"
-  );
-  localStorage.setItem("portaly_selected_plan_link", plan.squarePaymentLink);
-
-  window.location.href = plan.squarePaymentLink;
-}
-
-async function openBillingPortal() {
-  pushToast(
-    "Square billing is connected through secure Square payment links.",
-    "success"
-  );
-
-  navigate("billing");
-}
-
-window.subscribeWithSquare = startBillingCheckout;
 })();

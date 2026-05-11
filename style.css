@@ -983,6 +983,36 @@ body.nav-open .mobile-backdrop {
   flex-wrap: wrap;
 }
 
+.marketing-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 12px;
+}
+
+.marketing-trust-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.billing-action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.approval-review-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 250, 255, 0.96)),
+    radial-gradient(circle at top right, rgba(var(--brand-rgb), 0.1), transparent 34%);
+}
+
+.approval-action-row {
+  flex-wrap: wrap;
+}
+
 .auth-shell {
   padding: 48px 0 78px;
 }
@@ -1742,9 +1772,13 @@ tr:last-child td {
 
   .marketing-links,
   .marketing-actions,
+  .marketing-footer-links,
+  .marketing-trust-row,
   .hero-link-row,
   .topbar-actions,
   .page-actions,
+  .billing-action-grid,
+  .approval-action-row,
   .table-top,
   .filter-row,
   .filter-group {

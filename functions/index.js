@@ -2,23 +2,102 @@ const admin = require("firebase-admin");
 const { onRequest } = require("firebase-functions/v2/https");
 const { defineSecret, defineString } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
-const Stripe = require("stripe");
 
 admin.initializeApp();
 
-const stripeSecretKey = defineSecret("STRIPE_SECRET_KEY");
-const stripeWebhookSecret = defineSecret("STRIPE_WEBHOOK_SECRET");
+const squareAccessToken = defineSecret("SQUARE_ACCESS_TOKEN");
+const squareWebhookSignatureKey = defineSecret("SQUARE_WEBHOOK_SIGNATURE_KEY");
 const appUrl = defineString("APP_URL", {
   default: "https://zaspdragon.github.io/Portaly/"
 });
-const priceStarter = defineString("STRIPE_PRICE_STARTER", { default: "" });
-const priceAgency = defineString("STRIPE_PRICE_AGENCY", { default: "" });
-const priceGrowth = defineString("STRIPE_PRICE_GROWTH", { default: "" });
+const squareApiBaseUrl = defineString("SQUARE_API_BASE_URL", {
+  default: "https://connect.squareup.com"
+});
+const squareApiVersion = defineString("SQUARE_API_VERSION", {
+  default: "2026-01-22"
+});
+const squarePlanVariationStarter = defineString("SQUARE_PLAN_VARIATION_STARTER", { default: "" });
+const squarePlanVariationAgency = defineString("SQUARE_PLAN_VARIATION_AGENCY", { default: "" });
+const squarePlanVariationGrowth = defineString("SQUARE_PLAN_VARIATION_GROWTH", { default: "" });
+const squarePaymentLinkStarter = defineString("SQUARE_PAYMENT_LINK_STARTER", {
+  default: "https://square.link/u/mfu6eun7"
+});
+const squarePaymentLinkAgency = defineString("SQUARE_PAYMENT_LINK_AGENCY", {
+  default: "https://square.link/u/ojz2a1Au"
+});
+const squarePaymentLinkGrowth = defineString("SQUARE_PAYMENT_LINK_GROWTH", {
+  default: "https://square.link/u/Iy99LyYg"
+});
+const squarePaymentLinkEnterprise = defineString("SQUARE_PAYMENT_LINK_ENTERPRISE", {
+  default: "https://square.link/u/96br6x5W"
+});
 
-function stripeClient() {
-  return new Stripe(stripeSecretKey.value(), {
-    apiVersion: "2026-02-25.clover"
+function createHttpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function paymentLinkForPlan(planId) {
+  const links = {
+    starter: squarePaymentLinkStarter.value(),
+    agency: squarePaymentLinkAgency.value(),
+    growth: squarePaymentLinkGrowth.value(),
+    enterprise: squarePaymentLinkEnterprise.value()
+  };
+  return links[planId] || "";
+}
+
+function planVariationIdForPlan(planId) {
+  const variations = {
+    starter: squarePlanVariationStarter.value(),
+    agency: squarePlanVariationAgency.value(),
+    growth: squarePlanVariationGrowth.value()
+  };
+  return variations[planId] || "";
+}
+
+function planIdFromVariation(variationId) {
+  const entries = Object.entries({
+    starter: squarePlanVariationStarter.value(),
+    agency: squarePlanVariationAgency.value(),
+    growth: squarePlanVariationGrowth.value()
   });
+  const match = entries.find(([, value]) => value && value === variationId);
+  return match ? match[0] : "";
+}
+
+function normalizeSquareStatus(status) {
+  switch (String(status || "").toUpperCase()) {
+    case "ACTIVE":
+      return "active";
+    case "PAUSED":
+      return "paused";
+    case "CANCELED":
+      return "canceled";
+    case "DEACTIVATED":
+      return "canceled";
+    case "PENDING":
+      return "trialing";
+    case "COMPLETED":
+      return "canceled";
+    default:
+      return String(status || "").toLowerCase() || "trialing";
+  }
+}
+
+function isoFromSquareDate(value) {
+  if (!value) {
+    return "";
+  }
+  if (String(value).includes("T")) {
+    return value;
+  }
+  return `${value}T00:00:00.000Z`;
 }
 
 async function authenticateRequest(req) {
@@ -32,24 +111,24 @@ async function authenticateRequest(req) {
   const profileSnap = await admin.firestore().collection("users").doc(decoded.uid).get();
 
   if (!profileSnap.exists) {
-    throw createHttpError(403, "User profile not found in Firestore.");
+    throw createHttpError(403, "Portaly user profile not found.");
   }
-
-  const profile = {
-    id: profileSnap.id,
-    ...profileSnap.data()
-  };
 
   return {
     uid: decoded.uid,
-    profile
+    profile: {
+      id: profileSnap.id,
+      ...profileSnap.data()
+    }
   };
 }
 
-function createHttpError(status, message) {
-  const error = new Error(message);
-  error.status = status;
-  return error;
+function canManageBilling(profile) {
+  return ["agencyOwner", "platformOwner"].includes(profile.role);
+}
+
+function canViewBilling(profile) {
+  return canManageBilling(profile) || profile.role === "agencyAdmin";
 }
 
 function resolveAgencyId(profile, requestedAgencyId) {
@@ -58,43 +137,10 @@ function resolveAgencyId(profile, requestedAgencyId) {
   }
 
   if (!profile.agencyId) {
-    throw createHttpError(400, "No agency is attached to this user.");
+    throw createHttpError(400, "No agency is attached to this account.");
   }
 
   return profile.agencyId;
-}
-
-function resolvePriceId(planId) {
-  const planMap = {
-    starter: priceStarter.value(),
-    agency: priceAgency.value(),
-    growth: priceGrowth.value()
-  };
-
-  if (!planMap[planId]) {
-    throw createHttpError(400, `Missing Stripe price ID for the ${planId} plan.`);
-  }
-
-  return planMap[planId];
-}
-
-function mapStripeStatus(status) {
-  switch (status) {
-    case "trialing":
-      return "trialing";
-    case "active":
-      return "active";
-    case "past_due":
-      return "past_due";
-    case "canceled":
-      return "canceled";
-    case "unpaid":
-      return "unpaid";
-    case "incomplete_expired":
-      return "expired_trial";
-    default:
-      return status || "trialing";
-  }
 }
 
 async function getAgencyRefAndData(agencyId) {
@@ -114,202 +160,461 @@ async function getAgencyRefAndData(agencyId) {
   };
 }
 
-async function ensureStripeCustomer(stripe, agencyRef, agency, profile) {
-  if (agency.stripeCustomerId) {
-    return agency.stripeCustomerId;
-  }
-
-  const customer = await stripe.customers.create({
-    name: agency.name,
-    email: profile.email || undefined,
-    metadata: {
-      agencyId: agency.id,
-      ownerUserId: agency.ownerUserId || profile.id
-    }
-  });
-
-  await agencyRef.update({
-    stripeCustomerId: customer.id,
-    updatedAt: new Date().toISOString()
-  });
-
-  return customer.id;
-}
-
-function isoFromUnix(value) {
-  if (!value) {
-    return "";
-  }
-  return new Date(value * 1000).toISOString();
-}
-
-async function upsertSubscriptionRecord({
-  agencyId,
-  stripeCustomerId = "",
-  stripeSubscriptionId = "",
-  planId = "",
-  status = "trialing",
-  currentPeriodStart = "",
-  currentPeriodEnd = "",
-  trialStart = "",
-  trialEnd = ""
-}) {
-  if (!agencyId) {
-    return;
-  }
-
+async function getSubscriptionRefAndData(agencyId) {
   const collectionRef = admin.firestore().collection("subscriptions");
   const querySnapshot = await collectionRef.where("agencyId", "==", agencyId).limit(1).get();
   const docRef = querySnapshot.empty ? collectionRef.doc() : querySnapshot.docs[0].ref;
   const existing = querySnapshot.empty ? {} : querySnapshot.docs[0].data();
-  const now = new Date().toISOString();
 
-  await docRef.set({
-    id: docRef.id,
-    agencyId,
-    stripeCustomerId: stripeCustomerId || existing.stripeCustomerId || "",
-    stripeSubscriptionId: stripeSubscriptionId || existing.stripeSubscriptionId || "",
-    planId: planId || existing.planId || "",
-    status: status || existing.status || "trialing",
-    currentPeriodStart: currentPeriodStart || existing.currentPeriodStart || "",
-    currentPeriodEnd: currentPeriodEnd || existing.currentPeriodEnd || "",
-    trialStart: trialStart || existing.trialStart || "",
-    trialEnd: trialEnd || existing.trialEnd || "",
-    createdAt: existing.createdAt || now,
-    updatedAt: now
+  return {
+    docRef,
+    subscription: {
+      id: docRef.id,
+      ...existing
+    }
+  };
+}
+
+async function updateAgencyBillingFields(agencyRef, data) {
+  await agencyRef.set({
+    ...data,
+    billingProvider: "square",
+    updatedAt: nowIso()
   }, { merge: true });
 }
 
-exports.createCheckoutSession = onRequest(
+async function upsertSubscriptionRecord(agencyId, data) {
+  const { docRef, subscription } = await getSubscriptionRefAndData(agencyId);
+  await docRef.set({
+    id: docRef.id,
+    agencyId,
+    billingProvider: "square",
+    squareCustomerId: data.squareCustomerId || subscription.squareCustomerId || "",
+    squareSubscriptionId: data.squareSubscriptionId || subscription.squareSubscriptionId || "",
+    planId: data.planId || subscription.planId || "",
+    status: data.status || subscription.status || "trialing",
+    trialStart: data.trialStart || subscription.trialStart || "",
+    trialEnd: data.trialEnd || subscription.trialEnd || "",
+    currentPeriodStart: data.currentPeriodStart || subscription.currentPeriodStart || "",
+    currentPeriodEnd: data.currentPeriodEnd || subscription.currentPeriodEnd || "",
+    canceledAt: data.canceledAt || subscription.canceledAt || "",
+    cancelAtPeriodEnd: typeof data.cancelAtPeriodEnd === "boolean" ? data.cancelAtPeriodEnd : !!subscription.cancelAtPeriodEnd,
+    pausedAt: data.pausedAt || subscription.pausedAt || "",
+    resumedAt: data.resumedAt || subscription.resumedAt || "",
+    nextBillingDate: data.nextBillingDate || subscription.nextBillingDate || "",
+    createdAt: subscription.createdAt || data.createdAt || nowIso(),
+    updatedAt: nowIso()
+  }, { merge: true });
+}
+
+async function squareRequest(path, method = "GET", body = null) {
+  if (!squareAccessToken.value()) {
+    throw createHttpError(503, "Square access token is not configured.");
+  }
+
+  const response = await fetch(`${squareApiBaseUrl.value()}${path}`, {
+    method,
+    headers: {
+      "Square-Version": squareApiVersion.value(),
+      Authorization: `Bearer ${squareAccessToken.value()}`,
+      "Content-Type": "application/json"
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const errorText = (payload.errors || []).map(item => item.detail || item.code).filter(Boolean).join("; ");
+    throw createHttpError(response.status, errorText || payload.message || "Square request failed.");
+  }
+
+  return payload;
+}
+
+async function syncSquareSubscriptionRecord(agencyId, squareSubscriptionId, requestedPlanId = "") {
+  const payload = await squareRequest(`/v2/subscriptions/${squareSubscriptionId}?include=actions`);
+  const subscription = payload.subscription || {};
+  const actions = payload.actions || [];
+  const normalizedStatus = normalizeSquareStatus(subscription.status);
+  const planId = requestedPlanId || planIdFromVariation(subscription.plan_variation_id) || "";
+  const cancelAtPeriodEnd = actions.some(action => String(action.type || "").toUpperCase() === "CANCEL");
+
+  const update = {
+    squareCustomerId: subscription.customer_id || "",
+    squareSubscriptionId: subscription.id || squareSubscriptionId,
+    planId,
+    status: cancelAtPeriodEnd && normalizedStatus === "active" ? "cancel_at_period_end" : normalizedStatus,
+    currentPeriodStart: isoFromSquareDate(subscription.start_date),
+    currentPeriodEnd: isoFromSquareDate(subscription.charged_through_date || subscription.paid_until_date || ""),
+    trialStart: isoFromSquareDate(subscription.start_date),
+    trialEnd: isoFromSquareDate(subscription.paid_until_date || ""),
+    canceledAt: isoFromSquareDate(subscription.canceled_date || ""),
+    cancelAtPeriodEnd,
+    pausedAt: normalizedStatus === "paused" ? nowIso() : "",
+    nextBillingDate: isoFromSquareDate(subscription.charged_through_date || subscription.paid_until_date || "")
+  };
+
+  const { agencyRef } = await getAgencyRefAndData(agencyId);
+  await updateAgencyBillingFields(agencyRef, {
+    planId: planId || undefined,
+    subscriptionStatus: update.status,
+    squareCustomerId: update.squareCustomerId,
+    squareSubscriptionId: update.squareSubscriptionId
+  });
+  await upsertSubscriptionRecord(agencyId, update);
+
+  return {
+    agencyId,
+    ...update
+  };
+}
+
+function responseJson(res, status, body) {
+  res.status(status).json(body);
+}
+
+exports.createSquareSubscriptionLink = onRequest(
   {
-    cors: true,
-    secrets: [stripeSecretKey]
+    cors: true
   },
   async (req, res) => {
     try {
       if (req.method !== "POST") {
-        res.status(405).json({ error: "Use POST for this endpoint." });
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
         return;
       }
 
       const auth = await authenticateRequest(req);
-      if (!["agencyOwner", "platformOwner"].includes(auth.profile.role)) {
-        throw createHttpError(403, "Only agency owners can start a subscription.");
+      if (!canManageBilling(auth.profile)) {
+        throw createHttpError(403, "Only agency owners can start checkout.");
       }
 
-      const planId = req.body.planId;
-      if (!planId || planId === "enterprise") {
-        throw createHttpError(400, "Choose a Stripe-backed plan before checkout.");
+      const planId = String(req.body.planId || "").trim();
+      const link = paymentLinkForPlan(planId);
+      if (!planId || !link) {
+        throw createHttpError(400, "Square payment link missing for this plan.");
       }
 
-      const trialDays = Math.max(0, Math.min(Number(req.body.trialDays || 0), 14));
       const agencyId = resolveAgencyId(auth.profile, req.body.agencyId);
-      const { agencyRef, agency } = await getAgencyRefAndData(agencyId);
-      const stripe = stripeClient();
-      const customerId = await ensureStripeCustomer(stripe, agencyRef, agency, auth.profile);
-
-      const sessionConfig = {
-        mode: "subscription",
-        customer: customerId,
-        allow_promotion_codes: true,
-        client_reference_id: agencyId,
-        line_items: [
-          {
-            price: resolvePriceId(planId),
-            quantity: 1
-          }
-        ],
-        success_url: `${appUrl.value()}#/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${appUrl.value()}#/billing?checkout=cancel`,
-        metadata: {
-          agencyId,
-          planId,
-          initiatedBy: auth.uid
-        },
-        subscription_data: {
-          metadata: {
-            agencyId,
-            planId
-          }
-        }
-      };
-
-      if (trialDays > 0) {
-        sessionConfig.subscription_data.trial_period_days = trialDays;
-      }
-
-      const session = await stripe.checkout.sessions.create(sessionConfig);
-
-      await agencyRef.update({
-        planId,
-        updatedAt: new Date().toISOString()
+      const { agencyRef } = await getAgencyRefAndData(agencyId);
+      await updateAgencyBillingFields(agencyRef, {
+        planId
       });
 
-      await upsertSubscriptionRecord({
-        agencyId,
-        stripeCustomerId: customerId,
+      responseJson(res, 200, {
+        provider: "square",
         planId,
-        status: trialDays > 0 ? "trialing" : "active"
-      });
-
-      res.status(200).json({
-        url: session.url,
-        sessionId: session.id
+        url: link,
+        appUrl: appUrl.value()
       });
     } catch (error) {
-      logger.error("createCheckoutSession failed", error);
-      res.status(error.status || 500).json({
-        error: error.message || "Unable to create Stripe checkout session."
+      logger.error("createSquareSubscriptionLink failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to prepare the Square checkout link."
       });
     }
   }
 );
 
-exports.createBillingPortalSession = onRequest(
+exports.cancelSquareSubscription = onRequest(
   {
     cors: true,
-    secrets: [stripeSecretKey]
+    secrets: [squareAccessToken]
   },
   async (req, res) => {
     try {
       if (req.method !== "POST") {
-        res.status(405).json({ error: "Use POST for this endpoint." });
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
         return;
       }
 
       const auth = await authenticateRequest(req);
-      if (!["agencyOwner", "platformOwner"].includes(auth.profile.role)) {
-        throw createHttpError(403, "Only agency owners can manage billing.");
+      if (!canManageBilling(auth.profile)) {
+        throw createHttpError(403, "Only agency owners can cancel billing.");
+      }
+
+      const subscriptionId = String(req.body.subscriptionId || "").trim();
+      if (!subscriptionId) {
+        throw createHttpError(400, "Subscription ID is required.");
       }
 
       const agencyId = resolveAgencyId(auth.profile, req.body.agencyId);
-      const { agencyRef, agency } = await getAgencyRefAndData(agencyId);
-      const stripe = stripeClient();
-      const customerId = await ensureStripeCustomer(stripe, agencyRef, agency, auth.profile);
-
-      const portalSession = await stripe.billingPortal.sessions.create({
-        customer: customerId,
-        return_url: `${appUrl.value()}#/billing`
+      await squareRequest(`/v2/subscriptions/${subscriptionId}/cancel`, "POST");
+      await upsertSubscriptionRecord(agencyId, {
+        squareSubscriptionId: subscriptionId,
+        status: "cancel_at_period_end",
+        canceledAt: nowIso(),
+        cancelAtPeriodEnd: true
+      });
+      const { agencyRef } = await getAgencyRefAndData(agencyId);
+      await updateAgencyBillingFields(agencyRef, {
+        subscriptionStatus: "cancel_at_period_end",
+        squareSubscriptionId: subscriptionId
       });
 
-      res.status(200).json({
-        url: portalSession.url
+      responseJson(res, 200, {
+        ok: true,
+        status: "cancel_at_period_end"
       });
     } catch (error) {
-      logger.error("createBillingPortalSession failed", error);
-      res.status(error.status || 500).json({
-        error: error.message || "Unable to create Stripe billing portal session."
+      logger.error("cancelSquareSubscription failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to cancel the Square subscription."
       });
     }
   }
 );
 
-exports.createPortalSession = exports.createBillingPortalSession;
+exports.pauseSquareSubscription = onRequest(
+  {
+    cors: true,
+    secrets: [squareAccessToken]
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
 
-exports.stripeWebhook = onRequest(
+      const auth = await authenticateRequest(req);
+      if (!canManageBilling(auth.profile)) {
+        throw createHttpError(403, "Only agency owners can pause billing.");
+      }
+
+      const subscriptionId = String(req.body.subscriptionId || "").trim();
+      if (!subscriptionId) {
+        throw createHttpError(400, "Subscription ID is required.");
+      }
+
+      const agencyId = resolveAgencyId(auth.profile, req.body.agencyId);
+      await squareRequest(`/v2/subscriptions/${subscriptionId}/pause`, "POST", {
+        pause_reason: "Paused from Portaly billing page",
+        resume_change_timing: "IMMEDIATE"
+      });
+      await upsertSubscriptionRecord(agencyId, {
+        squareSubscriptionId: subscriptionId,
+        status: "paused",
+        pausedAt: nowIso()
+      });
+      const { agencyRef } = await getAgencyRefAndData(agencyId);
+      await updateAgencyBillingFields(agencyRef, {
+        subscriptionStatus: "paused",
+        squareSubscriptionId: subscriptionId
+      });
+
+      responseJson(res, 200, {
+        ok: true,
+        status: "paused"
+      });
+    } catch (error) {
+      logger.error("pauseSquareSubscription failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to pause the Square subscription."
+      });
+    }
+  }
+);
+
+exports.resumeSquareSubscription = onRequest(
+  {
+    cors: true,
+    secrets: [squareAccessToken]
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
+      if (!canManageBilling(auth.profile)) {
+        throw createHttpError(403, "Only agency owners can resume billing.");
+      }
+
+      const subscriptionId = String(req.body.subscriptionId || "").trim();
+      if (!subscriptionId) {
+        throw createHttpError(400, "Subscription ID is required.");
+      }
+
+      const agencyId = resolveAgencyId(auth.profile, req.body.agencyId);
+      await squareRequest(`/v2/subscriptions/${subscriptionId}/resume`, "POST", {
+        resume_change_timing: "IMMEDIATE"
+      });
+      await upsertSubscriptionRecord(agencyId, {
+        squareSubscriptionId: subscriptionId,
+        status: "active",
+        resumedAt: nowIso(),
+        cancelAtPeriodEnd: false
+      });
+      const { agencyRef } = await getAgencyRefAndData(agencyId);
+      await updateAgencyBillingFields(agencyRef, {
+        subscriptionStatus: "active",
+        squareSubscriptionId: subscriptionId
+      });
+
+      responseJson(res, 200, {
+        ok: true,
+        status: "active"
+      });
+    } catch (error) {
+      logger.error("resumeSquareSubscription failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to resume the Square subscription."
+      });
+    }
+  }
+);
+
+exports.swapSquareSubscriptionPlan = onRequest(
+  {
+    cors: true,
+    secrets: [squareAccessToken]
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
+      if (!canManageBilling(auth.profile)) {
+        throw createHttpError(403, "Only agency owners can change plans.");
+      }
+
+      const subscriptionId = String(req.body.subscriptionId || "").trim();
+      const newPlanId = String(req.body.newPlanId || "").trim();
+      if (!subscriptionId || !newPlanId) {
+        throw createHttpError(400, "Subscription ID and new plan ID are required.");
+      }
+
+      const newPlanVariationId = planVariationIdForPlan(newPlanId);
+      if (!newPlanVariationId) {
+        throw createHttpError(400, "Square plan variation ID is not configured for that plan.");
+      }
+
+      const agencyId = resolveAgencyId(auth.profile, req.body.agencyId);
+      await squareRequest(`/v2/subscriptions/${subscriptionId}/swap-plan`, "POST", {
+        new_plan_variation_id: newPlanVariationId
+      });
+      await upsertSubscriptionRecord(agencyId, {
+        squareSubscriptionId: subscriptionId,
+        planId: newPlanId,
+        status: "active"
+      });
+      const { agencyRef } = await getAgencyRefAndData(agencyId);
+      await updateAgencyBillingFields(agencyRef, {
+        planId: newPlanId,
+        subscriptionStatus: "active",
+        squareSubscriptionId: subscriptionId
+      });
+
+      responseJson(res, 200, {
+        ok: true,
+        planId: newPlanId,
+        status: "active"
+      });
+    } catch (error) {
+      logger.error("swapSquareSubscriptionPlan failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to change the Square subscription plan."
+      });
+    }
+  }
+);
+
+exports.getSquareSubscriptionStatus = onRequest(
+  {
+    cors: true,
+    secrets: [squareAccessToken]
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
+      if (!canViewBilling(auth.profile)) {
+        throw createHttpError(403, "Only agency leadership can view billing.");
+      }
+
+      const subscriptionId = String(req.body.subscriptionId || "").trim();
+      if (!subscriptionId) {
+        throw createHttpError(400, "Subscription ID is required.");
+      }
+
+      const payload = await squareRequest(`/v2/subscriptions/${subscriptionId}?include=actions`);
+      responseJson(res, 200, {
+        ok: true,
+        subscription: payload.subscription || null,
+        actions: payload.actions || []
+      });
+    } catch (error) {
+      logger.error("getSquareSubscriptionStatus failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to retrieve the Square subscription."
+      });
+    }
+  }
+);
+
+exports.syncSquareSubscriptionToFirestore = onRequest(
+  {
+    cors: true,
+    secrets: [squareAccessToken]
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
+      if (!canViewBilling(auth.profile)) {
+        throw createHttpError(403, "Only agency leadership can refresh billing.");
+      }
+
+      const subscriptionId = String(req.body.subscriptionId || "").trim();
+      if (!subscriptionId) {
+        throw createHttpError(400, "Subscription ID is required.");
+      }
+
+      const agencyId = resolveAgencyId(auth.profile, req.body.agencyId);
+      const synced = await syncSquareSubscriptionRecord(agencyId, subscriptionId, String(req.body.planId || "").trim());
+      responseJson(res, 200, {
+        ok: true,
+        subscription: synced
+      });
+    } catch (error) {
+      logger.error("syncSquareSubscriptionToFirestore failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to refresh the Square subscription."
+      });
+    }
+  }
+);
+
+exports.updateSquarePaymentMethod = onRequest(
+  {
+    cors: true
+  },
+  async (_req, res) => {
+    responseJson(res, 200, {
+      ok: true,
+      message: "Payment method updates are handled securely through Square. Contact support or use the Square subscription email receipt to update payment details."
+    });
+  }
+);
+
+exports.squareWebhook = onRequest(
   {
     cors: false,
-    secrets: [stripeSecretKey, stripeWebhookSecret]
+    secrets: [squareAccessToken, squareWebhookSignatureKey]
   },
   async (req, res) => {
     if (req.method !== "POST") {
@@ -317,148 +622,43 @@ exports.stripeWebhook = onRequest(
       return;
     }
 
-    const stripe = stripeClient();
-    const signature = req.get("stripe-signature");
-    let event;
-
     try {
-      event = stripe.webhooks.constructEvent(req.rawBody, signature, stripeWebhookSecret.value());
-    } catch (error) {
-      logger.error("Stripe webhook signature verification failed", error);
-      res.status(400).send(`Webhook Error: ${error.message}`);
-      return;
-    }
+      const event = req.body || {};
+      const eventType = String(event.type || "");
+      const data = event.data || {};
+      const subscription = data.subscription || data.object?.subscription || null;
 
-    try {
-      switch (event.type) {
-        case "checkout.session.completed": {
-          const session = event.data.object;
-          const agencyId = session.metadata && session.metadata.agencyId
-            ? session.metadata.agencyId
-            : session.client_reference_id;
+      logger.info("squareWebhook received", {
+        type: eventType
+      });
 
-          if (agencyId) {
-            const { agencyRef } = await getAgencyRefAndData(agencyId);
-            await agencyRef.update({
-              stripeCustomerId: session.customer || "",
-              stripeSubscriptionId: session.subscription || "",
-              subscriptionStatus: "trialing",
-              updatedAt: new Date().toISOString()
-            });
-            await upsertSubscriptionRecord({
-              agencyId,
-              stripeCustomerId: session.customer || "",
-              stripeSubscriptionId: session.subscription || "",
-              planId: session.metadata && session.metadata.planId ? session.metadata.planId : "",
-              status: "trialing"
-            });
-          }
-          break;
+      if (subscription?.id) {
+        const query = await admin.firestore()
+          .collection("agencies")
+          .where("squareSubscriptionId", "==", subscription.id)
+          .limit(1)
+          .get();
+
+        if (!query.empty) {
+          const agencyId = query.docs[0].id;
+          await syncSquareSubscriptionRecord(agencyId, subscription.id);
         }
-
-        case "customer.subscription.created":
-        case "customer.subscription.updated":
-        case "customer.subscription.deleted": {
-          const subscription = event.data.object;
-          const agencyIdFromMetadata = subscription.metadata && subscription.metadata.agencyId;
-          const agencyRef = agencyIdFromMetadata
-            ? admin.firestore().collection("agencies").doc(agencyIdFromMetadata)
-            : null;
-
-          let targetRef = agencyRef;
-          if (!targetRef || !(await targetRef.get()).exists) {
-            const query = await admin.firestore()
-              .collection("agencies")
-              .where("stripeCustomerId", "==", subscription.customer)
-              .limit(1)
-              .get();
-            targetRef = query.empty ? null : query.docs[0].ref;
-          }
-
-          if (targetRef) {
-            const targetSnap = await targetRef.get();
-            const targetAgency = targetSnap.data();
-            const update = {
-              stripeCustomerId: subscription.customer || "",
-              stripeSubscriptionId: subscription.id || "",
-              subscriptionStatus: mapStripeStatus(subscription.status),
-              updatedAt: new Date().toISOString()
-            };
-
-            if (subscription.metadata && subscription.metadata.planId) {
-              update.planId = subscription.metadata.planId;
-            }
-
-            await targetRef.update(update);
-            await upsertSubscriptionRecord({
-              agencyId: targetRef.id,
-              stripeCustomerId: subscription.customer || "",
-              stripeSubscriptionId: subscription.id || "",
-              planId: update.planId || targetAgency.planId || "",
-              status: mapStripeStatus(subscription.status),
-              currentPeriodStart: isoFromUnix(subscription.current_period_start),
-              currentPeriodEnd: isoFromUnix(subscription.current_period_end),
-              trialStart: isoFromUnix(subscription.trial_start),
-              trialEnd: isoFromUnix(subscription.trial_end)
-            });
-          }
-          break;
-        }
-
-        case "invoice.payment_failed": {
-          const invoice = event.data.object;
-          const query = await admin.firestore()
-            .collection("agencies")
-            .where("stripeCustomerId", "==", invoice.customer)
-            .limit(1)
-            .get();
-
-          if (!query.empty) {
-            await query.docs[0].ref.update({
-              subscriptionStatus: "past_due",
-              updatedAt: new Date().toISOString()
-            });
-            await upsertSubscriptionRecord({
-              agencyId: query.docs[0].id,
-              stripeCustomerId: invoice.customer || "",
-              status: "past_due"
-            });
-          }
-          break;
-        }
-
-        case "invoice.paid": {
-          const invoice = event.data.object;
-          const query = await admin.firestore()
-            .collection("agencies")
-            .where("stripeCustomerId", "==", invoice.customer)
-            .limit(1)
-            .get();
-
-          if (!query.empty) {
-            await query.docs[0].ref.update({
-              subscriptionStatus: "active",
-              updatedAt: new Date().toISOString()
-            });
-            await upsertSubscriptionRecord({
-              agencyId: query.docs[0].id,
-              stripeCustomerId: invoice.customer || "",
-              status: "active"
-            });
-          }
-          break;
-        }
-
-        default:
-          logger.info(`Unhandled Stripe event type: ${event.type}`);
       }
 
+      // TODO: Verify Square webhook signatures before enabling production automation.
+      // Future events to watch:
+      // - payment.updated
+      // - subscription.created
+      // - subscription.updated
+      // - invoice.payment_made
       res.status(200).json({ received: true });
     } catch (error) {
-      logger.error("stripeWebhook handler failed", error);
-      res.status(500).json({
-        error: error.message || "Unable to process Stripe webhook."
+      logger.error("squareWebhook failed", error);
+      res.status(error.status || 500).json({
+        error: error.message || "Unable to process the Square webhook."
       });
     }
   }
 );
+
+exports.createSquareCheckoutSession = exports.createSquareSubscriptionLink;

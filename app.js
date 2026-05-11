@@ -778,14 +778,11 @@
       if (role === "platformOwner") {
         return mapSnapshot(await db.collection("users").get());
       }
-      if (role === "worker") {
+      if (role === "worker" || role === "clientManager") {
         const snapshot = await db.collection("users").doc(state.session.userId).get();
         return snapshot.exists ? [{ id: snapshot.id, ...snapshot.data() }] : [];
       }
       return mapSnapshot(await db.collection("users").where("agencyId", "==", agencyId).get()).filter(user => {
-        if (role === "clientManager") {
-          return user.id === state.session.userId;
-        }
         return true;
       });
     }
@@ -1286,7 +1283,17 @@
           openClientMissingPunchModal(trigger.dataset.timesheetId || "");
           break;
         case "view-approval":
+          await logApprovalViewed(trigger.dataset.timesheetId || "");
           openApprovalDetailModal(trigger.dataset.timesheetId || "");
+          break;
+        case "copy-approval-link":
+          await copyApprovalLink(trigger.dataset.approvalId || "", trigger.dataset.linkMode || "internal");
+          break;
+        case "email-approval-link":
+          await emailApprovalLinkPlaceholder(trigger.dataset.approvalId || "");
+          break;
+        case "text-approval-link":
+          await textApprovalLinkPlaceholder(trigger.dataset.approvalId || "");
           break;
         case "open-reject-modal":
           state.modal = {
@@ -1366,16 +1373,43 @@
           await startBillingCheckout(trigger.dataset.plan || state.selectedPlan);
           break;
         case "upgrade-plan":
-          await handlePlanPreview(trigger.dataset.plan || "");
+          await changeBillingPlan(trigger.dataset.plan || "", "upgrade");
           break;
         case "downgrade-plan":
-          await handlePlanPreview(trigger.dataset.plan || "");
+          await changeBillingPlan(trigger.dataset.plan || "", "downgrade");
+          break;
+        case "pause-subscription":
+          await handleSquareSubscriptionAction("pause");
+          break;
+        case "resume-subscription":
+          await handleSquareSubscriptionAction("resume");
+          break;
+        case "reactivate-subscription":
+          await handleSquareSubscriptionAction("reactivate");
           break;
         case "cancel-subscription":
-          handleBillingPlaceholder("Square billing changes are handled through your Square payment link or agency support.");
+          openCancelSubscriptionModal();
           break;
         case "manage-billing":
           await openBillingPortal();
+          break;
+        case "refresh-subscription":
+          await refreshSubscriptionStatus();
+          break;
+        case "view-payment-history":
+          openPaymentHistoryPlaceholder();
+          break;
+        case "update-payment-method":
+          openPaymentMethodPlaceholder();
+          break;
+        case "privacy-placeholder":
+          handleBillingPlaceholder("Privacy Policy will be published with your live Portaly workspace and legal review.");
+          break;
+        case "terms-placeholder":
+          handleBillingPlaceholder("Terms of Service will be published with your live Portaly workspace and legal review.");
+          break;
+        case "open-support":
+          openSupportPlaceholder();
           break;
         case "print-view":
           window.print();
@@ -3789,11 +3823,388 @@
     await startBillingCheckout(planId);
   }
 
+  async function changeBillingPlan(planId, direction = "change") {
+    if (!planId) {
+      throw new Error("Choose a plan first.");
+    }
+
+    const plan = getPlanDefinition(planId);
+    if (!plan) {
+      throw new Error("Plan not found.");
+    }
+
+    if (!canManageBilling()) {
+      throw new Error("Only the agency owner or platform owner can change billing.");
+    }
+
+    if (state.session.mode === "demo") {
+      const agency = getCurrentAgency();
+      const subscription = getCurrentSubscription();
+      if (agency) {
+        await updateData("agencies", agency.id, {
+          planId,
+          subscriptionStatus: subscription?.status || agency.subscriptionStatus || "trialing"
+        });
+      }
+      if (subscription) {
+        await updateData("subscriptions", subscription.id, {
+          planId,
+          status: subscription.status || "trialing",
+          updatedAt: new Date().toISOString()
+        });
+      }
+      await appendAuditLog("subscription_changed", "subscriptions", subscription?.id || agency?.id || planId, subscription || agency, {
+        planId
+      }, {
+        reason: `${direction}_plan_demo`
+      });
+      await refreshCurrentView();
+      pushToast(`${plan.label} plan selected in Demo Mode.`, "success");
+      return;
+    }
+
+    const subscription = getCurrentSubscription();
+    if (!subscription?.squareSubscriptionId) {
+      await startBillingCheckout(planId);
+      return;
+    }
+
+    const response = await callBillingFunction("swapSquareSubscriptionPlan", {
+      subscriptionId: subscription.squareSubscriptionId,
+      newPlanId: planId,
+      agencyId: state.session.agencyId
+    }, {
+      fallbackMessage: "Square subscription updates are not connected yet. Use your secure checkout link or contact support."
+    });
+
+    if (!response) {
+      return;
+    }
+
+    await appendAuditLog("subscription_changed", "subscriptions", subscription.id, subscription, {
+      planId
+    }, {
+      reason: `${direction}_plan`
+    });
+    await refreshSubscriptionStatus(true, `${plan.label} plan update requested.`);
+  }
+
   function handleBillingPlaceholder(message) {
     state.notice = message;
     storeNotice(state.notice);
     pushToast(message, "success");
     renderApp();
+  }
+
+  function getBillingFunctionsBaseUrl() {
+    return String(BILLING_CONFIG.functionsBaseUrl || state.firebase.config.functionsBaseUrl || "").trim().replace(/\/$/, "");
+  }
+
+  function hasBillingBackend() {
+    return !!getBillingFunctionsBaseUrl();
+  }
+
+  async function callBillingFunction(endpoint, payload = {}, options = {}) {
+    if (!hasBillingBackend()) {
+      handleBillingPlaceholder(options.fallbackMessage || "Square subscription self-service will connect here after the secure backend is deployed.");
+      return null;
+    }
+
+    if (state.session.mode !== "cloud" || !state.firebase.auth?.currentUser) {
+      throw new Error("Sign in to a cloud account before using Square billing tools.");
+    }
+
+    const token = await state.firebase.auth.currentUser.getIdToken();
+    const response = await fetch(`${getBillingFunctionsBaseUrl()}/${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || options.errorMessage || "Square billing request failed.");
+    }
+    return data;
+  }
+
+  async function refreshSubscriptionStatus(showToastOnSuccess = false, successMessage = "Subscription status refreshed.") {
+    const subscription = getCurrentSubscription();
+    if (!subscription?.squareSubscriptionId) {
+      handleBillingPlaceholder("Subscription not connected yet. If you already paid, click Refresh Billing again later or contact support with your Square receipt.");
+      return;
+    }
+
+    const result = await callBillingFunction("syncSquareSubscriptionToFirestore", {
+      subscriptionId: subscription.squareSubscriptionId,
+      agencyId: state.session.agencyId
+    }, {
+      fallbackMessage: "Square status sync is not connected yet. If you already paid, contact support with your Square receipt."
+    });
+
+    if (!result) {
+      return;
+    }
+
+    await refreshCurrentView();
+    if (showToastOnSuccess) {
+      pushToast(successMessage, "success");
+    }
+  }
+
+  function openCancelSubscriptionModal() {
+    requirePermission(canManageBilling(), "Only the agency owner or platform owner can cancel the subscription.");
+    openModal("Cancel Subscription", `
+      <div class="notice-card warning">
+        <div>
+          <strong>Cancel at the end of the current billing period?</strong>
+          <p>Your team will keep access until the current billing cycle ends.</p>
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="cancel-subscription-confirm">Type CANCEL SUBSCRIPTION to continue</label>
+        <input id="cancel-subscription-confirm" name="confirmText" type="text" placeholder="CANCEL SUBSCRIPTION" />
+      </div>
+    `, async values => {
+      const confirmation = String(values.confirmText || "").trim();
+      if (confirmation !== "CANCEL SUBSCRIPTION") {
+        throw new Error("Type CANCEL SUBSCRIPTION to confirm.");
+      }
+      await handleSquareSubscriptionAction("cancel");
+    }, {
+      saveLabel: "Cancel Subscription",
+      saveTone: "button-danger",
+      size: "small"
+    });
+  }
+
+  async function logApprovalViewed(timesheetId) {
+    const approval = getScopedData().approvals.find(item => item.timesheetId === timesheetId);
+    if (!approval) {
+      return;
+    }
+    await appendAuditLog("approval_viewed", "approvals", approval.id, null, {
+      timesheetId,
+      route: state.route
+    }, {
+      actorId: state.session.userId,
+      actorRole: state.session.role
+    });
+  }
+
+  async function ensureApprovalShareRecord(approvalId) {
+    const approval = findRecord("approvals", approvalId);
+    if (!approval) {
+      throw new Error("That approval record could not be found.");
+    }
+
+    const timesheet = findRecord("timesheets", approval.timesheetId);
+    const patch = {};
+
+    if (!approval.approvalToken) {
+      patch.approvalToken = createId("approvaltoken");
+    }
+    if (!approval.tokenExpiresAt) {
+      patch.tokenExpiresAt = addDays(new Date(), 14).toISOString();
+    }
+    if (!approval.weekStart && timesheet?.payPeriodStart) {
+      patch.weekStart = timesheet.payPeriodStart;
+    }
+    if (!approval.weekEnd && timesheet?.payPeriodEnd) {
+      patch.weekEnd = timesheet.payPeriodEnd;
+    }
+
+    if (!Object.keys(patch).length) {
+      return {
+        ...approval,
+        weekStart: approval.weekStart || timesheet?.payPeriodStart || "",
+        weekEnd: approval.weekEnd || timesheet?.payPeriodEnd || ""
+      };
+    }
+
+    const updated = await updateData("approvals", approvalId, patch);
+    await refreshCurrentView();
+    return updated;
+  }
+
+  function buildApprovalLink(approval, mode = "token") {
+    if (!approval) {
+      return "";
+    }
+    const route = mode === "internal"
+      ? `#/client-approval/${approval.id}`
+      : `#/approve/${approval.approvalToken || approval.id}`;
+    return `${DEFAULT_APP_URL}${route}`;
+  }
+
+  function buildApprovalShareText(approval, link) {
+    const timesheet = findRecord("timesheets", approval?.timesheetId || "");
+    const clientName = getClientName(approval?.clientId || timesheet?.clientId || "");
+    const siteName = getSiteName(approval?.siteId || timesheet?.siteId || "");
+    const weekEnding = approval?.weekEnd || timesheet?.payPeriodEnd || "";
+    return [
+      `Portaly approval request for ${clientName || "your site"}`,
+      siteName ? `Site: ${siteName}` : "",
+      weekEnding ? `Week ending: ${formatDate(weekEnding)}` : "",
+      `Review and sign here: ${link}`
+    ].filter(Boolean).join("\n");
+  }
+
+  async function copyApprovalLink(approvalId, mode = "token") {
+    const approval = await ensureApprovalShareRecord(approvalId);
+    const link = buildApprovalLink(approval, mode);
+    await copyText(link);
+    await appendAuditLog("approval_sent", "approvals", approval.id, null, {
+      linkMode: mode,
+      link
+    }, {
+      reason: "copy_approval_link",
+      actorId: state.session.userId,
+      actorRole: state.session.role
+    });
+  }
+
+  async function emailApprovalLinkPlaceholder(approvalId) {
+    const approval = await ensureApprovalShareRecord(approvalId);
+    const link = buildApprovalLink(approval, "token");
+    const message = buildApprovalShareText(approval, link);
+    await copyText(message);
+    await appendAuditLog("approval_sent", "approvals", approval.id, null, {
+      linkMode: "email_placeholder",
+      link
+    }, {
+      reason: "email_placeholder",
+      actorId: state.session.userId,
+      actorRole: state.session.role
+    });
+    pushToast("Approval email draft copied. Send it from your email tool.", "success");
+  }
+
+  async function textApprovalLinkPlaceholder(approvalId) {
+    const approval = await ensureApprovalShareRecord(approvalId);
+    const link = buildApprovalLink(approval, "token");
+    const message = buildApprovalShareText(approval, link);
+    await copyText(message);
+    await appendAuditLog("approval_sent", "approvals", approval.id, null, {
+      linkMode: "text_placeholder",
+      link
+    }, {
+      reason: "text_placeholder",
+      actorId: state.session.userId,
+      actorRole: state.session.role
+    });
+    pushToast("Approval text message copied. Send it from your phone or messaging tool.", "success");
+  }
+
+  async function handleSquareSubscriptionAction(action) {
+    requirePermission(canManageBilling(), "Only the agency owner or platform owner can manage billing.");
+    const subscription = getCurrentSubscription();
+
+    if (state.session.mode === "demo") {
+      await simulateDemoSubscriptionAction(action, subscription);
+      return;
+    }
+
+    if (!subscription?.squareSubscriptionId) {
+      handleBillingPlaceholder("Subscription not connected yet. If you already paid, click Refresh Billing or contact support with your Square receipt.");
+      return;
+    }
+
+    const endpointMap = {
+      pause: "pauseSquareSubscription",
+      resume: "resumeSquareSubscription",
+      reactivate: "resumeSquareSubscription",
+      cancel: "cancelSquareSubscription"
+    };
+    const successMessages = {
+      pause: "Subscription pause requested.",
+      resume: "Subscription resume requested.",
+      reactivate: "Subscription reactivation requested.",
+      cancel: "Your subscription is scheduled to cancel at the end of your billing period."
+    };
+    const endpoint = endpointMap[action];
+    if (!endpoint) {
+      throw new Error("That Square billing action is not available.");
+    }
+
+    const result = await callBillingFunction(endpoint, {
+      subscriptionId: subscription.squareSubscriptionId,
+      agencyId: state.session.agencyId
+    }, {
+      fallbackMessage: "Square subscription self-service is not connected yet. Contact support or use your Square receipt email to manage billing."
+    });
+
+    if (!result) {
+      return;
+    }
+
+    if (action === "cancel") {
+      await appendAuditLog("subscription_canceled", "subscriptions", subscription.id, subscription, {
+        status: "cancel_at_period_end",
+        cancelAtPeriodEnd: true
+      }, {
+        reason: "customer_requested_cancel"
+      });
+    }
+
+    await refreshSubscriptionStatus(true, successMessages[action]);
+  }
+
+  async function simulateDemoSubscriptionAction(action, subscription) {
+    const agency = getCurrentAgency();
+    const targetSubscription = subscription || getCurrentSubscription();
+    const nowIso = new Date().toISOString();
+    const update = {
+      updatedAt: nowIso
+    };
+
+    if (action === "pause") {
+      update.status = "paused";
+      update.pausedAt = nowIso;
+    } else if (action === "resume" || action === "reactivate") {
+      update.status = "active";
+      update.resumedAt = nowIso;
+      update.cancelAtPeriodEnd = false;
+    } else if (action === "cancel") {
+      update.status = "canceled";
+      update.canceledAt = nowIso;
+      update.cancelAtPeriodEnd = true;
+    }
+
+    if (targetSubscription) {
+      await updateData("subscriptions", targetSubscription.id, update);
+    }
+    if (agency) {
+      await updateData("agencies", agency.id, {
+        subscriptionStatus: update.status || agency.subscriptionStatus || "trialing",
+        updatedAt: nowIso
+      });
+    }
+    if (action === "cancel") {
+      await appendAuditLog("subscription_canceled", "subscriptions", targetSubscription?.id || agency?.id || "demo", subscription, update, {
+        reason: "demo_mode_cancel"
+      });
+    }
+    await refreshCurrentView();
+    pushToast(`Demo ${formatStatusLabel(action)} action saved.`, "success");
+  }
+
+  function openPaymentHistoryPlaceholder() {
+    handleBillingPlaceholder("Payment history will sync here from Square once the secure billing backend is deployed.");
+  }
+
+  function openPaymentMethodPlaceholder() {
+    const email = getSupportEmail();
+    handleBillingPlaceholder(`Payment method updates are handled securely through Square. Contact ${email} or use your Square receipt email to update payment details.`);
+  }
+
+  function openSupportPlaceholder() {
+    const email = getSupportEmail();
+    const phone = getSupportPhone();
+    handleBillingPlaceholder(`Support is available at ${email}${phone ? ` or ${phone}` : ""}.`);
   }
 
   function enforcePlanLimit(entityType, willBeActive, existingRecord) {
@@ -4295,6 +4706,163 @@
     `;
   }
 
+  function buildApprovalRouteContext() {
+    const parsed = parseApprovalHash();
+    if (!parsed) {
+      return null;
+    }
+
+    const sources = [];
+    if (state.session.mode !== "public" && state.session.role) {
+      sources.push(getScopedData());
+    }
+    sources.push(state.demoStore);
+
+    for (const source of sources) {
+      const approvals = source.approvals || [];
+      const approval = approvals.find(item => (
+        parsed.mode === "id"
+          ? item.id === parsed.value
+          : (item.approvalToken === parsed.value || item.id === parsed.value)
+      ));
+      if (!approval) {
+        continue;
+      }
+      const timesheet = (source.timesheets || []).find(item => item.id === approval.timesheetId);
+      const punches = getTimesheetPunches(timesheet, source.punches || []);
+      return {
+        parsed,
+        source,
+        approval,
+        timesheet,
+        punches
+      };
+    }
+
+    return {
+      parsed,
+      source: null,
+      approval: null,
+      timesheet: null,
+      punches: []
+    };
+  }
+
+  function renderApprovalReviewPage(mode = "public") {
+    const context = buildApprovalRouteContext();
+    if (!context?.approval || !context?.timesheet) {
+      return `
+        <main class="auth-shell">
+          <div class="container">
+            <div class="auth-card approval-review-card" style="max-width: 860px; margin: 0 auto;">
+              <p class="eyebrow">Approval Link</p>
+              <h3>Approval link ready</h3>
+              <p>This approval link could not load a matching timecard from the current session. Sign in as the assigned client manager or use the demo to review and sign hours.</p>
+              <div class="page-actions" style="margin-top: 20px;">
+                <button class="button button-primary" data-action="go-route" data-route="login" type="button">Login</button>
+                <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">View Demo</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      `;
+    }
+
+    const { approval, timesheet, punches } = context;
+    const approvalNote = approval.note || timesheet.clientNotes || timesheet.adminNotes || "No note added yet.";
+    const canAct = mode === "client" && canApproveRecord(timesheet);
+    const historyBadges = [
+      renderInlineStatus(approval.status || timesheet.status),
+      approval.clientEdited || timesheet.clientEdited ? `<span class="status-badge status-warning">Client Edited</span>` : "",
+      punches.some(punch => punch.edited) ? `<span class="status-badge status-warning">Edited</span>` : ""
+    ].join("");
+
+    return `
+      <main class="auth-shell approval-shell-main">
+        <div class="container">
+          <div class="auth-card approval-review-card" style="max-width: 980px; margin: 0 auto;">
+            <div class="page-actions" style="justify-content: space-between; align-items: flex-start; gap: 16px;">
+              <div>
+                <p class="eyebrow">Client Approval</p>
+                <h3>${escapeHtml(getClientName(approval.clientId))} - ${escapeHtml(getSiteName(approval.siteId))}</h3>
+                <p class="helper-copy">Week ending ${escapeHtml(formatDate(approval.weekEnd || timesheet.payPeriodEnd || state.now))}</p>
+              </div>
+              <div class="page-actions">
+                ${historyBadges}
+              </div>
+            </div>
+
+            <div class="detail-grid" style="margin-top: 20px;">
+              ${renderDetailBox("Client", getClientName(approval.clientId))}
+              ${renderDetailBox("Site", getSiteName(approval.siteId))}
+              ${renderDetailBox("Worker", getWorkerName(approval.workerId))}
+              ${renderDetailBox("Regular hours", formatHours(timesheet.regularHours || 0))}
+              ${renderDetailBox("Overtime hours", formatHours(timesheet.overtimeHours || 0))}
+              ${renderDetailBox("Total hours", formatHours(timesheet.approvedHours || 0))}
+              ${renderDetailBox("Signature status", approval.managerName ? `Signed by ${approval.managerName}` : "Awaiting signature")}
+              ${renderDetailBox("Approval note", approvalNote)}
+            </div>
+
+            <div class="surface-card" style="margin-top: 20px;">
+              <p class="eyebrow">Punch details</p>
+              ${punches.length ? `
+                <ul class="history-list" style="margin-top: 14px;">
+                  ${punches.map(punch => `
+                    <li class="history-item">
+                      <div>
+                        <strong>${escapeHtml(PUNCH_LABELS[punch.action] || punch.action)}</strong>
+                        <p class="inline-note">${escapeHtml(formatDateTime(punch.timestamp))}</p>
+                      </div>
+                      <div class="page-actions">
+                        ${punch.edited ? `<span class="status-badge status-warning">Edited</span>` : ""}
+                        ${renderInlineStatus("submitted")}
+                      </div>
+                    </li>
+                  `).join("")}
+                </ul>
+              ` : renderEmptyState("No punches recorded yet", "Punch activity for this timecard will appear here once shifts are captured.")}
+            </div>
+
+            ${mode === "client" ? `
+              <div class="summary-card" style="margin-top: 20px;">
+                <p class="eyebrow">Approval link tools</p>
+                <div class="page-actions" style="margin-top: 16px;">
+                  <button class="button button-secondary" data-action="copy-approval-link" data-approval-id="${escapeHtml(approval.id)}" data-link-mode="internal" type="button">Copy Approval Link</button>
+                  <button class="button button-ghost" data-action="email-approval-link" data-approval-id="${escapeHtml(approval.id)}" type="button">Email Approval Link</button>
+                  <button class="button button-ghost" data-action="text-approval-link" data-approval-id="${escapeHtml(approval.id)}" type="button">Text Approval Link</button>
+                </div>
+              </div>
+            ` : ""}
+
+            ${canAct ? `
+              <div class="page-actions approval-action-row" style="margin-top: 22px;">
+                <button class="button button-secondary" data-action="open-client-time-edit" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">Edit Time</button>
+                <button class="button button-secondary" data-action="open-client-missing-punch" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">Add Missing Punch</button>
+                <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(timesheet.id)}" type="button">Approve and Sign</button>
+                <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(timesheet.id)}" type="button">Reject</button>
+              </div>
+            ` : `
+              <div class="notice-card" style="margin-top: 22px;">
+                <div>
+                  <strong>${mode === "public" ? "Sign in to approve this timecard." : "Review access is limited on this page."}</strong>
+                  <p>${mode === "public" ? "This public approval page stays separate from the main dashboard. Sign in as the assigned client manager to approve or reject the timecard." : "Only the assigned client manager or agency staff can approve this record."}</p>
+                </div>
+              </div>
+            `}
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderPublicApprovalPage() {
+    return renderApprovalReviewPage("public");
+  }
+
+  function renderClientApprovalPage() {
+    return renderApprovalReviewPage("client");
+  }
+
   function renderDemoAccessHub() {
     return `
       <main class="auth-shell">
@@ -4523,11 +5091,11 @@
               <p class="eyebrow">What happens next</p>
               <h3>Real account setup</h3>
               <ul class="list">
-                <li>Create Firebase Auth user</li>
-                <li>Create agency record in Firestore</li>
-                <li>Create owner user profile</li>
-                <li>Set subscription status to trialing</li>
-                <li>Route you into onboarding</li>
+                <li>Create your secure login</li>
+                <li>Create your agency workspace</li>
+                <li>Start your 14-day free trial</li>
+                <li>Open your owner dashboard</li>
+                <li>Stay empty unless you choose sample data</li>
               </ul>
             </div>
             <div class="support-card">
@@ -4700,6 +5268,15 @@
           <div>
             <strong>${escapeHtml(getBrandName())}</strong>
             <p class="muted-text">QR punches, approvals, payroll, and margin visibility for staffing agencies.</p>
+            <div class="marketing-footer-links">
+              <button class="marketing-link" data-action="privacy-placeholder" type="button">Privacy Policy</button>
+              <button class="marketing-link" data-action="terms-placeholder" type="button">Terms of Service</button>
+              <button class="marketing-link" data-action="open-support" type="button">Support</button>
+            </div>
+            <div class="marketing-trust-row">
+              <span class="mode-badge">Secure billing through Square</span>
+              <span class="mode-badge">Data export available</span>
+            </div>
           </div>
           <div class="marketing-actions">
             <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
@@ -4805,6 +5382,8 @@
         return renderLivePunchesPage();
       case "approvals":
         return renderApprovalsPage();
+      case "client-approval":
+        return renderClientApprovalPage();
       case "payroll":
         return renderPayrollPage();
       case "margin":
@@ -5590,6 +6169,9 @@
                         <button class="button button-secondary" data-action="open-client-missing-punch" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Add Missing Punch</button>
                         <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Approve</button>
                         <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(approval.timesheetId)}" type="button">Reject</button>
+                        <button class="button button-ghost" data-action="copy-approval-link" data-approval-id="${escapeHtml(approval.id)}" data-link-mode="internal" type="button">Copy Approval Link</button>
+                        <button class="button button-ghost" data-action="email-approval-link" data-approval-id="${escapeHtml(approval.id)}" type="button">Email Approval Link</button>
+                        <button class="button button-ghost" data-action="text-approval-link" data-approval-id="${escapeHtml(approval.id)}" type="button">Text Approval Link</button>
                       `
                       : `
                         <button class="button button-ghost" data-action="view-approval" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">View Details</button>
@@ -5597,6 +6179,9 @@
                         <button class="button button-primary" data-action="approve-timesheet" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">Approve</button>
                         <button class="button button-danger" data-action="open-reject-modal" data-target-type="timesheet" data-target-id="${escapeHtml(approval.timesheetId)}" type="button">Reject</button>
                         <button class="button button-ghost" data-action="view-timesheet-history" data-timesheet-id="${escapeHtml(approval.timesheetId)}" type="button">View History</button>
+                        <button class="button button-ghost" data-action="copy-approval-link" data-approval-id="${escapeHtml(approval.id)}" data-link-mode="token" type="button">Copy Approval Link</button>
+                        <button class="button button-ghost" data-action="email-approval-link" data-approval-id="${escapeHtml(approval.id)}" type="button">Email Approval Link</button>
+                        <button class="button button-ghost" data-action="text-approval-link" data-approval-id="${escapeHtml(approval.id)}" type="button">Text Approval Link</button>
                       `;
                     return `
                       <tr>
@@ -5992,17 +6577,21 @@
     const plan = getPlanDefinition(agency?.planId || state.selectedPlan || "agency");
     const usage = getUsageStats(getScopedData(), agency?.id);
     const nextBillingDate = subscription?.currentPeriodEnd || subscription?.trialEnd || agency?.trialEnd || addDays(new Date(), 14).toISOString();
+    const status = subscription?.status || agency?.subscriptionStatus || "trialing";
+    const canManage = canManageBilling();
+    const subscriptionConnected = !!subscription?.squareSubscriptionId;
+    const planOptions = Object.values(PLAN_DEFINITIONS).map(item => renderPricingCard(item, item.id === (agency?.planId || state.selectedPlan), "billing")).join("");
 
     return `
       <section class="stack-lg">
         <div class="metrics-grid">
           ${renderMetricCard("Current Plan", plan.label, "Monthly plan tier", "PL")}
           ${renderMetricCard("Trial Days Remaining", Math.max(getTrialDaysRemaining(), 0), "Days left before billing starts", "TD")}
-          ${renderMetricCard("Subscription Status", formatStatusLabel(subscription?.status || agency?.subscriptionStatus || "trialing"), "Square billing and Firestore status", "SS")}
+          ${renderMetricCard("Subscription Status", formatStatusLabel(status), "Square billing and Portaly subscription status", "SS")}
           ${renderMetricCard("Worker / Site Usage", `${usage.activeWorkers}${plan.workerLimit ? ` / ${plan.workerLimit}` : ""} workers`, `${usage.activeSites}${plan.siteLimit ? ` / ${plan.siteLimit}` : ""} sites`, "US")}
         </div>
 
-        ${["past_due", "unpaid", "expired_trial"].includes(subscription?.status || agency?.subscriptionStatus) ? `
+        ${["past_due", "unpaid", "expired_trial"].includes(status) ? `
           <div class="notice-card danger">
             <div>
               <strong>Payment issue detected</strong>
@@ -6014,19 +6603,52 @@
         <div class="summary-card">
           <p class="eyebrow">Billing</p>
           <h3>${escapeHtml(plan.label)} plan</h3>
-          <p class="helper-copy">Next billing date placeholder: ${escapeHtml(formatDate(nextBillingDate))}</p>
-          <p class="helper-copy">Square billing is connected through secure Square payment links.</p>
-          <div class="page-actions" style="margin-top: 18px;">
-            <button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">Start Paid Subscription</button>
-            <button class="button button-secondary" data-action="manage-billing" type="button">Manage Billing</button>
-            <button class="button button-ghost" data-action="upgrade-plan" data-plan="growth" type="button">Upgrade Plan</button>
-            <button class="button button-ghost" data-action="downgrade-plan" data-plan="starter" type="button">Downgrade Plan</button>
-            <button class="button button-danger" data-action="cancel-subscription" type="button">Cancel Subscription</button>
+          <div class="detail-grid" style="margin-top: 18px;">
+            ${renderDetailBox("Current plan", plan.label)}
+            ${renderDetailBox("Subscription status", formatStatusLabel(status))}
+            ${renderDetailBox("Trial days remaining", String(Math.max(getTrialDaysRemaining(), 0)))}
+            ${renderDetailBox("Next billing date", formatDate(nextBillingDate))}
+            ${renderDetailBox("Square customer ID", subscription?.squareCustomerId || agency?.squareCustomerId || "Not connected yet")}
+            ${renderDetailBox("Square subscription ID", subscription?.squareSubscriptionId || agency?.squareSubscriptionId || "Not connected yet")}
+          </div>
+          <div class="stack-md" style="margin-top: 18px;">
+            ${renderUsageRow("Active workers", usage.activeWorkers, plan.workerLimit)}
+            ${renderUsageRow("Active sites", usage.activeSites, plan.siteLimit)}
+          </div>
+          <p class="helper-copy" style="margin-top: 18px;">Payments are processed securely through Square checkout. Subscription changes can connect here once the secure backend is deployed.</p>
+          ${!subscriptionConnected ? `
+            <div class="notice-card warning" style="margin-top: 18px;">
+              <div>
+                <strong>Subscription not connected yet</strong>
+                <p>If you already paid, click Refresh Subscription Status or contact support with your Square receipt email.</p>
+              </div>
+            </div>
+          ` : ""}
+          ${!canManage ? `
+            <div class="notice-card" style="margin-top: 18px;">
+              <div>
+                <strong>Billing changes are limited</strong>
+                <p>Only the agency owner or platform owner can change plan, pause, resume, or cancel billing.</p>
+              </div>
+            </div>
+          ` : ""}
+          <div class="page-actions billing-action-grid" style="margin-top: 18px;">
+            <button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button" ${!canManage ? "disabled" : ""}>Start Paid Subscription</button>
+            <button class="button button-secondary" data-action="manage-billing" type="button" ${!canManage ? "disabled" : ""}>Manage Billing</button>
+            <button class="button button-ghost" data-action="upgrade-plan" data-plan="growth" type="button" ${!canManage ? "disabled" : ""}>Upgrade Plan</button>
+            <button class="button button-ghost" data-action="downgrade-plan" data-plan="starter" type="button" ${!canManage ? "disabled" : ""}>Downgrade Plan</button>
+            <button class="button button-ghost" data-action="pause-subscription" type="button" ${!canManage || ["paused", "canceled"].includes(status) ? "disabled" : ""}>Pause Subscription</button>
+            <button class="button button-ghost" data-action="resume-subscription" type="button" ${!canManage || status !== "paused" ? "disabled" : ""}>Resume Subscription</button>
+            <button class="button button-danger" data-action="cancel-subscription" type="button" ${!canManage || ["canceled", "cancel_at_period_end"].includes(status) ? "disabled" : ""}>Cancel Subscription</button>
+            <button class="button button-secondary" data-action="reactivate-subscription" type="button" ${!canManage || !["canceled", "cancel_at_period_end", "paused"].includes(status) ? "disabled" : ""}>Reactivate Subscription</button>
+            <button class="button button-ghost" data-action="refresh-subscription" type="button">Refresh Subscription Status</button>
+            <button class="button button-ghost" data-action="view-payment-history" type="button">View Payment History</button>
+            <button class="button button-ghost" data-action="update-payment-method" type="button">Update Payment Method</button>
           </div>
         </div>
 
         <div class="pricing-grid">
-          ${Object.values(PLAN_DEFINITIONS).map(item => renderPricingCard(item, item.id === (agency?.planId || state.selectedPlan))).join("")}
+          ${planOptions}
         </div>
       </section>
     `;
@@ -6126,6 +6748,20 @@
             </div>
           </div>
         ` : ""}
+        <div class="support-card">
+          <p class="eyebrow">Trust & Support</p>
+          <h3>Professional customer controls</h3>
+          <p>Portaly keeps legal links, support contact, secure Square billing, and export expectations visible for agency owners and admins.</p>
+          <div class="page-actions" style="margin-top: 16px;">
+            <button class="button button-ghost" data-action="privacy-placeholder" type="button">Privacy Policy</button>
+            <button class="button button-ghost" data-action="terms-placeholder" type="button">Terms of Service</button>
+            <button class="button button-secondary" data-action="open-support" type="button">Support</button>
+          </div>
+          <div class="page-actions" style="margin-top: 12px;">
+            <span class="mode-badge">Secure billing through Square</span>
+            <span class="mode-badge">Data export available</span>
+          </div>
+        </div>
       </section>
     `;
   }
@@ -7448,6 +8084,7 @@
       assignments: "Assignments",
       "live-punches": "Live Punches",
       approvals: "Approvals",
+      "client-approval": "Client Approval",
       payroll: "Payroll",
       margin: "Margin",
       exceptions: "Problems to Fix",
@@ -8456,6 +9093,10 @@
       reviewedBy: "",
       reviewedAt: "",
       note,
+      weekStart: "",
+      weekEnd: "",
+      approvalToken: `token_${id}`,
+      tokenExpiresAt: addDays(new Date(), 30).toISOString(),
       clientEdited: false,
       clientEditedBy: "",
       clientEditedAt: "",
@@ -8464,7 +9105,8 @@
       managerEmail: "",
       signatureDataUrl: "",
       signedAt: "",
-      approvalNote: ""
+      approvalNote: "",
+      managerSignature: null
     };
   }
 

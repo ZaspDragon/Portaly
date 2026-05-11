@@ -210,6 +210,27 @@ service cloud.firestore {
       allow delete: if signedIn() && isPlatformOwner();
     }
 
+    match /clientInvites/{inviteId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+      );
+
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (
+          isAgencyStaff()
+          && sameAgencyRequest()
+          && request.resource.data.role == 'clientManager'
+        )
+      );
+
+      allow update, delete: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+      );
+    }
+
     match /clients/{clientId} {
       allow read: if signedIn() && (
         isPlatformOwner()

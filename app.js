@@ -4,6 +4,7 @@
   const COLLECTIONS = [
     "agencies",
     "users",
+    "clientInvites",
     "clients",
     "sites",
     "workers",
@@ -32,14 +33,15 @@
   const STORAGE_KEYS = {
     demo: "portaly_demo_store_v6",
     session: "portaly_session_v6",
-    routeNotice: "portaly_route_notice_v6"
+    routeNotice: "portaly_route_notice_v6",
+    pendingInvite: "portaly_pending_invite_v1"
   };
 
   const DEFAULT_BRAND = "#1f6fff";
   const DEFAULT_SUPPORT_EMAIL = "support@portaly-demo.com";
   const DEFAULT_SUPPORT_PHONE = "(800) 555-0199";
   const BILLING_LOCK_STATUSES = new Set(["past_due", "unpaid", "expired_trial", "canceled"]);
-  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile"]);
+  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite"]);
   const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
   const CLIENT_ROUTES = new Set(["approvals", "client-approval", "help", "billing-required"]);
   const DEFAULT_APP_URL = `${window.location.origin}${window.location.pathname}`;
@@ -128,7 +130,7 @@
     { id: "margin", label: "Margin", badge: "MR", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "exceptions", label: "Problems to Fix", badge: "PF", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "qr-codes", label: "QR Codes", badge: "QR", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "users", label: "Users", badge: "US", roles: ["platformOwner", "agencyOwner"] },
+    { id: "users", label: "Users", badge: "US", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "billing", label: "Billing", badge: "BL", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
     { id: "settings", label: "Settings", badge: "SE", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] }
   ];
@@ -169,6 +171,12 @@
     modal: null,
     toasts: [],
     pendingLink: null,
+    inviteFlow: {
+      token: "",
+      loading: false,
+      details: null,
+      error: ""
+    },
     profileRepair: null,
     approvalViewLogKey: "",
     filters: {
@@ -410,6 +418,9 @@
       return;
     }
     state.route = normalizeRoute(parseHashRoute());
+    if (state.route === "accept-invite") {
+      await loadInviteFlowState();
+    }
     state.mobileNavOpen = false;
     applyBodyState();
     renderApp();
@@ -440,6 +451,9 @@
     }
 
     state.route = normalizeRoute(parseHashRoute());
+    if (state.route === "accept-invite") {
+      await loadInviteFlowState();
+    }
     if (!window.location.hash) {
       navigate(state.route, { replace: true });
     }
@@ -492,6 +506,9 @@
     if (hash.startsWith("client-approval/")) {
       return "client-approval";
     }
+    if (hash.startsWith("accept-invite/")) {
+      return "accept-invite";
+    }
     return hash;
   }
 
@@ -520,6 +537,31 @@
     return null;
   }
 
+  function parseInviteHash() {
+    const hash = window.location.hash.replace(/^#\/?/, "").trim();
+    if (!hash.startsWith("accept-invite/")) {
+      return "";
+    }
+    return hash.split("/")[1] || "";
+  }
+
+  function getStoredPendingInviteToken() {
+    return String(window.localStorage.getItem(STORAGE_KEYS.pendingInvite) || "").trim();
+  }
+
+  function storePendingInviteToken(token) {
+    const nextToken = String(token || "").trim();
+    if (!nextToken) {
+      window.localStorage.removeItem(STORAGE_KEYS.pendingInvite);
+      return;
+    }
+    window.localStorage.setItem(STORAGE_KEYS.pendingInvite, nextToken);
+  }
+
+  function clearPendingInviteToken() {
+    window.localStorage.removeItem(STORAGE_KEYS.pendingInvite);
+  }
+
   function getHomeRoute() {
     if (state.profileRepair && state.authUser) {
       return "complete-profile";
@@ -538,6 +580,9 @@
 
   function normalizeRoute(route) {
     const candidate = route || getHomeRoute();
+    if (candidate === "approval-link" || candidate === "accept-invite") {
+      return candidate;
+    }
     const allowed = getAllowedRoutes();
     if (allowed.has(candidate)) {
       return candidate;
@@ -580,6 +625,22 @@
       return;
     }
 
+    window.location.hash = target;
+  }
+
+  function navigateInviteRoute(token, options = {}) {
+    const target = `#/accept-invite/${encodeURIComponent(String(token || "").trim())}`;
+    if (options.replace) {
+      window.history.replaceState(null, "", target);
+      state.route = normalizeRoute(parseHashRoute());
+      renderApp();
+      return;
+    }
+    if (window.location.hash === target) {
+      state.route = normalizeRoute(parseHashRoute());
+      renderApp();
+      return;
+    }
     window.location.hash = target;
   }
 
@@ -632,6 +693,17 @@
     const profile = await loadCloudUserProfile(authUser.uid);
 
     if (!profile) {
+      const pendingInviteToken = parseInviteHash() || getStoredPendingInviteToken();
+      if (pendingInviteToken) {
+        console.warn("[Portaly] users/{uid} missing, routing to accept-invite", authUser.uid);
+        setPublicSession();
+        storePendingInviteToken(pendingInviteToken);
+        await loadInviteFlowState(pendingInviteToken, { force: true });
+        pushToast("Your login is ready. Finish accepting your Portaly invite.", "warning");
+        navigateInviteRoute(pendingInviteToken, { replace: true });
+        return;
+      }
+
       console.warn("[Portaly] users/{uid} missing, routing to complete-profile", authUser.uid);
       state.profileRepair = {
         uid: authUser.uid,
@@ -785,6 +857,16 @@
       return mapSnapshot(await db.collection("users").where("agencyId", "==", agencyId).get()).filter(user => {
         return true;
       });
+    }
+
+    if (collection === "clientInvites") {
+      if (role === "platformOwner") {
+        return mapSnapshot(await db.collection("clientInvites").get());
+      }
+      if (!agencyId || state.session.role === "worker" || state.session.role === "clientManager") {
+        return [];
+      }
+      return mapSnapshot(await db.collection("clientInvites").where("agencyId", "==", agencyId).get());
     }
 
     const baseRows = agencyId
@@ -946,6 +1028,20 @@
     return error?.message || "We could not create your account right now.";
   }
 
+  function formatLoginAuthError(error) {
+    const code = String(error?.code || "");
+    if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) {
+      return "Check your email and password, then try again.";
+    }
+    if (code.includes("too-many-requests")) {
+      return "Too many login attempts were made. Reset the password or wait a moment before trying again.";
+    }
+    if (code.includes("network-request-failed")) {
+      return "We could not reach Firebase. Check your connection and try again.";
+    }
+    return error?.message || "We could not sign you in right now.";
+  }
+
   function formatSignupFirestoreError(error) {
     const code = String(error?.code || "");
     if (code.includes("permission-denied")) {
@@ -1065,6 +1161,10 @@
 
   function canManageUsers() {
     return ["platformOwner", "agencyOwner"].includes(state.session.role);
+  }
+
+  function canInviteClientManagers() {
+    return ["agencyOwner", "agencyAdmin"].includes(state.session.role);
   }
 
   function canManageBilling() {
@@ -1226,6 +1326,13 @@
           state.modal = { type: "client-form", clientId: trigger.dataset.clientId || "" };
           renderApp();
           break;
+        case "open-client-manager-invite":
+          requirePermission(canInviteClientManagers(), "Only agency owners, agency admins, or platform owners can invite client managers.");
+          openClientManagerInviteModal({
+            clientId: trigger.dataset.clientId || "",
+            siteId: trigger.dataset.siteId || ""
+          });
+          break;
         case "view-client-sites":
           openClientSitesModal(trigger.dataset.clientId || "");
           break;
@@ -1347,6 +1454,18 @@
           requirePermission(canManageUsers(), "Only platform owners and agency owners can manage users.");
           openUserModal(trigger.dataset.userId || "");
           break;
+        case "send-invite-email-placeholder":
+          openInviteEmailPlaceholder(trigger.dataset.link || "", trigger.dataset.email || "");
+          break;
+        case "magic-link-placeholder":
+          pushToast("Passwordless email link sign-in is the next step. For now, use the invite link to set up email and password access.", "warning");
+          break;
+        case "accept-client-invite":
+          await acceptCurrentInvite();
+          break;
+        case "accept-demo-invite":
+          await acceptCurrentInvite({ demoOnly: true });
+          break;
         case "deactivate-user":
           await deactivateUser(trigger.dataset.userId || "");
           break;
@@ -1446,6 +1565,15 @@
         case "complete-profile":
           await submitCompleteProfile(values);
           break;
+        case "client-manager-invite":
+          await submitClientManagerInvite(values);
+          break;
+        case "accept-invite-create":
+          await submitAcceptInviteCreate(values);
+          break;
+        case "accept-invite-login":
+          await submitAcceptInviteLogin(values);
+          break;
         case "worker-save":
           await saveWorkerForm(values);
           break;
@@ -1537,6 +1665,9 @@
   }
 
   async function handleLogout() {
+    const pendingInviteToken = state.route === "accept-invite"
+      ? (state.inviteFlow.token || getStoredPendingInviteToken())
+      : "";
     state.modal = null;
     state.mobileNavOpen = false;
     if (state.session.mode === "cloud" && state.firebase.ready) {
@@ -1546,7 +1677,12 @@
     state.profileRepair = null;
     setPublicSession();
     state.cache = emptyStore();
-    navigate("landing", { replace: true });
+    if (pendingInviteToken) {
+      await loadInviteFlowState(pendingInviteToken, { force: true });
+      navigateInviteRoute(pendingInviteToken, { replace: true });
+    } else {
+      navigate("landing", { replace: true });
+    }
     pushToast("You are signed out.", "success");
   }
 
@@ -1559,7 +1695,12 @@
       throw new Error("Enter your email and password.");
     }
 
-    const result = await state.firebase.auth.signInWithEmailAndPassword(values.email, values.password);
+    let result;
+    try {
+      result = await state.firebase.auth.signInWithEmailAndPassword(values.email, values.password);
+    } catch (error) {
+      throw new Error(formatLoginAuthError(error));
+    }
     await establishCloudSession(result.user);
     await refreshSessionData();
     persistSession();
@@ -2236,6 +2377,14 @@
   async function saveUserForm(values) {
     requirePermission(canManageUsers(), "Only platform owners and agency owners can manage users.");
     const existing = values.id ? findRecord("users", values.id) : null;
+    if (!existing && values.role === "clientManager") {
+      await submitClientManagerInvite({
+        ...values,
+        assignedClientIds: values.assignedClientId || "",
+        assignedSiteIds: values.assignedSiteId || ""
+      });
+      return;
+    }
     let userId = values.id || createId("user");
     let inviteMessage = "";
 
@@ -2791,6 +2940,7 @@
   function openClientSitesModal(clientId) {
     const client = findRecord("clients", clientId);
     const sites = getScopedData().sites.filter(site => site.clientId === clientId);
+    const invites = getClientInvites(clientId).slice().sort((left, right) => compareDates(right.createdAt, left.createdAt));
     if (!client) {
       return;
     }
@@ -2808,6 +2958,24 @@
         ${client.internalNotes && state.session.role !== "clientManager" ? `<div>${renderDetailBox("Internal notes", client.internalNotes)}</div>` : ""}
         ${client.clientVisibleNotes ? `<div>${renderDetailBox("Client-visible notes", client.clientVisibleNotes)}</div>` : ""}
       </div>
+      ${canInviteClientManagers() ? `
+        <div class="page-actions" style="margin-top: 18px;">
+          <button class="button button-secondary" data-action="open-client-manager-invite" data-client-id="${escapeHtml(client.id)}" type="button">Invite Client Manager</button>
+        </div>
+      ` : ""}
+      ${invites.length ? `
+        <div class="surface-card" style="margin-top: 18px; padding: 18px;">
+          <p class="eyebrow">Client Manager Invites</p>
+          <ul class="compact-list" style="margin-top: 12px;">
+            ${invites.map(invite => `
+              <li>
+                <strong>${escapeHtml(`${invite.firstName || ""} ${invite.lastName || ""}`.trim() || invite.email || invite.id)}</strong>
+                <span class="helper-copy">${escapeHtml(invite.email || "-")} - ${escapeHtml(formatStatusLabel(invite.status || "pending"))}</span>
+              </li>
+            `).join("")}
+          </ul>
+        </div>
+      ` : ""}
       <div style="margin-top: 18px;">
         <p class="eyebrow">Sites</p>
         ${sites.length ? `
@@ -3666,6 +3834,9 @@
   function openUserModal(userId) {
     const user = userId ? findRecord("users", userId) : null;
     const scoped = getScopedData();
+    const roleOptions = user
+      ? ["agencyOwner", "agencyAdmin", "clientManager", "worker"]
+      : (state.session.role === "platformOwner" ? ["agencyOwner", "agencyAdmin", "worker", "clientManager"] : ["agencyAdmin", "worker", "clientManager"]);
     openModal(user ? "Edit User" : "Invite User", `
       <input name="id" type="hidden" value="${escapeAttribute(user?.id || "")}" />
       ${state.session.role === "platformOwner" ? `
@@ -3700,7 +3871,7 @@
         <div class="field-group">
           <label for="user-role">Role</label>
           <select id="user-role" name="role">
-            ${renderStaticOptions(["agencyOwner", "agencyAdmin", "clientManager", "worker"], user?.role || "agencyAdmin", value => ROLE_META[value]?.label || value)}
+            ${renderStaticOptions(roleOptions, user?.role || "agencyAdmin", value => ROLE_META[value]?.label || value)}
           </select>
         </div>
         <div class="field-group">
@@ -3730,6 +3901,9 @@
           ${renderSelectOptions(scoped.workers, user?.workerId || "", "Optional worker")}
         </select>
       </div>
+      ${!user ? `
+        <p class="helper-copy">Choose Client Manager here only if you want Portaly to create a site approval invite instead of a full internal staff account.</p>
+      ` : ""}
     `, null, {
       formName: "user-save",
       saveLabel: user ? "Save User" : "Invite User"
@@ -3896,39 +4070,493 @@
     renderApp();
   }
 
-  function getBillingFunctionsBaseUrl() {
+  function getFunctionsBaseUrl() {
     return String(BILLING_CONFIG.functionsBaseUrl || state.firebase.config.functionsBaseUrl || "").trim().replace(/\/$/, "");
   }
 
-  function hasBillingBackend() {
-    return !!getBillingFunctionsBaseUrl();
+  function hasSecureBackend() {
+    return !!getFunctionsBaseUrl();
   }
 
-  async function callBillingFunction(endpoint, payload = {}, options = {}) {
-    if (!hasBillingBackend()) {
-      handleBillingPlaceholder(options.fallbackMessage || "Square subscription self-service will connect here after the secure backend is deployed.");
-      return null;
+  function getBillingFunctionsBaseUrl() {
+    return getFunctionsBaseUrl();
+  }
+
+  function hasBillingBackend() {
+    return hasSecureBackend();
+  }
+
+  async function callSecureFunction(endpoint, payload = {}, options = {}) {
+    const requireAuth = options.requireAuth !== false;
+
+    if (!hasSecureBackend()) {
+      if (typeof options.onNoBackend === "function") {
+        options.onNoBackend();
+        return null;
+      }
+      throw new Error(options.fallbackMessage || "This secure Portaly service is not connected yet.");
     }
 
-    if (state.session.mode !== "cloud" || !state.firebase.auth?.currentUser) {
-      throw new Error("Sign in to a cloud account before using Square billing tools.");
+    const headers = {
+      "Content-Type": "application/json"
+    };
+
+    if (requireAuth) {
+      if (!state.firebase.auth?.currentUser) {
+        throw new Error(options.authMessage || "Sign in before using this secure Portaly action.");
+      }
+      headers.Authorization = `Bearer ${await state.firebase.auth.currentUser.getIdToken()}`;
     }
 
-    const token = await state.firebase.auth.currentUser.getIdToken();
-    const response = await fetch(`${getBillingFunctionsBaseUrl()}/${endpoint}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
-      },
+    const response = await fetch(`${getFunctionsBaseUrl()}/${endpoint}`, {
+      method: options.method || "POST",
+      headers,
       body: JSON.stringify(payload)
     });
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.error || options.errorMessage || "Square billing request failed.");
+      throw new Error(data.error || options.errorMessage || "Portaly could not complete this secure request.");
     }
     return data;
+  }
+
+  async function callBillingFunction(endpoint, payload = {}, options = {}) {
+    return callSecureFunction(endpoint, payload, {
+      ...options,
+      requireAuth: true,
+      authMessage: "Sign in to a cloud account before using Square billing tools.",
+      errorMessage: options.errorMessage || "Square billing request failed.",
+      onNoBackend: () => handleBillingPlaceholder(options.fallbackMessage || "Square subscription self-service will connect here after the secure backend is deployed.")
+    });
+  }
+
+  function normalizeStringArray(value) {
+    if (Array.isArray(value)) {
+      return [...new Set(value.map(item => String(item || "").trim()).filter(Boolean))];
+    }
+    const normalized = String(value || "").trim();
+    return normalized ? [normalized] : [];
+  }
+
+  function buildClientManagerInviteLink(token) {
+    const baseUrl = String(state.firebase.config.appUrl || DEFAULT_APP_URL || window.location.href || "").replace(/#.*$/, "");
+    return `${baseUrl}#/accept-invite/${encodeURIComponent(String(token || "").trim())}`;
+  }
+
+  function findLocalClientInvite(token) {
+    const inviteToken = String(token || "").trim();
+    if (!inviteToken) {
+      return null;
+    }
+    return (state.demoStore.clientInvites || []).find(invite => invite.inviteToken === inviteToken) || null;
+  }
+
+  function buildLocalClientInviteDetails(invite) {
+    if (!invite) {
+      return null;
+    }
+    const clientIds = Array.isArray(invite.assignedClientIds) ? invite.assignedClientIds : [];
+    const siteIds = Array.isArray(invite.assignedSiteIds) ? invite.assignedSiteIds : [];
+    return {
+      ...invite,
+      source: "demo",
+      inviteLink: invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken),
+      agencyName: getAgencyName(invite.agencyId) || "Portaly Demo Agency",
+      assignedClientNames: clientIds.map(id => getClientNameFromStore(id, state.demoStore.clients || [])),
+      assignedSiteNames: siteIds.map(id => getSiteNameFromStore(id, state.demoStore.sites || [])),
+      authAccountExists: false
+    };
+  }
+
+  async function loadInviteFlowState(tokenInput = "", options = {}) {
+    const token = String(tokenInput || parseInviteHash() || getStoredPendingInviteToken() || "").trim();
+    if (!token) {
+      state.inviteFlow = {
+        token: "",
+        loading: false,
+        details: null,
+        error: ""
+      };
+      clearPendingInviteToken();
+      return null;
+    }
+
+    if (!options.force && state.inviteFlow.token === token && !state.inviteFlow.loading && (state.inviteFlow.details || state.inviteFlow.error)) {
+      return state.inviteFlow.details;
+    }
+
+    storePendingInviteToken(token);
+    state.inviteFlow = {
+      token,
+      loading: true,
+      details: null,
+      error: ""
+    };
+    if (state.initialized) {
+      renderApp();
+    }
+
+    try {
+      const localInvite = buildLocalClientInviteDetails(findLocalClientInvite(token));
+      if (localInvite) {
+        state.inviteFlow = {
+          token,
+          loading: false,
+          details: localInvite,
+          error: ""
+        };
+        return localInvite;
+      }
+
+      const result = await callSecureFunction("verifyClientManagerInvite", {
+        token
+      }, {
+        requireAuth: false,
+        fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can verify them.",
+        errorMessage: "We could not load this Portaly invite."
+      });
+
+      const details = result?.invite || null;
+      if (!details) {
+        throw new Error("This Portaly invite could not be found.");
+      }
+
+      state.inviteFlow = {
+        token,
+        loading: false,
+        details,
+        error: ""
+      };
+      return details;
+    } catch (error) {
+      state.inviteFlow = {
+        token,
+        loading: false,
+        details: null,
+        error: error.message || "We could not load this Portaly invite."
+      };
+      return null;
+    }
+  }
+
+  function renderCheckboxOptionList(name, rows, selectedIds, labelBuilder) {
+    const selected = new Set(normalizeStringArray(selectedIds));
+    return (rows || []).map(row => `
+      <label class="checkbox-row compact">
+        <input type="checkbox" name="${escapeAttribute(name)}" value="${escapeAttribute(row.id)}" ${selected.has(row.id) ? "checked" : ""} />
+        <span>${escapeHtml(labelBuilder(row))}</span>
+      </label>
+    `).join("");
+  }
+
+  function openClientManagerInviteModal(options = {}) {
+    const scoped = getScopedData();
+    const selectedClientIds = options.clientId ? [options.clientId] : [];
+    const selectedSiteIds = options.siteId ? [options.siteId] : [];
+    const availableSites = selectedClientIds.length
+      ? scoped.sites.filter(site => selectedClientIds.includes(site.clientId) || selectedSiteIds.includes(site.id))
+      : scoped.sites;
+
+    openModal("Invite Client Manager", `
+      <div class="notice-card">
+        <div>
+          <strong>Invite a client manager to review and approve timecards.</strong>
+          <p>Portaly will keep their access limited to the assigned client and site only.</p>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="invite-first-name">First name</label>
+          <input id="invite-first-name" name="firstName" type="text" placeholder="Jordan" />
+        </div>
+        <div class="field-group">
+          <label for="invite-last-name">Last name</label>
+          <input id="invite-last-name" name="lastName" type="text" placeholder="Lee" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="invite-email">Email</label>
+          <input id="invite-email" name="email" type="email" placeholder="manager@client.com" />
+        </div>
+        <div class="field-group">
+          <label for="invite-phone">Phone</label>
+          <input id="invite-phone" name="phone" type="text" placeholder="(555) 555-0144" />
+        </div>
+      </div>
+      <input name="role" type="hidden" value="clientManager" />
+      <input name="status" type="hidden" value="invited" />
+      <div class="field-group">
+        <label>Assigned clients</label>
+        <div class="checkbox-stack">
+          ${renderCheckboxOptionList("assignedClientIds", scoped.clients, selectedClientIds, client => client.name)}
+        </div>
+      </div>
+      <div class="field-group">
+        <label>Assigned sites</label>
+        <div class="checkbox-stack">
+          ${renderCheckboxOptionList("assignedSiteIds", availableSites, selectedSiteIds, site => `${site.name} - ${getClientName(site.clientId)}`)}
+        </div>
+      </div>
+      <p class="helper-copy">Use one or both assignments. Client managers will only see approvals and timecards for the selected scope.</p>
+    `, null, {
+      formName: "client-manager-invite",
+      saveLabel: "Create Invite"
+    });
+  }
+
+  async function createDemoClientManagerInvite(payload) {
+    const createdAt = new Date().toISOString();
+    const inviteId = createId("invite");
+    const userId = createId("user");
+    const inviteToken = `${createId("cm")}_${Math.random().toString(36).slice(2, 12)}`;
+    const tokenExpiresAt = addDays(new Date(createdAt), 14).toISOString();
+    const user = {
+      agencyId: state.session.agencyId,
+      role: "clientManager",
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      email: payload.email,
+      phone: payload.phone,
+      status: "invited",
+      assignedClientIds: payload.assignedClientIds,
+      assignedSiteIds: payload.assignedSiteIds,
+      workerId: ""
+    };
+    await saveData("users", userId, user);
+    const invite = {
+      agencyId: state.session.agencyId,
+      email: payload.email,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      phone: payload.phone,
+      role: "clientManager",
+      assignedClientIds: payload.assignedClientIds,
+      assignedSiteIds: payload.assignedSiteIds,
+      status: "pending",
+      inviteToken,
+      tokenExpiresAt,
+      acceptedAt: "",
+      createdAt,
+      updatedAt: createdAt,
+      createdBy: state.session.userId,
+      inviteLink: buildClientManagerInviteLink(inviteToken),
+      userId
+    };
+    return saveData("clientInvites", inviteId, invite);
+  }
+
+  function openInviteSuccessModal(invite) {
+    if (!invite) {
+      return;
+    }
+    const assignedClients = (invite.assignedClientNames || normalizeStringArray(invite.assignedClientIds).map(id => getClientName(id))).filter(Boolean);
+    const assignedSites = (invite.assignedSiteNames || normalizeStringArray(invite.assignedSiteIds).map(id => getSiteName(id))).filter(Boolean);
+    openModal("Client Manager Invite Ready", `
+      <div class="approval-review-card">
+        <p class="eyebrow">Invite ready</p>
+        <h3>${escapeHtml(invite.firstName || "Client")} is ready for Portaly access</h3>
+        <p>Copy the invite link below and send it to the client manager from your agency email.</p>
+        <div class="detail-grid" style="margin-top: 18px;">
+          ${renderDetailBox("Email", invite.email || "-")}
+          ${renderDetailBox("Status", formatStatusLabel(invite.status || "pending"))}
+          ${renderDetailBox("Assigned clients", assignedClients.join(", ") || "None selected")}
+          ${renderDetailBox("Assigned sites", assignedSites.join(", ") || "None selected")}
+        </div>
+        <div class="approval-action-row" style="margin-top: 18px;">
+          <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" type="button">Copy Invite Link</button>
+          <button class="button button-secondary" data-action="send-invite-email-placeholder" data-link="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" data-email="${escapeAttribute(invite.email || "")}" type="button">Send Invite Email</button>
+          <button class="button button-ghost" data-action="magic-link-placeholder" type="button">Magic Link Login</button>
+        </div>
+        <p class="helper-copy" style="margin-top: 16px;">You've been invited to Portaly to review and approve timecards for your assigned site.</p>
+      </div>
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
+    });
+  }
+
+  function openInviteEmailPlaceholder(link, email) {
+    const destination = email ? ` for ${email}` : "";
+    pushToast(`Automatic invite email sending is not connected yet. Copy the invite link${destination} and send it from your agency email.`, "warning");
+    if (link) {
+      void copyText(link);
+    }
+  }
+
+  async function submitClientManagerInvite(values) {
+    requirePermission(canInviteClientManagers(), "Only agency owners, agency admins, or platform owners can invite client managers.");
+    const assignedClientIds = normalizeStringArray(values.assignedClientIds);
+    const assignedSiteIds = normalizeStringArray(values.assignedSiteIds);
+    if (!values.firstName || !values.lastName || !values.email) {
+      throw new Error("First name, last name, and email are required.");
+    }
+    if (!assignedClientIds.length && !assignedSiteIds.length) {
+      throw new Error("Assign at least one client or site before sending the invite.");
+    }
+
+    const payload = {
+      firstName: values.firstName,
+      lastName: values.lastName,
+      email: String(values.email || "").trim().toLowerCase(),
+      phone: values.phone || "",
+      assignedClientIds,
+      assignedSiteIds,
+      agencyId: state.session.agencyId
+    };
+
+    let invite;
+    if (state.session.mode === "cloud") {
+      const result = await callSecureFunction("createClientManagerInvite", payload, {
+        requireAuth: true,
+        authMessage: "Sign in to your cloud agency before inviting client managers.",
+        fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can send them.",
+        errorMessage: "Portaly could not create this client manager invite."
+      });
+      if (!result?.invite) {
+        return;
+      }
+      invite = result.invite;
+    } else {
+      invite = await createDemoClientManagerInvite(payload);
+    }
+
+    await appendAuditLog("client_manager_invited", "clientInvites", invite.id, null, invite, {
+      actorId: state.session.userId,
+      actorRole: state.session.role
+    });
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast("Client manager invite created.", "success");
+    openInviteSuccessModal(invite);
+  }
+
+  async function submitAcceptInviteCreate(values) {
+    if (!state.firebase.ready) {
+      throw new Error("Cloud invite acceptance is not connected yet. Open this invite from the live Portaly site after Firebase is enabled.");
+    }
+
+    const invite = state.inviteFlow.details || await loadInviteFlowState("", { force: true });
+    if (!invite) {
+      throw new Error(state.inviteFlow.error || "This invite could not be loaded.");
+    }
+    if (!values.password || !values.confirmPassword) {
+      throw new Error("Create and confirm a password to continue.");
+    }
+    if (values.password !== values.confirmPassword) {
+      throw new Error("Passwords do not match.");
+    }
+
+    let authResult;
+    try {
+      authResult = await state.firebase.auth.createUserWithEmailAndPassword(invite.email, values.password);
+    } catch (error) {
+      throw new Error(formatSignupAuthError(error));
+    }
+    state.authUser = authResult.user;
+    await acceptCurrentInvite({
+      token: invite.inviteToken || state.inviteFlow.token,
+      authUser: authResult.user
+    });
+  }
+
+  async function submitAcceptInviteLogin(values) {
+    if (!state.firebase.ready) {
+      throw new Error("Cloud invite acceptance is not connected yet. Open this invite from the live Portaly site after Firebase is enabled.");
+    }
+
+    const invite = state.inviteFlow.details || await loadInviteFlowState("", { force: true });
+    if (!invite) {
+      throw new Error(state.inviteFlow.error || "This invite could not be loaded.");
+    }
+    if (!values.password) {
+      throw new Error("Enter your password to continue.");
+    }
+
+    let authResult;
+    try {
+      authResult = await state.firebase.auth.signInWithEmailAndPassword(invite.email, values.password);
+    } catch (error) {
+      throw new Error(formatLoginAuthError(error));
+    }
+    state.authUser = authResult.user;
+    await acceptCurrentInvite({
+      token: invite.inviteToken || state.inviteFlow.token,
+      authUser: authResult.user
+    });
+  }
+
+  async function acceptCurrentInvite(options = {}) {
+    const invite = state.inviteFlow.details || await loadInviteFlowState(options.token || "", { force: true });
+    if (!invite) {
+      throw new Error(state.inviteFlow.error || "This invite could not be loaded.");
+    }
+
+    if (invite.source === "demo" || options.demoOnly) {
+      const inviteRecord = findLocalClientInvite(invite.inviteToken || state.inviteFlow.token);
+      if (!inviteRecord) {
+        throw new Error("This demo invite could not be found.");
+      }
+      const user = (state.demoStore.users || []).find(record => record.id === inviteRecord.userId) || null;
+      if (!user) {
+        throw new Error("The demo client manager profile is missing.");
+      }
+      await saveData("users", inviteRecord.userId, {
+        ...user,
+        status: "active"
+      });
+      await saveData("clientInvites", inviteRecord.id, {
+        ...inviteRecord,
+        status: "accepted",
+        acceptedAt: new Date().toISOString()
+      });
+      clearPendingInviteToken();
+      state.inviteFlow = {
+        token: "",
+        loading: false,
+        details: null,
+        error: ""
+      };
+      state.session = buildSessionFromUser({ ...user, status: "active" }, "demo");
+      persistSession();
+      await refreshSessionData();
+      navigate("approvals", { replace: true });
+      pushToast("Demo client manager access is ready.", "success");
+      return;
+    }
+
+    const authUser = options.authUser || state.firebase.auth?.currentUser;
+    if (!authUser) {
+      throw new Error("Sign in with the invited email before continuing.");
+    }
+
+    const result = await callSecureFunction("acceptClientManagerInvite", {
+      token: invite.inviteToken || state.inviteFlow.token
+    }, {
+      requireAuth: true,
+      authMessage: "Sign in with the invited email before continuing.",
+      fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can finish setup.",
+      errorMessage: "Portaly could not finish accepting this invite."
+    });
+
+    state.authUser = authUser;
+    clearPendingInviteToken();
+    state.inviteFlow = {
+      token: "",
+      loading: false,
+      details: null,
+      error: ""
+    };
+    await establishCloudSession(authUser);
+    await refreshSessionData();
+    await appendAuditLog("client_manager_invite_accepted", "clientInvites", result?.invite?.id || invite.id, invite, result?.invite || invite, {
+      actorId: state.session.userId || authUser.uid,
+      actorRole: "clientManager"
+    });
+    navigate("approvals", { replace: true });
+    pushToast("Client manager access is ready. Welcome to Approvals.", "success");
   }
 
   async function refreshSubscriptionStatus(showToastOnSuccess = false, successMessage = "Subscription status refreshed.") {
@@ -4288,6 +4916,8 @@
     let html = "";
     if (state.route === "approval-link") {
       html = renderApprovalLinkShell();
+    } else if (state.route === "accept-invite") {
+      html = renderPublicShell();
     } else if (state.session.role === "worker" && state.session.mode !== "public") {
       html = renderWorkerShell();
     } else if (state.session.mode === "public" || !state.session.role) {
@@ -4306,7 +4936,7 @@
   }
 
   function getLayoutMode() {
-    if (state.route === "approval-link") {
+    if (state.route === "approval-link" || state.route === "accept-invite") {
       return "public";
     }
     if (state.session.role === "worker" && state.session.mode !== "public") {
@@ -4360,6 +4990,8 @@
         return renderPublicApprovalPage();
       case "complete-profile":
         return renderCompleteProfilePage();
+      case "accept-invite":
+        return renderAcceptInvitePage();
       case "pricing":
         return renderMarketingLanding(true);
       case "demo":
@@ -4926,6 +5558,16 @@
         </div>
       `
       : "";
+    const pendingInviteNotice = getStoredPendingInviteToken()
+      ? `
+        <div class="notice-card" style="margin: 0 0 18px;">
+          <div>
+            <strong>Client manager invite in progress</strong>
+            <p>After login, Portaly will return you to the invite so you can finish setting up approvals access.</p>
+          </div>
+        </div>
+      `
+      : "";
 
     return `
       <main class="auth-shell">
@@ -4935,6 +5577,7 @@
             <h3>Login</h3>
             <p>Real users sign in with Firebase Authentication. Workers go straight to the punch screen. Client managers land in Approvals. Owners and admins land in the command center.</p>
             ${localPreviewWarning}
+            ${pendingInviteNotice}
             <form class="form-grid" data-form="login">
               <div class="field-group">
                 <label for="login-email">Email</label>
@@ -4967,6 +5610,220 @@
                 <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
                 <button class="button button-ghost" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
               </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
+  function renderAcceptInvitePage() {
+    const invite = state.inviteFlow.details;
+    const authUser = state.firebase.auth?.currentUser || state.authUser || null;
+    const authEmail = String(authUser?.email || "").trim().toLowerCase();
+    const inviteEmail = String(invite?.email || "").trim().toLowerCase();
+    const emailMatches = !!authEmail && !!inviteEmail && authEmail === inviteEmail;
+    const signedInReady = !!authUser && emailMatches;
+    const wrongAccount = !!authUser && !!inviteEmail && authEmail !== inviteEmail;
+    const inviteExpired = !!invite?.tokenExpiresAt && compareDates(invite.tokenExpiresAt, new Date().toISOString()) < 0;
+    const inviteUnavailable = inviteExpired || (!!invite.status && !["pending", "accepted"].includes(invite.status));
+    const assignedClients = (invite?.assignedClientNames || []).filter(Boolean);
+    const assignedSites = (invite?.assignedSiteNames || []).filter(Boolean);
+
+    if (state.inviteFlow.loading) {
+      return `
+        <main class="auth-shell">
+          <div class="container auth-grid onboarding-auth-grid">
+            <div class="auth-card onboarding-card">
+              <p class="eyebrow">Portaly Invite</p>
+              <h3>Loading invite details</h3>
+              <p>Checking the assigned client, site, and access details for this approval invite.</p>
+            </div>
+          </div>
+        </main>
+      `;
+    }
+
+    if (state.inviteFlow.error || !invite) {
+      return `
+        <main class="auth-shell">
+          <div class="container auth-grid onboarding-auth-grid">
+            <div class="auth-card onboarding-card">
+              <p class="eyebrow">Portaly Invite</p>
+              <h3>We could not open this invite</h3>
+              <p>${escapeHtml(state.inviteFlow.error || "This invite could not be found or is no longer available.")}</p>
+              <div class="page-actions" style="margin-top: 18px;">
+                <button class="button button-secondary" data-action="go-route" data-route="login" type="button">Login</button>
+                <button class="button button-ghost" data-action="go-route" data-route="demo" type="button">View Demo</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      `;
+    }
+
+    const setupCard = inviteUnavailable
+      ? `
+        <div class="support-card onboarding-support-card">
+          <p class="eyebrow">Invite Unavailable</p>
+          <h3>Ask for a fresh Portaly invite</h3>
+          <p>This link can no longer be used. Contact the staffing agency so they can send a new client manager invite for your site.</p>
+          <div class="page-actions" style="margin-top: 16px;">
+            <button class="button button-secondary button-block" data-action="go-route" data-route="login" type="button">Login</button>
+          </div>
+        </div>
+      `
+      : invite.source === "demo"
+      ? `
+        <div class="support-card onboarding-support-card">
+          <p class="eyebrow">Demo Invite</p>
+          <h3>Open the client approval demo</h3>
+          <p>This demo invite keeps everything local to this browser. Use it to preview the client manager approvals flow without creating a real account.</p>
+          <div class="page-actions" style="margin-top: 16px;">
+            <button class="button button-primary button-block" data-action="accept-demo-invite" type="button">Continue to Approvals</button>
+          </div>
+        </div>
+      `
+      : wrongAccount
+        ? `
+          <div class="support-card onboarding-support-card">
+            <p class="eyebrow">Wrong Account</p>
+            <h3>Sign out and use the invited email</h3>
+            <p>This invite was sent to <strong>${escapeHtml(invite.email || "")}</strong>. Sign out of the current account before continuing.</p>
+            <div class="page-actions" style="margin-top: 16px;">
+              <button class="button button-primary button-block" data-action="logout" type="button">Logout</button>
+            </div>
+          </div>
+        `
+        : signedInReady
+          ? `
+            <div class="support-card onboarding-support-card">
+              <p class="eyebrow">Access Ready</p>
+              <h3>${invite.status === "accepted" ? "Continue to approvals" : "Accept invite and continue"}</h3>
+              <p>${invite.status === "accepted"
+                ? "This invite has already been accepted for your login. Continue to the client approvals workspace."
+                : "Your login is ready. Finish connecting this invite to your approvals workspace."}</p>
+              <div class="page-actions" style="margin-top: 16px;">
+                <button class="button button-primary button-block" data-action="accept-client-invite" type="button">${invite.status === "accepted" ? "Continue to Approvals" : "Accept Invite"}</button>
+              </div>
+            </div>
+          `
+          : invite.authAccountExists
+            ? `
+              <div class="support-card onboarding-support-card">
+                <p class="eyebrow">Set Up Access</p>
+                <h3>Sign in with your Portaly login</h3>
+                <p>Your secure login is already on file. Sign in with the invited email to connect this approvals workspace.</p>
+                <form class="form-grid" data-form="accept-invite-login" style="margin-top: 16px;">
+                  <div class="field-group">
+                    <label for="invite-login-email">Email</label>
+                    <input id="invite-login-email" type="email" value="${escapeAttribute(invite.email || "")}" readonly />
+                  </div>
+                  <div class="field-group">
+                    <label for="invite-login-password">Password</label>
+                    <input id="invite-login-password" name="password" type="password" placeholder="Enter your password" />
+                  </div>
+                  <div class="modal-actions">
+                    <button class="button button-primary button-block" type="submit">Accept Invite</button>
+                  </div>
+                </form>
+              </div>
+            `
+            : `
+              <div class="support-card onboarding-support-card">
+                <p class="eyebrow">Set Up Access</p>
+                <h3>Create your client manager login</h3>
+                <p>Create a password for <strong>${escapeHtml(invite.email || "")}</strong>. Portaly will connect your login to the assigned approval workspace after setup.</p>
+                <form class="form-grid" data-form="accept-invite-create" style="margin-top: 16px;">
+                  <div class="field-group">
+                    <label for="invite-create-email">Email</label>
+                    <input id="invite-create-email" type="email" value="${escapeAttribute(invite.email || "")}" readonly />
+                  </div>
+                  <div class="form-row two">
+                    <div class="field-group">
+                      <label for="invite-create-password">Password</label>
+                      <input id="invite-create-password" name="password" type="password" placeholder="Create a password" />
+                    </div>
+                    <div class="field-group">
+                      <label for="invite-create-confirm">Confirm password</label>
+                      <input id="invite-create-confirm" name="confirmPassword" type="password" placeholder="Confirm password" />
+                    </div>
+                  </div>
+                  <div class="modal-actions">
+                    <button class="button button-primary button-block" type="submit">Set Up Access</button>
+                  </div>
+                </form>
+                <div class="page-actions" style="margin-top: 12px;">
+                  <button class="button button-ghost" data-action="magic-link-placeholder" type="button">Email Me a Magic Link</button>
+                </div>
+              </div>
+            `;
+
+    return `
+      <main class="auth-shell">
+        <div class="container auth-grid onboarding-auth-grid">
+          <div class="auth-card onboarding-card">
+            <div class="onboarding-stepbar">
+              <span class="mode-badge">Client Approval Invite</span>
+              <div class="onboarding-badges">
+                <span class="onboarding-pill">Assigned site access only</span>
+                <span class="onboarding-pill">Digital approvals</span>
+                <span class="onboarding-pill">Audit trail included</span>
+                <span class="onboarding-pill">Square billing untouched</span>
+              </div>
+            </div>
+            <p class="eyebrow">Client Manager Access</p>
+            <h3>You've been invited to approve timecards in Portaly</h3>
+            <p>Review submitted hours, correct missed punches, and sign approvals for your assigned site without seeing agency billing or margin data.</p>
+            ${inviteExpired ? `
+              <div class="notice-card danger" style="margin-top: 18px;">
+                <div>
+                  <strong>This invite has expired.</strong>
+                  <p>Ask your staffing agency contact to send a new client manager invite.</p>
+                </div>
+              </div>
+            ` : ""}
+            ${invite.status !== "pending" && invite.source !== "demo" ? `
+              <div class="notice-card warning" style="margin-top: 18px;">
+                <div>
+                  <strong>Status: ${escapeHtml(formatStatusLabel(invite.status || "pending"))}</strong>
+                  <p>${invite.status === "accepted" ? "This invite has already been accepted. Sign in with the invited email to continue." : "This invite is no longer pending. Ask your staffing agency if you need a fresh link."}</p>
+                </div>
+              </div>
+            ` : ""}
+            <div class="detail-grid" style="margin-top: 18px;">
+              ${renderDetailBox("Invited manager", `${invite.firstName || ""} ${invite.lastName || ""}`.trim() || invite.email || "-")}
+              ${renderDetailBox("Email", invite.email || "-")}
+              ${renderDetailBox("Agency", invite.agencyName || "Portaly")}
+              ${renderDetailBox("Expires", invite.tokenExpiresAt ? formatDate(invite.tokenExpiresAt) : "Open")}
+              ${renderDetailBox("Assigned clients", assignedClients.join(", ") || "Assigned at the site level")}
+              ${renderDetailBox("Assigned sites", assignedSites.join(", ") || "Assigned at the client level")}
+            </div>
+            <div class="onboarding-helper" style="margin-top: 18px;">
+              <strong>What happens next</strong>
+              <p>Accepting this invite creates or links your Portaly login, then routes you straight to Approvals for the assigned client and site.</p>
+            </div>
+          </div>
+          <div class="stack-md onboarding-side">
+            ${setupCard}
+            <div class="support-card onboarding-support-card">
+              <p class="eyebrow">Access Scope</p>
+              <h3>Limited to your assigned client and site</h3>
+              <ul class="list">
+                <li>Approve or reject submitted timecards</li>
+                <li>Correct missed punches with a required reason</li>
+                <li>Capture manager signature and notes</li>
+                <li>No billing, settings, margin, or full agency dashboard access</li>
+              </ul>
+            </div>
+            <div class="support-card onboarding-support-card">
+              <p class="eyebrow">Need help?</p>
+              <h3>Contact your staffing agency</h3>
+              <p>If you received this link in error or need a fresh invite, contact the staffing agency support contact below.</p>
+              <ul class="list">
+                <li>${escapeHtml(getSupportEmail())}</li>
+                <li>${escapeHtml(getSupportPhone())}</li>
+              </ul>
             </div>
           </div>
         </div>
@@ -5860,6 +6717,7 @@
 
   function renderClientsPage() {
     const clients = getScopedData().clients;
+    const pendingInviteCount = getClientInvites().filter(invite => invite.status === "pending").length;
     return `
       <section class="stack-lg">
         <div class="table-shell">
@@ -5867,8 +6725,12 @@
             <div>
               <p class="eyebrow">Clients</p>
               <h2 class="page-heading">Client accounts</h2>
+              ${pendingInviteCount ? `<p class="helper-copy">${escapeHtml(String(pendingInviteCount))} client manager invite${pendingInviteCount === 1 ? "" : "s"} pending right now.</p>` : ""}
             </div>
-            ${canManageClients() ? `<button class="button button-primary" data-action="open-client-form" type="button">Add Client</button>` : ""}
+            <div class="page-actions">
+              ${canInviteClientManagers() ? `<button class="button button-secondary" data-action="open-client-manager-invite" type="button">Invite Client Manager</button>` : ""}
+              ${canManageClients() ? `<button class="button button-primary" data-action="open-client-form" type="button">Add Client</button>` : ""}
+            </div>
           </div>
           ${clients.length ? `
             <div class="table-wrap">
@@ -5897,6 +6759,7 @@
                         <div class="table-actions">
                           <button class="button button-ghost" data-action="open-client-form" data-client-id="${escapeHtml(client.id)}" type="button">Edit</button>
                           <button class="button button-ghost" data-action="view-client-sites" data-client-id="${escapeHtml(client.id)}" type="button">View Details</button>
+                          ${canInviteClientManagers() ? `<button class="button button-secondary" data-action="open-client-manager-invite" data-client-id="${escapeHtml(client.id)}" type="button">Invite Manager</button>` : ""}
                           ${canDeactivateEntity("clients") ? `<button class="button button-ghost" data-action="deactivate-client" data-client-id="${escapeHtml(client.id)}" type="button">Deactivate</button>` : ""}
                           ${canPermanentlyDeleteRecords() ? `<button class="button button-danger" data-action="delete-client" data-client-id="${escapeHtml(client.id)}" type="button">Delete</button>` : ""}
                         </div>
@@ -6512,21 +7375,67 @@
 
   function renderUsersPage() {
     const users = getScopedData().users;
+    const invites = getClientInvites().slice().sort((left, right) => compareDates(right.createdAt, left.createdAt));
     return `
       <section class="stack-lg">
         <div class="notice-card">
           <div>
-            <strong>User profiles live in Firestore. Sign-in credentials live in Firebase Authentication.</strong>
-            <p>For Cloud Mode, pair each user profile with a matching Firebase Auth account. Demo Mode stays local and does not create real sign-ins.</p>
+            <strong>Control who can access Portaly and what they can see.</strong>
+            <p>Invite client managers for assigned site approvals, or manage internal access for owners, admins, and worker-linked logins.</p>
           </div>
         </div>
+        ${invites.length ? `
+          <div class="table-shell">
+            <div class="table-top">
+              <div>
+                <p class="eyebrow">Client Manager Invites</p>
+                <h2 class="page-heading">Pending and accepted invite links</h2>
+              </div>
+              ${canInviteClientManagers() ? `<button class="button button-secondary" data-action="open-client-manager-invite" type="button">Invite Client Manager</button>` : ""}
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Status</th>
+                    <th>Assigned Clients</th>
+                    <th>Assigned Sites</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${invites.map(invite => `
+                    <tr>
+                      <td>${escapeHtml(`${invite.firstName || ""} ${invite.lastName || ""}`.trim() || invite.email || invite.id)}</td>
+                      <td>${escapeHtml(invite.email || "-")}</td>
+                      <td>${renderInlineStatus(invite.status || "pending")}</td>
+                      <td>${escapeHtml((invite.assignedClientIds || []).map(id => getClientName(id)).join(", ") || "-")}</td>
+                      <td>${escapeHtml((invite.assignedSiteIds || []).map(id => getSiteName(id)).join(", ") || "-")}</td>
+                      <td>
+                        <div class="table-actions">
+                          <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" type="button">Copy Invite Link</button>
+                          <button class="button button-ghost" data-action="send-invite-email-placeholder" data-link="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" data-email="${escapeAttribute(invite.email || "")}" type="button">Send Invite Email</button>
+                        </div>
+                      </td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ` : ""}
         <div class="table-shell">
           <div class="table-top">
             <div>
               <p class="eyebrow">Users</p>
               <h2 class="page-heading">Role-based access profiles</h2>
             </div>
-            ${canManageUsers() ? `<button class="button button-primary" data-action="open-user-form" type="button">Invite User</button>` : ""}
+            <div class="page-actions">
+              ${canInviteClientManagers() ? `<button class="button button-secondary" data-action="open-client-manager-invite" type="button">Invite Client Manager</button>` : ""}
+              ${canManageUsers() ? `<button class="button button-primary" data-action="open-user-form" type="button">Invite User</button>` : ""}
+            </div>
           </div>
           ${users.length ? `
             <div class="table-wrap">
@@ -6565,7 +7474,7 @@
                 </tbody>
               </table>
             </div>
-          ` : renderEmptyState("No user profiles yet", "Create a Firebase Auth account, then add a matching Firestore profile to route people by role.")}
+          ` : renderEmptyState("No people added yet", "Invite a client manager or create the first internal access profile to route people by role in Portaly.")}
         </div>
       </section>
     `;
@@ -7771,6 +8680,7 @@
     const scoped = {
       agencies: (source.agencies || []).filter(agency => agency.id === agencyId),
       users: filterAgency(source.users),
+      clientInvites: filterAgency(source.clientInvites),
       clients: filterAgency(source.clients),
       sites: filterAgency(source.sites),
       workers: filterAgency(source.workers),
@@ -7792,6 +8702,7 @@
         punches: scoped.punches.filter(punch => punch.workerId === state.session.workerId),
         timesheets: scoped.timesheets.filter(timesheet => timesheet.workerId === state.session.workerId),
         approvals: scoped.approvals.filter(approval => approval.workerId === state.session.workerId),
+        clientInvites: [],
         clients: scoped.clients.filter(client => client.id === getCurrentWorkerFrom(scoped)?.assignedClientId),
         sites: scoped.sites.filter(site => site.id === getCurrentWorkerFrom(scoped)?.assignedSiteId),
         assignments: [],
@@ -7812,6 +8723,7 @@
         punches: filterAssigned(scoped.punches),
         timesheets: filterAssigned(scoped.timesheets),
         approvals: filterAssigned(scoped.approvals),
+        clientInvites: [],
         assignments: [],
         payrollRuns: [],
         subscriptions: [],
@@ -7835,6 +8747,21 @@
   function getCurrentSettings() {
     const scoped = getScopedData();
     return scoped.settings[0] || null;
+  }
+
+  function getClientInvites(clientId = "", siteId = "") {
+    const invites = getScopedData().clientInvites || [];
+    return invites.filter(invite => {
+      const inviteClientIds = Array.isArray(invite.assignedClientIds) ? invite.assignedClientIds : [];
+      const inviteSiteIds = Array.isArray(invite.assignedSiteIds) ? invite.assignedSiteIds : [];
+      if (clientId && inviteClientIds.includes(clientId)) {
+        return true;
+      }
+      if (siteId && inviteSiteIds.includes(siteId)) {
+        return true;
+      }
+      return !clientId && !siteId;
+    });
   }
 
   function getCurrentWorker() {
@@ -8557,7 +9484,11 @@
     const formData = new FormData(form);
     const values = {};
     for (const [key, value] of formData.entries()) {
-      values[key] = value;
+      if (Object.prototype.hasOwnProperty.call(values, key)) {
+        values[key] = Array.isArray(values[key]) ? [...values[key], value] : [values[key], value];
+      } else {
+        values[key] = value;
+      }
     }
     return values;
   }
@@ -8769,6 +9700,8 @@
       buildApproval("approval_eric", "agency_harbor", "timesheet_eric", "worker_eric_johnson", "client_apex", "site_fort_worth_cold_hub", "rejected", "Missing meal break attestation.")
     ];
 
+    const clientInvites = [];
+
     const payrollRuns = [
       {
         id: "payroll_run_2026_week_1",
@@ -8843,6 +9776,7 @@
       punches,
       timesheets,
       approvals,
+      clientInvites,
       payrollRuns,
       subscriptions,
       auditLogs,
@@ -8870,6 +9804,7 @@
     return {
       agencies,
       users,
+      clientInvites,
       clients,
       sites,
       workers,

@@ -627,16 +627,19 @@
   }
 
   async function establishCloudSession(authUser) {
+    console.log("[Portaly] Establishing cloud session");
     state.authUser = authUser;
     const profile = await loadCloudUserProfile(authUser.uid);
 
     if (!profile) {
+      console.warn("[Portaly] users/{uid} missing, routing to complete-profile", authUser.uid);
       state.profileRepair = {
         uid: authUser.uid,
         email: authUser.email || "",
-        agencyId: null
+        agencyId: null,
+        prefill: state.profileRepair?.prefill || null
       };
-      pushToast("Your sign-in worked, but your agency profile still needs to be created in Firestore.", "warning");
+      pushToast("Your login exists. Finish setting up your Portaly workspace.", "warning");
       setPublicSession();
       navigate("complete-profile", { replace: true });
       return;
@@ -1529,7 +1532,7 @@
 
     if (state.profileRepair) {
       navigate("complete-profile", { replace: true });
-      pushToast("Finish setting up your Firestore workspace to continue.", "warning");
+      pushToast("Complete setup to create your agency workspace.", "warning");
       return;
     }
 
@@ -1562,6 +1565,7 @@
     if (!state.firebase.ready) {
       throw new Error("Cloud Mode is not configured yet. Add your Firebase config first.");
     }
+    console.log("[Portaly] Trial signup started");
 
     const required = ["agencyName", "ownerFirstName", "ownerLastName", "email", "phone", "password", "confirmPassword", "selectedPlan"];
     required.forEach(field => {
@@ -1594,6 +1598,7 @@
     let authResult;
     try {
       authResult = await state.firebase.auth.createUserWithEmailAndPassword(values.email, values.password);
+      console.log("[Portaly] Auth user created UID", authResult.user.uid);
     } catch (error) {
       throw new Error(formatSignupAuthError(error));
     }
@@ -1657,23 +1662,41 @@
     };
 
     try {
+      console.log("[Portaly] Creating Firestore workspace docs", {
+        agencyId,
+        userId: uid,
+        selectedPlan
+      });
       const batch = state.firebase.db.batch();
       batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
       batch.set(state.firebase.db.collection("users").doc(uid), userDoc);
       batch.set(state.firebase.db.collection("settings").doc(settingDoc.id), settingDoc);
       batch.set(state.firebase.db.collection("subscriptions").doc(subscriptionDoc.id), subscriptionDoc);
       await batch.commit();
-    } catch (error) {
-      console.error(error);
-      await authResult.user.delete().catch(async () => {
-        if (state.firebase.auth?.signOut) {
-          await state.firebase.auth.signOut().catch(() => {});
-        }
+      console.log("[Portaly] Firestore batch committed", {
+        agencyId,
+        userId: uid
       });
-      state.authUser = null;
+    } catch (error) {
+      console.error("[Portaly] Trial signup Firestore batch failed", error);
+      state.authUser = authResult.user;
+      state.profileRepair = {
+        uid,
+        email: values.email,
+        agencyId,
+        prefill: {
+          agencyName: values.agencyName,
+          ownerFirstName: values.ownerFirstName,
+          ownerLastName: values.ownerLastName,
+          phone: values.phone,
+          selectedPlan
+        }
+      };
       setPublicSession();
       state.cache = emptyStore();
-      throw new Error(`Your login account was created, but Portaly could not finish the Firestore setup. ${formatSignupFirestoreError(error)}`);
+      navigate("complete-profile", { replace: true });
+      pushToast("Your login was created, but your workspace setup was not completed. Finish setting up your Portaly workspace here.", "warning");
+      return;
     }
 
     let sampleDataError = null;
@@ -1686,6 +1709,7 @@
       }
     }
 
+    console.log("[Portaly] Establishing cloud session");
     await establishCloudSession(authResult.user);
     await refreshSessionData();
     navigate("trial-success", { replace: true });
@@ -1700,6 +1724,7 @@
     if (!state.firebase.ready) {
       throw new Error("Cloud Mode is not configured yet. Add your Firebase config first.");
     }
+    console.log("[Portaly] Complete profile started");
 
     const authUser = state.authUser || state.firebase.auth?.currentUser || null;
     if (!authUser) {
@@ -1715,14 +1740,13 @@
 
     const uid = authUser.uid;
     const email = authUser.email || values.email || "";
-    const existingAgency = await findAgencyOwnedBy(uid);
     const trialDays = Number((state.firebase.config && state.firebase.config.trialDays) || 14);
     const now = new Date();
-    const trialStartIso = existingAgency?.trialStart || now.toISOString();
-    const trialEndIso = existingAgency?.trialEnd || addDays(new Date(trialStartIso), trialDays).toISOString();
-    const createdAt = existingAgency?.createdAt || now.toISOString();
+    const trialStartIso = now.toISOString();
+    const trialEndIso = addDays(new Date(trialStartIso), trialDays).toISOString();
+    const createdAt = now.toISOString();
     const updatedAt = now.toISOString();
-    const agencyId = existingAgency?.id || createId("agency");
+    const agencyId = state.profileRepair?.agencyId || createId("agency");
     const agencySettings = buildAgencySettings({
       agencyName: values.agencyName,
       logoInitials: initials(values.agencyName),
@@ -1732,8 +1756,6 @@
       payrollContact: email,
       defaultPayPeriod: "Weekly"
     });
-    const existingSettings = await findAgencyScopedRecord("settings", agencyId);
-    const existingSubscription = await findAgencyScopedRecord("subscriptions", agencyId);
 
     const userDoc = {
       id: uid,
@@ -1760,47 +1782,56 @@
       trialStart: trialStartIso,
       trialEnd: trialEndIso,
       billingProvider: "square",
-      squareCustomerId: existingAgency?.squareCustomerId || "",
-      squareSubscriptionId: existingAgency?.squareSubscriptionId || "",
+      squareCustomerId: "",
+      squareSubscriptionId: "",
       createdAt,
       updatedAt,
       settings: agencySettings
     };
 
     const settingDoc = {
-      id: existingSettings?.id || createId("setting"),
+      id: createId("setting"),
       agencyId,
       ...agencySettings,
-      createdAt: existingSettings?.createdAt || createdAt,
+      createdAt,
       updatedAt
     };
 
     const subscriptionDoc = {
-      id: existingSubscription?.id || createId("subscription"),
+      id: createId("subscription"),
       agencyId,
       billingProvider: "square",
-      squareCustomerId: existingSubscription?.squareCustomerId || "",
-      squareSubscriptionId: existingSubscription?.squareSubscriptionId || "",
+      squareCustomerId: "",
+      squareSubscriptionId: "",
       planId: values.selectedPlan,
       status: "trialing",
-      currentPeriodStart: existingSubscription?.currentPeriodStart || "",
-      currentPeriodEnd: existingSubscription?.currentPeriodEnd || "",
+      currentPeriodStart: "",
+      currentPeriodEnd: "",
       trialStart: trialStartIso,
       trialEnd: trialEndIso,
-      createdAt: existingSubscription?.createdAt || createdAt,
+      createdAt,
       updatedAt
     };
 
     try {
+      console.log("[Portaly] Creating Firestore workspace docs", {
+        agencyId,
+        userId: uid,
+        selectedPlan: values.selectedPlan
+      });
       const batch = state.firebase.db.batch();
       batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
       batch.set(state.firebase.db.collection("users").doc(uid), userDoc);
       batch.set(state.firebase.db.collection("settings").doc(settingDoc.id), settingDoc);
       batch.set(state.firebase.db.collection("subscriptions").doc(subscriptionDoc.id), subscriptionDoc);
       await batch.commit();
+      console.log("[Portaly] Firestore batch committed", {
+        agencyId,
+        userId: uid
+      });
     } catch (error) {
-      console.error(error);
-      throw new Error(`Portaly could not finish creating your Firestore workspace. ${formatSignupFirestoreError(error)}`);
+      console.error("[Portaly] Complete profile failed", error);
+      throw new Error("We could not finish your workspace setup. Please try again.");
     }
 
     let sampleDataError = null;
@@ -1814,6 +1845,7 @@
     }
 
     state.profileRepair = null;
+    console.log("[Portaly] Establishing cloud session");
     await establishCloudSession(authUser);
     await refreshSessionData();
     navigate("trial-success", { replace: true });
@@ -1821,25 +1853,11 @@
       pushToast("Your workspace is ready, but sample data could not be loaded.", "warning");
       return;
     }
+    console.log("[Portaly] Complete profile success", {
+      agencyId,
+      userId: uid
+    });
     pushToast("Your agency workspace is ready.", "success");
-  }
-
-  async function findAgencyOwnedBy(ownerUserId) {
-    if (!state.firebase.ready || !ownerUserId) {
-      return null;
-    }
-    const snapshot = await state.firebase.db.collection("agencies").where("ownerUserId", "==", ownerUserId).limit(1).get();
-    const record = snapshot.docs && snapshot.docs[0];
-    return record ? { id: record.id, ...record.data() } : null;
-  }
-
-  async function findAgencyScopedRecord(collectionName, agencyId) {
-    if (!state.firebase.ready || !agencyId) {
-      return null;
-    }
-    const snapshot = await state.firebase.db.collection(collectionName).where("agencyId", "==", agencyId).limit(1).get();
-    const record = snapshot.docs && snapshot.docs[0];
-    return record ? { id: record.id, ...record.data() } : null;
   }
 
   async function loadSampleDataIntoCloud(agencyId, ownerUserId, agencyName, planId) {
@@ -4525,45 +4543,61 @@
 
   function renderCompleteProfilePage() {
     const authUser = state.authUser || state.firebase.auth?.currentUser || null;
+    const draft = state.profileRepair?.prefill || {};
+    const accountEmail = authUser?.email || state.profileRepair?.email || "";
+    const selectedPlan = draft.selectedPlan || window.localStorage.getItem("portaly_selected_plan") || "agency";
     return `
       <main class="auth-shell">
-        <div class="container auth-grid">
-          <div class="auth-card">
-            <p class="eyebrow">Complete Profile</p>
-            <h3>Finish creating your agency workspace</h3>
-            <p>Your Firebase Auth login exists, but Portaly still needs to create the Firestore records for your agency, settings, and subscription.</p>
-            <form class="form-grid" data-form="complete-profile">
+        <div class="container auth-grid onboarding-auth-grid">
+          <div class="auth-card onboarding-card">
+            <div class="onboarding-stepbar">
+              <span class="mode-badge">Step 2 of 2: Workspace Setup</span>
+              <div class="onboarding-badges">
+                <span class="onboarding-pill">14-day free trial</span>
+                <span class="onboarding-pill">Secure login created</span>
+                <span class="onboarding-pill">No manual setup required</span>
+                <span class="onboarding-pill">Square billing ready</span>
+              </div>
+            </div>
+            <p class="eyebrow">Complete setup</p>
+            <h3>Finish Setting Up Your Portaly Workspace</h3>
+            <p>Your login was created successfully. Now let's create your agency workspace.</p>
+            <div class="onboarding-helper">
+              <strong>Workspace setup</strong>
+              <p>This creates your agency dashboard, trial subscription, and owner profile.</p>
+            </div>
+            <form class="form-grid onboarding-form" data-form="complete-profile">
               <div class="field-group">
                 <label for="complete-agency-name">Agency name</label>
-                <input id="complete-agency-name" name="agencyName" type="text" placeholder="Harbor Staffing Group" />
+                <input id="complete-agency-name" name="agencyName" type="text" placeholder="Harbor Staffing Group" value="${escapeAttribute(draft.agencyName || "")}" />
               </div>
               <div class="form-row two">
                 <div class="field-group">
                   <label for="complete-owner-first">Owner first name</label>
-                  <input id="complete-owner-first" name="ownerFirstName" type="text" placeholder="Jamie" />
+                  <input id="complete-owner-first" name="ownerFirstName" type="text" placeholder="Jamie" value="${escapeAttribute(draft.ownerFirstName || "")}" />
                 </div>
                 <div class="field-group">
                   <label for="complete-owner-last">Owner last name</label>
-                  <input id="complete-owner-last" name="ownerLastName" type="text" placeholder="Waters" />
+                  <input id="complete-owner-last" name="ownerLastName" type="text" placeholder="Waters" value="${escapeAttribute(draft.ownerLastName || "")}" />
                 </div>
               </div>
               <div class="form-row two">
                 <div class="field-group">
                   <label for="complete-email">Email</label>
-                  <input id="complete-email" name="email" type="email" value="${escapeAttribute(authUser?.email || "")}" readonly />
+                  <input id="complete-email" name="email" type="email" value="${escapeAttribute(accountEmail)}" readonly />
                 </div>
                 <div class="field-group">
-                  <label for="complete-phone">Phone</label>
-                  <input id="complete-phone" name="phone" type="text" placeholder="(555) 555-0123" />
+                  <label for="complete-phone">Phone number</label>
+                  <input id="complete-phone" name="phone" type="text" placeholder="(555) 555-0123" value="${escapeAttribute(draft.phone || "")}" />
                 </div>
               </div>
               <div class="field-group">
                 <label for="complete-plan">Selected plan</label>
                 <select id="complete-plan" name="selectedPlan">
-                  <option value="starter">Starter - $99/month</option>
-                  <option value="agency" selected>Agency - $249/month</option>
-                  <option value="growth">Growth - $499/month</option>
-                  <option value="enterprise">Enterprise - Custom</option>
+                  <option value="starter" ${selectedPlan === "starter" ? "selected" : ""}>Starter - $99/month</option>
+                  <option value="agency" ${selectedPlan === "agency" ? "selected" : ""}>Agency - $249/month</option>
+                  <option value="growth" ${selectedPlan === "growth" ? "selected" : ""}>Growth - $499/month</option>
+                  <option value="enterprise" ${selectedPlan === "enterprise" ? "selected" : ""}>Enterprise - Custom</option>
                 </select>
               </div>
               <label class="checkbox-row">
@@ -4571,25 +4605,30 @@
                 <span>Load sample data into this new agency workspace.</span>
               </label>
               <div class="page-actions">
-                <button class="button button-primary button-block" type="submit">Create My Workspace</button>
+                <button class="button button-primary button-block button-large" type="submit">Create My Workspace</button>
               </div>
             </form>
           </div>
-          <div class="stack-md">
-            <div class="support-card">
-              <p class="eyebrow">What Portaly will create</p>
-              <h3>Required Firestore records</h3>
+          <div class="stack-md onboarding-side">
+            <div class="support-card onboarding-support-card">
+              <p class="eyebrow">What happens next</p>
+              <h3>Create workspace and continue</h3>
               <ul class="list">
-                <li><code>users/{uid}</code> using your Firebase Auth UID</li>
-                <li><code>agencies/{agencyId}</code> with you as owner</li>
-                <li><code>settings/{settingId}</code> for white-label defaults</li>
-                <li><code>subscriptions/{subscriptionId}</code> in trialing status</li>
+                <li>Create your agency workspace</li>
+                <li>Start your 14-day free trial</li>
+                <li>Open your owner dashboard</li>
+                <li>Invite your team when you're ready</li>
               </ul>
             </div>
-            <div class="support-card">
+            <div class="support-card onboarding-support-card">
+              <p class="eyebrow">Built for agencies</p>
+              <h3>Ready for staffing operations from day one</h3>
+              <p>Portaly sets up your agency dashboard, worker punch tools, approval flow, payroll view, and Square-ready billing foundation in one step.</p>
+            </div>
+            <div class="support-card onboarding-support-card">
               <p class="eyebrow">Need a different login?</p>
-              <h3>You can sign out safely</h3>
-              <p>If this is not the right account, sign out and return to login or trial signup.</p>
+              <h3>Sign out and switch accounts</h3>
+              <p>If this is not the right account, you can sign out and return to login or start a different free trial.</p>
               <div class="page-actions" style="margin-top: 16px;">
                 <button class="button button-secondary" data-action="logout" type="button">Logout</button>
               </div>

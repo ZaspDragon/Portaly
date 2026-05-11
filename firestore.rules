@@ -120,6 +120,7 @@ service cloud.firestore {
         'originalApprovedHours',
         'originalRegularHours',
         'originalOvertimeHours',
+        'managerSignature',
         'updatedAt'
       ]);
     }
@@ -157,6 +158,7 @@ service cloud.firestore {
         'signatureDataUrl',
         'signedAt',
         'approvalNote',
+        'managerSignature',
         'updatedAt'
       ]);
     }
@@ -164,7 +166,7 @@ service cloud.firestore {
     match /agencies/{agencyDocId} {
       allow read: if signedIn() && (
         isPlatformOwner()
-        || ((isAgencyStaff() || isWorker()) && agencyId() == agencyDocId)
+        || ((isAgencyStaff() || isClientManager() || isWorker()) && agencyId() == agencyDocId)
       );
       allow create: if signedIn()
         && request.resource.data.id == agencyDocId

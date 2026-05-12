@@ -143,7 +143,7 @@ function canViewBilling(profile) {
 }
 
 function canInviteClientManagers(profile) {
-  return ["agencyOwner", "agencyAdmin"].includes(profile.role);
+  return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(profile.role);
 }
 
 function resolveAgencyId(profile, requestedAgencyId) {
@@ -185,6 +185,67 @@ async function getInviteByToken(inviteToken) {
       id: docSnap.id,
       ...docSnap.data()
     }
+  };
+}
+
+async function writeInviteAuditLog({ agencyId, action, entityId, actorId = "", actorRole = "system", oldValue = null, newValue = null, reason = "" }) {
+  if (!agencyId || !action || !entityId) {
+    return;
+  }
+
+  const createdAt = nowIso();
+  await admin.firestore().collection("auditLogs").doc().set({
+    agencyId,
+    action,
+    entityType: "clientInvites",
+    entityId,
+    userId: actorId,
+    actorId,
+    role: actorRole,
+    actorRole,
+    oldValue,
+    newValue,
+    reason,
+    createdAt,
+    timestamp: createdAt
+  });
+}
+
+async function markInviteExpired(result) {
+  if (!result || !result.invite) {
+    return result;
+  }
+
+  const invite = result.invite;
+  const expired = invite.tokenExpiresAt && new Date(invite.tokenExpiresAt) < new Date();
+  if (!expired || invite.status === "expired") {
+    return result;
+  }
+
+  const oldValue = { ...invite };
+  const updatedInvite = {
+    ...invite,
+    status: "expired",
+    updatedAt: nowIso()
+  };
+
+  await result.ref.set({
+    status: "expired",
+    updatedAt: updatedInvite.updatedAt
+  }, { merge: true });
+
+  await writeInviteAuditLog({
+    agencyId: invite.agencyId,
+    action: "invite_expired",
+    entityId: invite.id,
+    oldValue,
+    newValue: updatedInvite,
+    reason: "Invite link expired before acceptance."
+  });
+
+  return {
+    ...result,
+    invite: updatedInvite
   };
 }
 
@@ -423,6 +484,7 @@ exports.createClientManagerInvite = onRequest(
         inviteToken,
         tokenExpiresAt,
         acceptedAt: "",
+        acceptedBy: "",
         createdAt,
         updatedAt: nowIso(),
         createdBy: auth.uid,
@@ -460,9 +522,13 @@ exports.verifyClientManagerInvite = onRequest(
         throw createHttpError(400, "Invite token is required.");
       }
 
-      const result = await getInviteByToken(inviteToken);
+      const result = await markInviteExpired(await getInviteByToken(inviteToken));
       if (!result) {
         throw createHttpError(404, "This Portaly invite could not be found.");
+      }
+
+      if (result.invite.status === "revoked") {
+        throw createHttpError(410, "This invite is no longer active. Ask the agency to send a new client manager invite.");
       }
 
       responseJson(res, 200, {
@@ -495,7 +561,7 @@ exports.acceptClientManagerInvite = onRequest(
         throw createHttpError(400, "Invite token is required.");
       }
 
-      const result = await getInviteByToken(inviteToken);
+      const result = await markInviteExpired(await getInviteByToken(inviteToken));
       if (!result) {
         throw createHttpError(404, "This Portaly invite could not be found.");
       }
@@ -508,7 +574,10 @@ exports.acceptClientManagerInvite = onRequest(
       if (invite.status === "accepted" && invite.acceptedBy && invite.acceptedBy !== decoded.uid) {
         throw createHttpError(403, "This invite has already been accepted by another account.");
       }
-      if (invite.tokenExpiresAt && new Date(invite.tokenExpiresAt) < new Date()) {
+      if (invite.status === "revoked") {
+        throw createHttpError(410, "This invite is no longer active. Ask the agency to send a new client manager invite.");
+      }
+      if (invite.status === "expired" || (invite.tokenExpiresAt && new Date(invite.tokenExpiresAt) < new Date())) {
         throw createHttpError(410, "This invite has expired. Ask the agency to send a new invite.");
       }
 

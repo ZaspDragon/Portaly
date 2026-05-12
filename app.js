@@ -4226,7 +4226,7 @@
   }
 
   function getInviteConfig() {
-    return state.firebase.config.inviteConfig || {};
+    return window.PORTALY_FIREBASE_CONFIG?.inviteConfig || state.firebase.config.inviteConfig || {};
   }
 
   function canUseFrontendInviteLinks() {
@@ -4248,7 +4248,7 @@
   }
 
   function buildClientManagerInviteLink(token) {
-    const baseUrl = String(state.firebase.config.appUrl || DEFAULT_APP_URL || window.location.href || "").replace(/#.*$/, "");
+    const baseUrl = String(window.PORTALY_FIREBASE_CONFIG?.appUrl || state.firebase.config.appUrl || DEFAULT_APP_URL || window.location.href || "").replace(/#.*$/, "");
     return `${baseUrl}#/accept-invite/${encodeURIComponent(String(token || "").trim())}`;
   }
 
@@ -4301,6 +4301,7 @@
 
     const createdAt = new Date().toISOString();
     const inviteToken = createClientInviteToken();
+    const inviteUrl = buildClientManagerInviteLink(inviteToken);
     const invite = buildCloudInviteDetails({
       id: inviteToken,
       agencyId: payload.agencyId,
@@ -4323,9 +4324,11 @@
       assignedClientNames: payload.assignedClientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
       assignedSiteNames: payload.assignedSiteIds.map(id => getSiteName(id)).filter(name => name && name !== "Unknown Site"),
       authAccountExists: false,
-      inviteLink: buildClientManagerInviteLink(inviteToken)
+      inviteLink: inviteUrl
     }, "cloud-frontend");
 
+    console.log("[Portaly] createCloudClientManagerInvite payload", payload);
+    console.log("[Portaly] createCloudClientManagerInvite inviteUrl", inviteUrl);
     await saveData("clientInvites", inviteToken, invite);
     return invite;
   }
@@ -4682,26 +4685,34 @@
       agencyId
     };
 
-      let invite;
-      if (state.session.mode === "cloud") {
-        if (hasSecureBackend()) {
-          const result = await callSecureFunction("createClientManagerInvite", payload, {
-            requireAuth: true,
-            authMessage: "Sign in to your cloud agency before inviting client managers.",
-            errorMessage: "Portaly could not create this client manager invite."
-          });
-          if (!result?.invite) {
-            return;
-          }
-          invite = result.invite;
-        } else if (canUseFrontendInviteLinks()) {
-          invite = await createCloudClientManagerInvite(payload);
-        } else {
-          throw new Error("Client manager invites need the secure backend before Cloud Mode can send or verify them.");
+    const functionsBaseUrl = getFunctionsBaseUrl();
+    const allowFrontendInviteLinks = window.PORTALY_FIREBASE_CONFIG?.inviteConfig?.allowFrontendInviteLinks === true || canUseFrontendInviteLinks();
+    console.log("[Portaly] submitClientManagerInvite functionsBaseUrl", functionsBaseUrl || "(empty)");
+    console.log("[Portaly] submitClientManagerInvite allowFrontendInviteLinks", allowFrontendInviteLinks);
+    console.log("[Portaly] submitClientManagerInvite payload", payload);
+
+    let invite;
+    if (state.session.mode === "cloud") {
+      if (functionsBaseUrl) {
+        const result = await callSecureFunction("createClientManagerInvite", payload, {
+          requireAuth: true,
+          authMessage: "Sign in to your cloud agency before inviting client managers.",
+          errorMessage: "Portaly could not create this client manager invite."
+        });
+        if (!result?.invite) {
+          return;
         }
+        invite = result.invite;
+      } else if (allowFrontendInviteLinks) {
+        invite = await createCloudClientManagerInvite(payload);
       } else {
-        invite = await createDemoClientManagerInvite(payload);
+        throw new Error("Client manager invites need the secure backend URL before Cloud Mode can send them.");
       }
+    } else {
+      invite = await createDemoClientManagerInvite(payload);
+    }
+
+    console.log("[Portaly] submitClientManagerInvite inviteUrl", invite?.inviteLink || "");
 
     await appendAuditLog("client_manager_invited", "clientInvites", invite.id, null, invite, {
       actorId: state.session.userId,
@@ -4709,7 +4720,7 @@
     });
     state.modal = null;
     await refreshCurrentView();
-    pushToast("Client manager invite created.", "success");
+    pushToast("Invite link created successfully.", "success");
     openInviteSuccessModal(invite);
   }
 

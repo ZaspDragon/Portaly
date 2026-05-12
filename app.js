@@ -1164,7 +1164,7 @@
   }
 
   function canInviteClientManagers() {
-    return ["agencyOwner", "agencyAdmin"].includes(state.session.role);
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
   }
 
   function canManageBilling() {
@@ -1460,6 +1460,9 @@
         case "magic-link-placeholder":
           pushToast("Passwordless email link sign-in is the next step. For now, use the invite link to set up email and password access.", "warning");
           break;
+        case "revoke-client-invite":
+          openRevokeClientInviteModal(trigger.dataset.inviteId || "");
+          break;
         case "accept-client-invite":
           await acceptCurrentInvite();
           break;
@@ -1716,6 +1719,16 @@
       navigate("worker-punch", { replace: true });
       pushToast("Welcome back. Your punch screen is ready.", "success");
       return;
+    }
+
+    if (state.session.role === "clientManager") {
+      await appendAuditLog("client_manager_login", "users", state.session.userId, null, {
+        loginAt: new Date().toISOString(),
+        via: "login"
+      }, {
+        actorId: state.session.userId,
+        actorRole: "clientManager"
+      });
     }
 
     navigate(getHomeRoute(), { replace: true });
@@ -2971,6 +2984,10 @@
               <li>
                 <strong>${escapeHtml(`${invite.firstName || ""} ${invite.lastName || ""}`.trim() || invite.email || invite.id)}</strong>
                 <span class="helper-copy">${escapeHtml(invite.email || "-")} - ${escapeHtml(formatStatusLabel(invite.status || "pending"))}</span>
+                <div class="table-actions" style="margin-top: 10px;">
+                  <button class="button button-ghost" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" type="button">Copy Invite Link</button>
+                  ${canInviteClientManagers() && (invite.status || "pending") === "pending" ? `<button class="button button-danger" data-action="revoke-client-invite" data-invite-id="${escapeHtml(invite.id)}" type="button">Revoke Invite</button>` : ""}
+                </div>
               </li>
             `).join("")}
           </ul>
@@ -4250,6 +4267,43 @@
     `).join("");
   }
 
+  function resolveInviteAgencyId(assignedClientIds, assignedSiteIds, explicitAgencyId = "") {
+    const agencyIds = new Set();
+    const requestedAgencyId = String(explicitAgencyId || "").trim();
+    if (requestedAgencyId) {
+      agencyIds.add(requestedAgencyId);
+    }
+
+    normalizeStringArray(assignedClientIds).forEach(clientId => {
+      const client = findRecord("clients", clientId);
+      if (client?.agencyId) {
+        agencyIds.add(client.agencyId);
+      }
+    });
+
+    normalizeStringArray(assignedSiteIds).forEach(siteId => {
+      const site = findRecord("sites", siteId);
+      if (site?.agencyId) {
+        agencyIds.add(site.agencyId);
+      }
+    });
+
+    if (agencyIds.size > 1) {
+      throw new Error("Assigned clients and sites must belong to the same agency before you send this invite.");
+    }
+
+    const [resolvedAgencyId] = [...agencyIds];
+    if (resolvedAgencyId) {
+      return resolvedAgencyId;
+    }
+
+    if (state.session.agencyId) {
+      return state.session.agencyId;
+    }
+
+    throw new Error("Choose a client or site from one agency before creating this client manager invite.");
+  }
+
   function openClientManagerInviteModal(options = {}) {
     const scoped = getScopedData();
     const selectedClientIds = options.clientId ? [options.clientId] : [];
@@ -4313,7 +4367,7 @@
     const inviteToken = `${createId("cm")}_${Math.random().toString(36).slice(2, 12)}`;
     const tokenExpiresAt = addDays(new Date(createdAt), 14).toISOString();
     const user = {
-      agencyId: state.session.agencyId,
+      agencyId: payload.agencyId,
       role: "clientManager",
       firstName: payload.firstName,
       lastName: payload.lastName,
@@ -4326,7 +4380,7 @@
     };
     await saveData("users", userId, user);
     const invite = {
-      agencyId: state.session.agencyId,
+      agencyId: payload.agencyId,
       email: payload.email,
       firstName: payload.firstName,
       lastName: payload.lastName,
@@ -4338,6 +4392,7 @@
       inviteToken,
       tokenExpiresAt,
       acceptedAt: "",
+      acceptedBy: "",
       createdAt,
       updatedAt: createdAt,
       createdBy: state.session.userId,
@@ -4396,6 +4451,7 @@
     if (!assignedClientIds.length && !assignedSiteIds.length) {
       throw new Error("Assign at least one client or site before sending the invite.");
     }
+    const agencyId = resolveInviteAgencyId(assignedClientIds, assignedSiteIds, values.agencyId || state.session.agencyId);
 
     const payload = {
       firstName: values.firstName,
@@ -4404,7 +4460,7 @@
       phone: values.phone || "",
       assignedClientIds,
       assignedSiteIds,
-      agencyId: state.session.agencyId
+      agencyId
     };
 
     let invite;
@@ -4503,6 +4559,7 @@
       if (!user) {
         throw new Error("The demo client manager profile is missing.");
       }
+      const acceptedAt = new Date().toISOString();
       await saveData("users", inviteRecord.userId, {
         ...user,
         status: "active"
@@ -4510,7 +4567,8 @@
       await saveData("clientInvites", inviteRecord.id, {
         ...inviteRecord,
         status: "accepted",
-        acceptedAt: new Date().toISOString()
+        acceptedAt,
+        acceptedBy: inviteRecord.userId
       });
       clearPendingInviteToken();
       state.inviteFlow = {
@@ -4522,6 +4580,22 @@
       state.session = buildSessionFromUser({ ...user, status: "active" }, "demo");
       persistSession();
       await refreshSessionData();
+      await appendAuditLog("invite_accepted", "clientInvites", inviteRecord.id, inviteRecord, {
+        ...inviteRecord,
+        status: "accepted",
+        acceptedAt,
+        acceptedBy: inviteRecord.userId
+      }, {
+        actorId: inviteRecord.userId,
+        actorRole: "clientManager"
+      });
+      await appendAuditLog("client_manager_login", "users", inviteRecord.userId, null, {
+        loginAt: acceptedAt,
+        via: "demo_invite"
+      }, {
+        actorId: inviteRecord.userId,
+        actorRole: "clientManager"
+      });
       navigate("approvals", { replace: true });
       pushToast("Demo client manager access is ready.", "success");
       return;
@@ -4551,12 +4625,62 @@
     };
     await establishCloudSession(authUser);
     await refreshSessionData();
-    await appendAuditLog("client_manager_invite_accepted", "clientInvites", result?.invite?.id || invite.id, invite, result?.invite || invite, {
+    const acceptedInvite = result?.invite || invite;
+    await appendAuditLog("invite_accepted", "clientInvites", acceptedInvite.id || invite.id, invite, acceptedInvite, {
+      actorId: state.session.userId || authUser.uid,
+      actorRole: "clientManager"
+    });
+    await appendAuditLog("client_manager_login", "users", state.session.userId || authUser.uid, null, {
+      loginAt: new Date().toISOString(),
+      via: options.authUser ? "invite_accept" : "invite_resume"
+    }, {
       actorId: state.session.userId || authUser.uid,
       actorRole: "clientManager"
     });
     navigate("approvals", { replace: true });
     pushToast("Client manager access is ready. Welcome to Approvals.", "success");
+  }
+
+  function openRevokeClientInviteModal(inviteId) {
+    requirePermission(canInviteClientManagers(), "Only agency owners, agency admins, or platform owners can revoke client manager invites.");
+    const invite = findRecord("clientInvites", inviteId);
+    if (!invite) {
+      throw new Error("That client manager invite could not be found.");
+    }
+    if ((invite.status || "pending") !== "pending") {
+      throw new Error("Only pending client manager invites can be revoked.");
+    }
+
+    const label = `${invite.firstName || ""} ${invite.lastName || ""}`.trim() || invite.email || "this invite";
+    confirmAction(`Revoke the client manager invite for ${label}? The current link will stop working immediately.`, async () => {
+      const updatedAt = new Date().toISOString();
+      const updatedInvite = await updateData("clientInvites", invite.id, {
+        status: "revoked",
+        updatedAt
+      });
+
+      if (state.session.mode === "demo" && invite.userId) {
+        const demoUser = findRecord("users", invite.userId);
+        if (demoUser && demoUser.status === "invited") {
+          await updateData("users", invite.userId, {
+            status: "inactive",
+            updatedAt
+          });
+        }
+      }
+
+      await appendAuditLog("invite_revoked", "clientInvites", invite.id, invite, updatedInvite, {
+        actorId: state.session.userId,
+        actorRole: state.session.role
+      });
+      closeModal();
+      await refreshCurrentView();
+      pushToast("Client manager invite revoked.", "success");
+    }, {
+      title: "Revoke Invite",
+      confirmLabel: "Revoke Invite",
+      confirmTone: "button-danger"
+    });
   }
 
   async function refreshSubscriptionStatus(showToastOnSuccess = false, successMessage = "Subscription status refreshed.") {
@@ -5719,10 +5843,25 @@
                     <label for="invite-login-email">Email</label>
                     <input id="invite-login-email" type="email" value="${escapeAttribute(invite.email || "")}" readonly />
                   </div>
+                  <div class="form-row two">
+                    <div class="field-group">
+                      <label for="invite-login-first-name">First name</label>
+                      <input id="invite-login-first-name" type="text" value="${escapeAttribute(invite.firstName || "")}" readonly />
+                    </div>
+                    <div class="field-group">
+                      <label for="invite-login-last-name">Last name</label>
+                      <input id="invite-login-last-name" type="text" value="${escapeAttribute(invite.lastName || "")}" readonly />
+                    </div>
+                  </div>
+                  <div class="field-group">
+                    <label for="invite-login-phone">Phone</label>
+                    <input id="invite-login-phone" type="text" value="${escapeAttribute(invite.phone || "")}" readonly />
+                  </div>
                   <div class="field-group">
                     <label for="invite-login-password">Password</label>
                     <input id="invite-login-password" name="password" type="password" placeholder="Enter your password" />
                   </div>
+                  <p class="helper-copy">These access details came from your staffing agency invite. If anything looks wrong, contact the agency before continuing.</p>
                   <div class="modal-actions">
                     <button class="button button-primary button-block" type="submit">Accept Invite</button>
                   </div>
@@ -5741,6 +5880,20 @@
                   </div>
                   <div class="form-row two">
                     <div class="field-group">
+                      <label for="invite-create-first-name">First name</label>
+                      <input id="invite-create-first-name" type="text" value="${escapeAttribute(invite.firstName || "")}" readonly />
+                    </div>
+                    <div class="field-group">
+                      <label for="invite-create-last-name">Last name</label>
+                      <input id="invite-create-last-name" type="text" value="${escapeAttribute(invite.lastName || "")}" readonly />
+                    </div>
+                  </div>
+                  <div class="field-group">
+                    <label for="invite-create-phone">Phone</label>
+                    <input id="invite-create-phone" type="text" value="${escapeAttribute(invite.phone || "")}" readonly />
+                  </div>
+                  <div class="form-row two">
+                    <div class="field-group">
                       <label for="invite-create-password">Password</label>
                       <input id="invite-create-password" name="password" type="password" placeholder="Create a password" />
                     </div>
@@ -5749,6 +5902,7 @@
                       <input id="invite-create-confirm" name="confirmPassword" type="password" placeholder="Confirm password" />
                     </div>
                   </div>
+                  <p class="helper-copy">Portaly will use these invited details to create your approval access and send you straight to the assigned approvals workspace.</p>
                   <div class="modal-actions">
                     <button class="button button-primary button-block" type="submit">Set Up Access</button>
                   </div>
@@ -7417,6 +7571,7 @@
                         <div class="table-actions">
                           <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" type="button">Copy Invite Link</button>
                           <button class="button button-ghost" data-action="send-invite-email-placeholder" data-link="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" data-email="${escapeAttribute(invite.email || "")}" type="button">Send Invite Email</button>
+                          ${canInviteClientManagers() && (invite.status || "pending") === "pending" ? `<button class="button button-danger" data-action="revoke-client-invite" data-invite-id="${escapeHtml(invite.id)}" type="button">Revoke Invite</button>` : ""}
                         </div>
                       </td>
                     </tr>

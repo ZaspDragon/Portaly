@@ -4225,6 +4225,28 @@
     return normalized ? [normalized] : [];
   }
 
+  function getInviteConfig() {
+    return state.firebase.config.inviteConfig || {};
+  }
+
+  function canUseFrontendInviteLinks() {
+    return !!getInviteConfig().allowFrontendInviteLinks;
+  }
+
+  function getInviteExpiryDays() {
+    const configuredDays = Number(getInviteConfig().inviteExpiryDays || 14);
+    return Number.isFinite(configuredDays) && configuredDays > 0 ? configuredDays : 14;
+  }
+
+  function createClientInviteToken() {
+    if (window.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(24);
+      window.crypto.getRandomValues(bytes);
+      return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+    return `${createId("invite")}_${Math.random().toString(36).slice(2, 18)}`;
+  }
+
   function buildClientManagerInviteLink(token) {
     const baseUrl = String(state.firebase.config.appUrl || DEFAULT_APP_URL || window.location.href || "").replace(/#.*$/, "");
     return `${baseUrl}#/accept-invite/${encodeURIComponent(String(token || "").trim())}`;
@@ -4252,6 +4274,123 @@
       assignedClientNames: clientIds.map(id => getClientNameFromStore(id, state.demoStore.clients || [])),
       assignedSiteNames: siteIds.map(id => getSiteNameFromStore(id, state.demoStore.sites || [])),
       authAccountExists: false
+    };
+  }
+
+  function buildCloudInviteDetails(invite, source = "cloud-frontend") {
+    if (!invite) {
+      return null;
+    }
+    const clientIds = Array.isArray(invite.assignedClientIds) ? invite.assignedClientIds : [];
+    const siteIds = Array.isArray(invite.assignedSiteIds) ? invite.assignedSiteIds : [];
+    return {
+      ...invite,
+      source,
+      inviteLink: invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || invite.id),
+      agencyName: invite.agencyName || getAgencyName(invite.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
+      assignedClientNames: invite.assignedClientNames || clientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
+      assignedSiteNames: invite.assignedSiteNames || siteIds.map(id => getSiteName(id)).filter(name => name && name !== "Unknown Site"),
+      authAccountExists: invite.authAccountExists === true
+    };
+  }
+
+  async function createCloudClientManagerInvite(payload) {
+    if (!state.firebase.ready || !state.firebase.db) {
+      throw new Error("Cloud invite links are not available until Firebase is fully connected.");
+    }
+
+    const createdAt = new Date().toISOString();
+    const inviteToken = createClientInviteToken();
+    const invite = buildCloudInviteDetails({
+      id: inviteToken,
+      agencyId: payload.agencyId,
+      email: payload.email,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      phone: payload.phone || "",
+      role: "clientManager",
+      assignedClientIds: payload.assignedClientIds,
+      assignedSiteIds: payload.assignedSiteIds,
+      status: "pending",
+      inviteToken,
+      tokenExpiresAt: addDays(new Date(createdAt), getInviteExpiryDays()).toISOString(),
+      acceptedAt: "",
+      acceptedBy: "",
+      createdBy: state.session.userId,
+      createdAt,
+      updatedAt: createdAt,
+      agencyName: getAgencyName(payload.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
+      assignedClientNames: payload.assignedClientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
+      assignedSiteNames: payload.assignedSiteIds.map(id => getSiteName(id)).filter(name => name && name !== "Unknown Site"),
+      authAccountExists: false,
+      inviteLink: buildClientManagerInviteLink(inviteToken)
+    }, "cloud-frontend");
+
+    await saveData("clientInvites", inviteToken, invite);
+    return invite;
+  }
+
+  async function loadFrontendCloudInvite(token) {
+    if (!state.firebase.ready || !state.firebase.db) {
+      throw new Error("Cloud invite links are not available until Firebase is fully connected.");
+    }
+    const snapshot = await state.firebase.db.collection("clientInvites").doc(token).get();
+    if (!snapshot.exists) {
+      throw new Error("This Portaly invite could not be found.");
+    }
+    return buildCloudInviteDetails({ id: snapshot.id, ...snapshot.data() }, "cloud-frontend");
+  }
+
+  async function acceptFrontendCloudInvite(invite, authUser) {
+    if (!state.firebase.ready || !state.firebase.db) {
+      throw new Error("Cloud invite acceptance is not available until Firebase is fully connected.");
+    }
+
+    const existingProfile = await loadCloudUserProfile(authUser.uid);
+    if (existingProfile?.agencyId && existingProfile.agencyId !== invite.agencyId) {
+      throw new Error("This email is already connected to a different Portaly agency.");
+    }
+    if (existingProfile?.role && existingProfile.role !== "clientManager") {
+      throw new Error("This Portaly login already belongs to a different role.");
+    }
+
+    const acceptedAt = new Date().toISOString();
+    const mergedClientIds = [...new Set([...(existingProfile?.assignedClientIds || []), ...normalizeStringArray(invite.assignedClientIds)])];
+    const mergedSiteIds = [...new Set([...(existingProfile?.assignedSiteIds || []), ...normalizeStringArray(invite.assignedSiteIds)])];
+    const userProfile = {
+      id: authUser.uid,
+      agencyId: invite.agencyId,
+      role: "clientManager",
+      firstName: invite.firstName || existingProfile?.firstName || "",
+      lastName: invite.lastName || existingProfile?.lastName || "",
+      email: invite.email,
+      phone: invite.phone || existingProfile?.phone || "",
+      status: "active",
+      assignedClientIds: mergedClientIds,
+      assignedSiteIds: mergedSiteIds,
+      workerId: "",
+      inviteToken: invite.inviteToken || invite.id,
+      createdAt: existingProfile?.createdAt || acceptedAt,
+      updatedAt: acceptedAt
+    };
+
+    await state.firebase.db.collection("users").doc(authUser.uid).set(userProfile, { merge: false });
+    const invitePatch = {
+      status: "accepted",
+      acceptedAt,
+      acceptedBy: authUser.uid,
+      updatedAt: acceptedAt,
+      authAccountExists: true
+    };
+    await state.firebase.db.collection("clientInvites").doc(invite.id || invite.inviteToken).set(invitePatch, { merge: true });
+    const updatedInvite = {
+      ...invite,
+      ...invitePatch
+    };
+
+    return {
+      invite: buildCloudInviteDetails(updatedInvite, "cloud-frontend"),
+      user: userProfile
     };
   }
 
@@ -4283,21 +4422,32 @@
       renderApp();
     }
 
-    try {
-      const localInvite = buildLocalClientInviteDetails(findLocalClientInvite(token));
-      if (localInvite) {
-        state.inviteFlow = {
-          token,
+      try {
+        const localInvite = buildLocalClientInviteDetails(findLocalClientInvite(token));
+        if (localInvite) {
+          state.inviteFlow = {
+            token,
           loading: false,
           details: localInvite,
           error: ""
-        };
-        return localInvite;
-      }
+          };
+          return localInvite;
+        }
 
-      const result = await callSecureFunction("verifyClientManagerInvite", {
-        token
-      }, {
+        if (!hasSecureBackend() && canUseFrontendInviteLinks()) {
+          const details = await loadFrontendCloudInvite(token);
+          state.inviteFlow = {
+            token,
+            loading: false,
+            details,
+            error: ""
+          };
+          return details;
+        }
+
+        const result = await callSecureFunction("verifyClientManagerInvite", {
+          token
+        }, {
         requireAuth: false,
         fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can verify them.",
         errorMessage: "We could not load this Portaly invite."
@@ -4532,21 +4682,26 @@
       agencyId
     };
 
-    let invite;
-    if (state.session.mode === "cloud") {
-      const result = await callSecureFunction("createClientManagerInvite", payload, {
-        requireAuth: true,
-        authMessage: "Sign in to your cloud agency before inviting client managers.",
-        fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can send them.",
-        errorMessage: "Portaly could not create this client manager invite."
-      });
-      if (!result?.invite) {
-        return;
+      let invite;
+      if (state.session.mode === "cloud") {
+        if (hasSecureBackend()) {
+          const result = await callSecureFunction("createClientManagerInvite", payload, {
+            requireAuth: true,
+            authMessage: "Sign in to your cloud agency before inviting client managers.",
+            errorMessage: "Portaly could not create this client manager invite."
+          });
+          if (!result?.invite) {
+            return;
+          }
+          invite = result.invite;
+        } else if (canUseFrontendInviteLinks()) {
+          invite = await createCloudClientManagerInvite(payload);
+        } else {
+          throw new Error("Client manager invites need the secure backend before Cloud Mode can send or verify them.");
+        }
+      } else {
+        invite = await createDemoClientManagerInvite(payload);
       }
-      invite = result.invite;
-    } else {
-      invite = await createDemoClientManagerInvite(payload);
-    }
 
     await appendAuditLog("client_manager_invited", "clientInvites", invite.id, null, invite, {
       actorId: state.session.userId,
@@ -4675,14 +4830,19 @@
       throw new Error("Sign in with the invited email before continuing.");
     }
 
-    const result = await callSecureFunction("acceptClientManagerInvite", {
-      token: invite.inviteToken || state.inviteFlow.token
-    }, {
-      requireAuth: true,
-      authMessage: "Sign in with the invited email before continuing.",
-      fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can finish setup.",
-      errorMessage: "Portaly could not finish accepting this invite."
-    });
+    const result = hasSecureBackend()
+      ? await callSecureFunction("acceptClientManagerInvite", {
+        token: invite.inviteToken || state.inviteFlow.token
+      }, {
+        requireAuth: true,
+        authMessage: "Sign in with the invited email before continuing.",
+        errorMessage: "Portaly could not finish accepting this invite."
+      })
+      : canUseFrontendInviteLinks()
+        ? await acceptFrontendCloudInvite(invite, authUser)
+        : (() => {
+          throw new Error("Client manager invites need the secure backend before Cloud Mode can finish setup.");
+        })();
 
     state.authUser = authUser;
     clearPendingInviteToken();

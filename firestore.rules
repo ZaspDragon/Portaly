@@ -103,6 +103,58 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.agencyId == targetAgencyId;
     }
 
+    function invitePath(inviteToken) {
+      return /databases/$(database)/documents/clientInvites/$(inviteToken);
+    }
+
+    function inviteExists(inviteToken) {
+      return inviteToken is string && exists(invitePath(inviteToken));
+    }
+
+    function inviteRecord(inviteToken) {
+      return get(invitePath(inviteToken)).data;
+    }
+
+    function selfCreatesClientManagerFromInvite() {
+      return signedIn()
+        && request.auth.uid == request.resource.data.id
+        && request.resource.data.role == 'clientManager'
+        && request.resource.data.agencyId is string
+        && request.resource.data.inviteToken is string
+        && inviteExists(request.resource.data.inviteToken)
+        && inviteRecord(request.resource.data.inviteToken).inviteToken == request.resource.data.inviteToken
+        && inviteRecord(request.resource.data.inviteToken).status == 'pending'
+        && inviteRecord(request.resource.data.inviteToken).role == 'clientManager'
+        && inviteRecord(request.resource.data.inviteToken).agencyId == request.resource.data.agencyId
+        && inviteRecord(request.resource.data.inviteToken).email == request.auth.token.email
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.firstName == inviteRecord(request.resource.data.inviteToken).firstName
+        && request.resource.data.lastName == inviteRecord(request.resource.data.inviteToken).lastName
+        && request.resource.data.phone == inviteRecord(request.resource.data.inviteToken).phone
+        && request.resource.data.assignedClientIds == inviteRecord(request.resource.data.inviteToken).assignedClientIds
+        && request.resource.data.assignedSiteIds == inviteRecord(request.resource.data.inviteToken).assignedSiteIds
+        && request.resource.data.status == 'active'
+        && request.resource.data.workerId == '';
+    }
+
+    function clientInviteSelfAcceptUpdate() {
+      return signedIn()
+        && request.auth.token.email == resource.data.email
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.inviteToken == resource.data.inviteToken
+        && request.resource.data.agencyId == resource.data.agencyId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.acceptedBy == request.auth.uid
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'status',
+          'acceptedAt',
+          'acceptedBy',
+          'updatedAt',
+          'authAccountExists'
+        ]);
+    }
+
     function clientApprovalFieldSet() {
       return request.resource.data.diff(resource.data).changedKeys().hasOnly([
         'status',
@@ -199,6 +251,7 @@ service cloud.firestore {
           isAgencyOwner()
           && request.resource.data.agencyId == agencyId()
         )
+        || (request.auth.uid == userIdDoc && selfCreatesClientManagerFromInvite())
       );
 
       allow update: if signedIn() && (
@@ -211,7 +264,17 @@ service cloud.firestore {
     }
 
     match /clientInvites/{inviteId} {
-      allow read: if signedIn() && (
+      allow get: if (
+        resource.data.id == inviteId
+        && resource.data.inviteToken == inviteId
+        && resource.data.role == 'clientManager'
+        && resource.data.status != 'revoked'
+      ) || (signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+      ));
+
+      allow list: if signedIn() && (
         isPlatformOwner()
         || (isAgencyStaff() && sameAgencyResource())
       );
@@ -225,7 +288,13 @@ service cloud.firestore {
         )
       );
 
-      allow update, delete: if signedIn() && (
+      allow update: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+        || clientInviteSelfAcceptUpdate()
+      );
+
+      allow delete: if signedIn() && (
         isPlatformOwner()
         || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
       );

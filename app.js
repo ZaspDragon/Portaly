@@ -44,6 +44,17 @@
   const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite"]);
   const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
   const CLIENT_ROUTES = new Set(["approvals", "client-approval", "help", "billing-required"]);
+  const AGENCY_SCOPED_COLLECTIONS = new Set([
+    "clients",
+    "sites",
+    "workers",
+    "assignments",
+    "punches",
+    "approvals",
+    "timesheets",
+    "payrollRuns",
+    "auditLogs"
+  ]);
   const DEFAULT_APP_URL = `${window.location.origin}${window.location.pathname}`;
   const BILLING_CONFIG = window.PORTALY_BILLING_CONFIG || {};
 
@@ -199,6 +210,8 @@
       role: null,
       userId: null,
       agencyId: null,
+      agency: null,
+      agencyName: "",
       workerId: null,
       email: "",
       name: "Guest",
@@ -677,6 +690,8 @@
       role: null,
       userId: null,
       agencyId: null,
+      agency: null,
+      agencyName: "",
       workerId: null,
       email: "",
       name: "Guest",
@@ -689,8 +704,10 @@
 
   async function establishCloudSession(authUser) {
     console.log("[Portaly] Establishing cloud session");
+    console.log("[Portaly] auth uid", authUser?.uid || "");
     state.authUser = authUser;
     const profile = await loadCloudUserProfile(authUser.uid);
+    console.log("[Portaly] loaded user profile", profile);
 
     if (!profile) {
       const pendingInviteToken = parseInviteHash() || getStoredPendingInviteToken();
@@ -721,6 +738,23 @@
     state.session = buildSessionFromUser(profile, "cloud");
     state.session.email = authUser.email || profile.email || "";
     state.session.name = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || profile.email || "Cloud User";
+    state.session.userId = profile.id || authUser.uid;
+    state.session.role = profile.role || state.session.role;
+    state.session.agencyId = profile.agencyId || state.session.agencyId || null;
+
+    let agency = null;
+    if (state.session.agencyId && state.firebase.db) {
+      const agencySnapshot = await state.firebase.db.collection("agencies").doc(state.session.agencyId).get();
+      if (agencySnapshot.exists) {
+        agency = { id: agencySnapshot.id, ...agencySnapshot.data() };
+      }
+    }
+
+    state.session.agency = agency;
+    state.session.agencyName = agency?.name || "";
+    state.cache.agencies = agency ? [agency] : [];
+    console.log("[Portaly] loaded agency", agency);
+    console.log("[Portaly] final session state", state.session);
 
     if (state.pendingLink && state.pendingLink.type === "worker" && state.session.role === "worker" && state.session.workerId === state.pendingLink.workerId) {
       navigate("worker-punch", { replace: true });
@@ -745,6 +779,8 @@
       role: user.role,
       userId: user.id,
       agencyId: user.agencyId || null,
+      agency: null,
+      agencyName: "",
       workerId: user.workerId || null,
       email: user.email || "",
       name: [user.firstName, user.lastName].filter(Boolean).join(" ") || user.displayName || user.email || ROLE_META[user.role]?.label || "User",
@@ -779,6 +815,10 @@
     results.forEach(([collection, rows]) => {
       state.cache[collection] = rows;
     });
+
+    const cachedAgency = (state.cache.agencies || []).find(agency => agency.id === state.session.agencyId) || state.session.agency || null;
+    state.session.agency = cachedAgency;
+    state.session.agencyName = cachedAgency?.name || "";
 
     syncSubscriptionStatus();
     applyTheme();
@@ -831,7 +871,7 @@
 
     const db = state.firebase.db;
     const role = state.session.role;
-    const agencyId = state.session.agencyId;
+    const agencyId = state.session.agencyId || state.session.agency?.id;
     const assignedClientIds = state.session.assignedClientIds || [];
     const assignedSiteIds = state.session.assignedSiteIds || [];
 
@@ -925,13 +965,30 @@
     const now = new Date().toISOString();
     const recordId = id || createId(collection);
     const existing = findRecord(collection, recordId);
-    const payload = {
+    let payload = {
       ...existing,
       ...data,
       id: recordId,
       updatedAt: now,
       createdAt: existing?.createdAt || data.createdAt || now
     };
+
+    if (AGENCY_SCOPED_COLLECTIONS.has(collection)) {
+      payload = {
+        ...payload,
+        agencyId: payload.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || ""
+      };
+
+      if (!payload.agencyId) {
+        console.error("[Portaly] Missing agencyId for save", {
+          collection,
+          recordId,
+          session: state.session,
+          payload
+        });
+        throw new Error("Your agency workspace is not loaded. Please log out and log back in.");
+      }
+    }
 
     if (state.session.mode === "cloud") {
       await state.firebase.db.collection(collection).doc(recordId).set(payload, { merge: false });
@@ -2076,7 +2133,7 @@
     enforcePlanLimit("worker", willBeActive, existing);
 
     const worker = {
-      agencyId: values.agencyId || state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       firstName: values.firstName || "",
       lastName: values.lastName || "",
       phone: values.phone || "",
@@ -2112,8 +2169,16 @@
     requirePermission(canManageClients(), "Only agency owners, admins, or platform owners can edit clients.");
     const clientId = values.id || createId("client");
     const existing = findRecord("clients", clientId);
+    const now = new Date().toISOString();
+    const agencyId = values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || "";
+    console.log("[Portaly] saveClientForm state.session", state.session);
+    console.log("[Portaly] saveClientForm role", state.session.role);
+    console.log("[Portaly] saveClientForm agencyId", agencyId);
+    if (!agencyId) {
+      throw new Error("Your agency workspace is not loaded. Please log out and log back in.");
+    }
     const client = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId,
       name: values.name || "",
       contactName: values.contactName || "",
       contactEmail: values.contactEmail || "",
@@ -2122,8 +2187,12 @@
       billingContact: values.billingContact || "",
       notes: values.notes || "",
       internalNotes: values.internalNotes || "",
-      clientVisibleNotes: values.clientVisibleNotes || ""
+      clientVisibleNotes: values.clientVisibleNotes || "",
+      createdBy: existing?.createdBy || state.session.userId || "",
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
     };
+    console.log("[Portaly] saveClientForm payload", client);
     await saveData("clients", clientId, client);
     await appendAuditLog("client_saved", "clients", clientId, existing, client);
     state.modal = null;
@@ -2139,7 +2208,7 @@
     enforcePlanLimit("site", willBeActive, existing);
 
     const site = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       clientId: values.clientId || "",
       name: values.name || "",
       address: values.address || "",
@@ -2167,7 +2236,7 @@
     const assignmentId = values.id || createId("assignment");
     const existing = findRecord("assignments", assignmentId);
     const assignment = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       workerId: values.workerId || "",
       clientId: values.clientId || "",
       siteId: values.siteId || "",
@@ -2207,7 +2276,7 @@
     const punchTime = values.punchTime || formatTimeInput(existing?.timestamp || state.now);
     const timestamp = new Date(`${punchDate}T${punchTime}:00`).toISOString();
     const punch = {
-      agencyId: worker.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId: worker.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       workerId: worker.id,
       workerName: fullName(worker),
       assignmentId: assignment?.id || existing?.assignmentId || "",
@@ -2408,7 +2477,7 @@
     }
 
     const user = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       role: values.role || "agencyAdmin",
       firstName: values.firstName || "",
       lastName: values.lastName || "",
@@ -2465,7 +2534,7 @@
       await updateData("settings", settingsRecord.id, nextSettings);
     } else {
       await saveData("settings", createId("setting"), {
-        agencyId: agency?.id || state.session.agencyId,
+        agencyId: agency?.id || state.session.agencyId || state.session.agency?.id,
         ...nextSettings
       });
     }
@@ -2928,7 +2997,7 @@
     const assignment = getAssignmentsForWorker(worker.id)[0];
     const timestamp = new Date().toISOString();
     const punch = {
-      agencyId: worker.agencyId || state.session.agencyId,
+      agencyId: worker.agencyId || state.session.agencyId || state.session.agency?.id,
       workerId: worker.id,
       workerName: fullName(worker),
       assignmentId: assignment?.id || "",
@@ -4156,6 +4225,28 @@
     return normalized ? [normalized] : [];
   }
 
+  function getInviteConfig() {
+    return state.firebase.config.inviteConfig || {};
+  }
+
+  function canUseFrontendInviteLinks() {
+    return !!getInviteConfig().allowFrontendInviteLinks;
+  }
+
+  function getInviteExpiryDays() {
+    const configuredDays = Number(getInviteConfig().inviteExpiryDays || 14);
+    return Number.isFinite(configuredDays) && configuredDays > 0 ? configuredDays : 14;
+  }
+
+  function createClientInviteToken() {
+    if (window.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(24);
+      window.crypto.getRandomValues(bytes);
+      return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+    return `${createId("invite")}_${Math.random().toString(36).slice(2, 18)}`;
+  }
+
   function buildClientManagerInviteLink(token) {
     const baseUrl = String(state.firebase.config.appUrl || DEFAULT_APP_URL || window.location.href || "").replace(/#.*$/, "");
     return `${baseUrl}#/accept-invite/${encodeURIComponent(String(token || "").trim())}`;
@@ -4183,6 +4274,123 @@
       assignedClientNames: clientIds.map(id => getClientNameFromStore(id, state.demoStore.clients || [])),
       assignedSiteNames: siteIds.map(id => getSiteNameFromStore(id, state.demoStore.sites || [])),
       authAccountExists: false
+    };
+  }
+
+  function buildCloudInviteDetails(invite, source = "cloud-frontend") {
+    if (!invite) {
+      return null;
+    }
+    const clientIds = Array.isArray(invite.assignedClientIds) ? invite.assignedClientIds : [];
+    const siteIds = Array.isArray(invite.assignedSiteIds) ? invite.assignedSiteIds : [];
+    return {
+      ...invite,
+      source,
+      inviteLink: invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || invite.id),
+      agencyName: invite.agencyName || getAgencyName(invite.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
+      assignedClientNames: invite.assignedClientNames || clientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
+      assignedSiteNames: invite.assignedSiteNames || siteIds.map(id => getSiteName(id)).filter(name => name && name !== "Unknown Site"),
+      authAccountExists: invite.authAccountExists === true
+    };
+  }
+
+  async function createCloudClientManagerInvite(payload) {
+    if (!state.firebase.ready || !state.firebase.db) {
+      throw new Error("Cloud invite links are not available until Firebase is fully connected.");
+    }
+
+    const createdAt = new Date().toISOString();
+    const inviteToken = createClientInviteToken();
+    const invite = buildCloudInviteDetails({
+      id: inviteToken,
+      agencyId: payload.agencyId,
+      email: payload.email,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      phone: payload.phone || "",
+      role: "clientManager",
+      assignedClientIds: payload.assignedClientIds,
+      assignedSiteIds: payload.assignedSiteIds,
+      status: "pending",
+      inviteToken,
+      tokenExpiresAt: addDays(new Date(createdAt), getInviteExpiryDays()).toISOString(),
+      acceptedAt: "",
+      acceptedBy: "",
+      createdBy: state.session.userId,
+      createdAt,
+      updatedAt: createdAt,
+      agencyName: getAgencyName(payload.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
+      assignedClientNames: payload.assignedClientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
+      assignedSiteNames: payload.assignedSiteIds.map(id => getSiteName(id)).filter(name => name && name !== "Unknown Site"),
+      authAccountExists: false,
+      inviteLink: buildClientManagerInviteLink(inviteToken)
+    }, "cloud-frontend");
+
+    await saveData("clientInvites", inviteToken, invite);
+    return invite;
+  }
+
+  async function loadFrontendCloudInvite(token) {
+    if (!state.firebase.ready || !state.firebase.db) {
+      throw new Error("Cloud invite links are not available until Firebase is fully connected.");
+    }
+    const snapshot = await state.firebase.db.collection("clientInvites").doc(token).get();
+    if (!snapshot.exists) {
+      throw new Error("This Portaly invite could not be found.");
+    }
+    return buildCloudInviteDetails({ id: snapshot.id, ...snapshot.data() }, "cloud-frontend");
+  }
+
+  async function acceptFrontendCloudInvite(invite, authUser) {
+    if (!state.firebase.ready || !state.firebase.db) {
+      throw new Error("Cloud invite acceptance is not available until Firebase is fully connected.");
+    }
+
+    const existingProfile = await loadCloudUserProfile(authUser.uid);
+    if (existingProfile?.agencyId && existingProfile.agencyId !== invite.agencyId) {
+      throw new Error("This email is already connected to a different Portaly agency.");
+    }
+    if (existingProfile?.role && existingProfile.role !== "clientManager") {
+      throw new Error("This Portaly login already belongs to a different role.");
+    }
+
+    const acceptedAt = new Date().toISOString();
+    const mergedClientIds = [...new Set([...(existingProfile?.assignedClientIds || []), ...normalizeStringArray(invite.assignedClientIds)])];
+    const mergedSiteIds = [...new Set([...(existingProfile?.assignedSiteIds || []), ...normalizeStringArray(invite.assignedSiteIds)])];
+    const userProfile = {
+      id: authUser.uid,
+      agencyId: invite.agencyId,
+      role: "clientManager",
+      firstName: invite.firstName || existingProfile?.firstName || "",
+      lastName: invite.lastName || existingProfile?.lastName || "",
+      email: invite.email,
+      phone: invite.phone || existingProfile?.phone || "",
+      status: "active",
+      assignedClientIds: mergedClientIds,
+      assignedSiteIds: mergedSiteIds,
+      workerId: "",
+      inviteToken: invite.inviteToken || invite.id,
+      createdAt: existingProfile?.createdAt || acceptedAt,
+      updatedAt: acceptedAt
+    };
+
+    await state.firebase.db.collection("users").doc(authUser.uid).set(userProfile, { merge: false });
+    const invitePatch = {
+      status: "accepted",
+      acceptedAt,
+      acceptedBy: authUser.uid,
+      updatedAt: acceptedAt,
+      authAccountExists: true
+    };
+    await state.firebase.db.collection("clientInvites").doc(invite.id || invite.inviteToken).set(invitePatch, { merge: true });
+    const updatedInvite = {
+      ...invite,
+      ...invitePatch
+    };
+
+    return {
+      invite: buildCloudInviteDetails(updatedInvite, "cloud-frontend"),
+      user: userProfile
     };
   }
 
@@ -4214,21 +4422,32 @@
       renderApp();
     }
 
-    try {
-      const localInvite = buildLocalClientInviteDetails(findLocalClientInvite(token));
-      if (localInvite) {
-        state.inviteFlow = {
-          token,
+      try {
+        const localInvite = buildLocalClientInviteDetails(findLocalClientInvite(token));
+        if (localInvite) {
+          state.inviteFlow = {
+            token,
           loading: false,
           details: localInvite,
           error: ""
-        };
-        return localInvite;
-      }
+          };
+          return localInvite;
+        }
 
-      const result = await callSecureFunction("verifyClientManagerInvite", {
-        token
-      }, {
+        if (!hasSecureBackend() && canUseFrontendInviteLinks()) {
+          const details = await loadFrontendCloudInvite(token);
+          state.inviteFlow = {
+            token,
+            loading: false,
+            details,
+            error: ""
+          };
+          return details;
+        }
+
+        const result = await callSecureFunction("verifyClientManagerInvite", {
+          token
+        }, {
         requireAuth: false,
         fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can verify them.",
         errorMessage: "We could not load this Portaly invite."
@@ -4463,21 +4682,26 @@
       agencyId
     };
 
-    let invite;
-    if (state.session.mode === "cloud") {
-      const result = await callSecureFunction("createClientManagerInvite", payload, {
-        requireAuth: true,
-        authMessage: "Sign in to your cloud agency before inviting client managers.",
-        fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can send them.",
-        errorMessage: "Portaly could not create this client manager invite."
-      });
-      if (!result?.invite) {
-        return;
+      let invite;
+      if (state.session.mode === "cloud") {
+        if (hasSecureBackend()) {
+          const result = await callSecureFunction("createClientManagerInvite", payload, {
+            requireAuth: true,
+            authMessage: "Sign in to your cloud agency before inviting client managers.",
+            errorMessage: "Portaly could not create this client manager invite."
+          });
+          if (!result?.invite) {
+            return;
+          }
+          invite = result.invite;
+        } else if (canUseFrontendInviteLinks()) {
+          invite = await createCloudClientManagerInvite(payload);
+        } else {
+          throw new Error("Client manager invites need the secure backend before Cloud Mode can send or verify them.");
+        }
+      } else {
+        invite = await createDemoClientManagerInvite(payload);
       }
-      invite = result.invite;
-    } else {
-      invite = await createDemoClientManagerInvite(payload);
-    }
 
     await appendAuditLog("client_manager_invited", "clientInvites", invite.id, null, invite, {
       actorId: state.session.userId,
@@ -4606,14 +4830,19 @@
       throw new Error("Sign in with the invited email before continuing.");
     }
 
-    const result = await callSecureFunction("acceptClientManagerInvite", {
-      token: invite.inviteToken || state.inviteFlow.token
-    }, {
-      requireAuth: true,
-      authMessage: "Sign in with the invited email before continuing.",
-      fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can finish setup.",
-      errorMessage: "Portaly could not finish accepting this invite."
-    });
+    const result = hasSecureBackend()
+      ? await callSecureFunction("acceptClientManagerInvite", {
+        token: invite.inviteToken || state.inviteFlow.token
+      }, {
+        requireAuth: true,
+        authMessage: "Sign in with the invited email before continuing.",
+        errorMessage: "Portaly could not finish accepting this invite."
+      })
+      : canUseFrontendInviteLinks()
+        ? await acceptFrontendCloudInvite(invite, authUser)
+        : (() => {
+          throw new Error("Client manager invites need the secure backend before Cloud Mode can finish setup.");
+        })();
 
     state.authUser = authUser;
     clearPendingInviteToken();
@@ -8830,7 +9059,7 @@
       return deepClone(source);
     }
 
-    const agencyId = state.session.agencyId;
+    const agencyId = state.session.agencyId || state.session.agency?.id;
     const filterAgency = rows => (rows || []).filter(row => !row.agencyId || row.agencyId === agencyId);
     const scoped = {
       agencies: (source.agencies || []).filter(agency => agency.id === agencyId),
@@ -8891,12 +9120,18 @@
 
   function getCurrentAgency() {
     const scoped = getScopedData();
-    return scoped.agencies[0] || state.demoStore.agencies.find(agency => agency.id === state.session.agencyId) || null;
+    const sessionAgencyId = state.session.agencyId || state.session.agency?.id;
+    return scoped.agencies.find(agency => agency.id === sessionAgencyId)
+      || state.session.agency
+      || state.cache.agencies.find(agency => agency.id === sessionAgencyId)
+      || state.demoStore.agencies.find(agency => agency.id === sessionAgencyId)
+      || null;
   }
 
   function getCurrentSubscription() {
     const scoped = getScopedData();
-    return (scoped.subscriptions || []).find(subscription => subscription.agencyId === state.session.agencyId) || null;
+    const sessionAgencyId = state.session.agencyId || state.session.agency?.id;
+    return (scoped.subscriptions || []).find(subscription => subscription.agencyId === sessionAgencyId) || null;
   }
 
   function getCurrentSettings() {

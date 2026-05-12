@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const admin = require("firebase-admin");
 const { onRequest } = require("firebase-functions/v2/https");
 const { defineSecret, defineString } = require("firebase-functions/params");
@@ -123,12 +124,26 @@ async function authenticateRequest(req) {
   };
 }
 
+async function authenticateUserOnly(req) {
+  const authHeader = req.get("authorization") || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    throw createHttpError(401, "Missing Firebase ID token.");
+  }
+
+  const idToken = authHeader.slice("Bearer ".length);
+  return admin.auth().verifyIdToken(idToken);
+}
+
 function canManageBilling(profile) {
   return ["agencyOwner", "platformOwner"].includes(profile.role);
 }
 
 function canViewBilling(profile) {
   return canManageBilling(profile) || profile.role === "agencyAdmin";
+}
+
+function canInviteClientManagers(profile) {
+  return ["agencyOwner", "agencyAdmin"].includes(profile.role);
 }
 
 function resolveAgencyId(profile, requestedAgencyId) {
@@ -141,6 +156,79 @@ function resolveAgencyId(profile, requestedAgencyId) {
   }
 
   return profile.agencyId;
+}
+
+function buildHashUrl(path) {
+  const base = String(appUrl.value() || "https://zaspdragon.github.io/Portaly/").replace(/#.*$/, "");
+  return `${base}#/${String(path || "").replace(/^#?\/?/, "")}`;
+}
+
+function createInviteToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+async function getInviteByToken(inviteToken) {
+  const querySnapshot = await admin.firestore()
+    .collection("clientInvites")
+    .where("inviteToken", "==", inviteToken)
+    .limit(1)
+    .get();
+
+  if (querySnapshot.empty) {
+    return null;
+  }
+
+  const docSnap = querySnapshot.docs[0];
+  return {
+    ref: docSnap.ref,
+    invite: {
+      id: docSnap.id,
+      ...docSnap.data()
+    }
+  };
+}
+
+async function resolveClientInviteScope(invite) {
+  const agencySnap = invite.agencyId
+    ? await admin.firestore().collection("agencies").doc(invite.agencyId).get()
+    : null;
+  const clientIds = Array.isArray(invite.assignedClientIds) ? invite.assignedClientIds : [];
+  const siteIds = Array.isArray(invite.assignedSiteIds) ? invite.assignedSiteIds : [];
+  const assignedClientNames = [];
+  const assignedSiteNames = [];
+
+  await Promise.all(clientIds.map(async clientId => {
+    const snap = await admin.firestore().collection("clients").doc(clientId).get();
+    if (snap.exists) {
+      assignedClientNames.push(snap.data().name || clientId);
+    }
+  }));
+
+  await Promise.all(siteIds.map(async siteId => {
+    const snap = await admin.firestore().collection("sites").doc(siteId).get();
+    if (snap.exists) {
+      assignedSiteNames.push(snap.data().name || siteId);
+    }
+  }));
+
+  let authAccountExists = false;
+  try {
+    await admin.auth().getUserByEmail(invite.email);
+    authAccountExists = true;
+  } catch (error) {
+    if (error.code !== "auth/user-not-found") {
+      throw error;
+    }
+  }
+
+  return {
+    ...invite,
+    agencyName: agencySnap?.exists ? (agencySnap.data().name || "Portaly Agency") : "Portaly Agency",
+    assignedClientNames,
+    assignedSiteNames,
+    authAccountExists,
+    inviteLink: invite.inviteLink || buildHashUrl(`accept-invite/${invite.inviteToken}`)
+  };
 }
 
 async function getAgencyRefAndData(agencyId) {
@@ -272,6 +360,216 @@ async function syncSquareSubscriptionRecord(agencyId, squareSubscriptionId, requ
 function responseJson(res, status, body) {
   res.status(status).json(body);
 }
+
+exports.createClientManagerInvite = onRequest(
+  {
+    cors: true
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
+      if (!canInviteClientManagers(auth.profile)) {
+        throw createHttpError(403, "Only agency leadership can invite client managers.");
+      }
+
+      const agencyId = resolveAgencyId(auth.profile, req.body.agencyId);
+      const email = String(req.body.email || "").trim().toLowerCase();
+      const firstName = String(req.body.firstName || "").trim();
+      const lastName = String(req.body.lastName || "").trim();
+      const phone = String(req.body.phone || "").trim();
+      const assignedClientIds = Array.isArray(req.body.assignedClientIds) ? req.body.assignedClientIds.filter(Boolean) : [];
+      const assignedSiteIds = Array.isArray(req.body.assignedSiteIds) ? req.body.assignedSiteIds.filter(Boolean) : [];
+
+      if (!email || !firstName || !lastName) {
+        throw createHttpError(400, "First name, last name, and email are required.");
+      }
+      if (!assignedClientIds.length && !assignedSiteIds.length) {
+        throw createHttpError(400, "Assign at least one client or site before inviting a client manager.");
+      }
+
+      const inviteCollection = admin.firestore().collection("clientInvites");
+      const existingInviteQuery = await inviteCollection
+        .where("email", "==", email)
+        .limit(10)
+        .get();
+      const existingPendingInvite = existingInviteQuery.docs
+        .map(docSnap => ({ ref: docSnap.ref, data: docSnap.data() }))
+        .find(item => item.data.agencyId === agencyId && item.data.status === "pending");
+
+      const inviteRef = existingPendingInvite ? existingPendingInvite.ref : inviteCollection.doc();
+      const createdAt = existingPendingInvite
+        ? (existingPendingInvite.data.createdAt || nowIso())
+        : nowIso();
+      const inviteToken = createInviteToken();
+      const tokenExpiresAt = new Date(Date.now() + (14 * 24 * 60 * 60 * 1000)).toISOString();
+      const inviteLink = buildHashUrl(`accept-invite/${inviteToken}`);
+
+      const inviteRecord = {
+        id: inviteRef.id,
+        agencyId,
+        email,
+        firstName,
+        lastName,
+        phone,
+        role: "clientManager",
+        assignedClientIds,
+        assignedSiteIds,
+        status: "pending",
+        inviteToken,
+        tokenExpiresAt,
+        acceptedAt: "",
+        createdAt,
+        updatedAt: nowIso(),
+        createdBy: auth.uid,
+        inviteLink
+      };
+
+      await inviteRef.set(inviteRecord, { merge: true });
+
+      responseJson(res, 200, {
+        ok: true,
+        invite: await resolveClientInviteScope(inviteRecord)
+      });
+    } catch (error) {
+      logger.error("createClientManagerInvite failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to create the client manager invite."
+      });
+    }
+  }
+);
+
+exports.verifyClientManagerInvite = onRequest(
+  {
+    cors: true
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const inviteToken = String(req.body.token || "").trim();
+      if (!inviteToken) {
+        throw createHttpError(400, "Invite token is required.");
+      }
+
+      const result = await getInviteByToken(inviteToken);
+      if (!result) {
+        throw createHttpError(404, "This Portaly invite could not be found.");
+      }
+
+      responseJson(res, 200, {
+        ok: true,
+        invite: await resolveClientInviteScope(result.invite)
+      });
+    } catch (error) {
+      logger.error("verifyClientManagerInvite failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to verify the client manager invite."
+      });
+    }
+  }
+);
+
+exports.acceptClientManagerInvite = onRequest(
+  {
+    cors: true
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const decoded = await authenticateUserOnly(req);
+      const inviteToken = String(req.body.token || "").trim();
+      if (!inviteToken) {
+        throw createHttpError(400, "Invite token is required.");
+      }
+
+      const result = await getInviteByToken(inviteToken);
+      if (!result) {
+        throw createHttpError(404, "This Portaly invite could not be found.");
+      }
+
+      const invite = result.invite;
+      const email = String(decoded.email || "").trim().toLowerCase();
+      if (!email || email !== String(invite.email || "").trim().toLowerCase()) {
+        throw createHttpError(403, "Sign in with the invited email before continuing.");
+      }
+      if (invite.status === "accepted" && invite.acceptedBy && invite.acceptedBy !== decoded.uid) {
+        throw createHttpError(403, "This invite has already been accepted by another account.");
+      }
+      if (invite.tokenExpiresAt && new Date(invite.tokenExpiresAt) < new Date()) {
+        throw createHttpError(410, "This invite has expired. Ask the agency to send a new invite.");
+      }
+
+      const userRef = admin.firestore().collection("users").doc(decoded.uid);
+      const userSnap = await userRef.get();
+      if (userSnap.exists) {
+        const existing = userSnap.data();
+        if (existing.agencyId && existing.agencyId !== invite.agencyId) {
+          throw createHttpError(409, "This email is already connected to a different Portaly agency.");
+        }
+        if (existing.role && existing.role !== "clientManager") {
+          throw createHttpError(409, "This Portaly login already belongs to a different role.");
+        }
+      }
+
+      const createdAt = userSnap.exists ? (userSnap.data().createdAt || nowIso()) : nowIso();
+      const mergedClientIds = [...new Set([...(userSnap.data()?.assignedClientIds || []), ...(invite.assignedClientIds || [])])];
+      const mergedSiteIds = [...new Set([...(userSnap.data()?.assignedSiteIds || []), ...(invite.assignedSiteIds || [])])];
+      const userProfile = {
+        id: decoded.uid,
+        agencyId: invite.agencyId,
+        role: "clientManager",
+        firstName: invite.firstName || userSnap.data()?.firstName || "",
+        lastName: invite.lastName || userSnap.data()?.lastName || "",
+        email: invite.email,
+        phone: invite.phone || userSnap.data()?.phone || "",
+        status: "active",
+        assignedClientIds: mergedClientIds,
+        assignedSiteIds: mergedSiteIds,
+        workerId: "",
+        createdAt,
+        updatedAt: nowIso()
+      };
+
+      await userRef.set(userProfile, { merge: true });
+      await result.ref.set({
+        status: "accepted",
+        acceptedAt: nowIso(),
+        acceptedBy: decoded.uid,
+        updatedAt: nowIso()
+      }, { merge: true });
+
+      responseJson(res, 200, {
+        ok: true,
+        invite: await resolveClientInviteScope({
+          ...invite,
+          status: "accepted",
+          acceptedAt: nowIso(),
+          acceptedBy: decoded.uid,
+          updatedAt: nowIso()
+        }),
+        user: userProfile
+      });
+    } catch (error) {
+      logger.error("acceptClientManagerInvite failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to accept the client manager invite."
+      });
+    }
+  }
+);
 
 exports.createSquareSubscriptionLink = onRequest(
   {

@@ -1159,6 +1159,20 @@ body.nav-open .mobile-backdrop {
   margin-top: 4px;
 }
 
+.checkbox-row.compact {
+  align-items: center;
+  font-size: 0.9rem;
+  padding: 8px 10px;
+  border: 1px solid rgba(207, 222, 237, 0.9);
+  border-radius: var(--radius-md);
+  background: rgba(247, 251, 255, 0.9);
+}
+
+.checkbox-stack {
+  display: grid;
+  gap: 10px;
+}
+
 .page-actions {
   display: flex;
   flex-wrap: wrap;

@@ -44,6 +44,17 @@
   const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite"]);
   const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
   const CLIENT_ROUTES = new Set(["approvals", "client-approval", "help", "billing-required"]);
+  const AGENCY_SCOPED_COLLECTIONS = new Set([
+    "clients",
+    "sites",
+    "workers",
+    "assignments",
+    "punches",
+    "approvals",
+    "timesheets",
+    "payrollRuns",
+    "auditLogs"
+  ]);
   const DEFAULT_APP_URL = `${window.location.origin}${window.location.pathname}`;
   const BILLING_CONFIG = window.PORTALY_BILLING_CONFIG || {};
 
@@ -199,6 +210,8 @@
       role: null,
       userId: null,
       agencyId: null,
+      agency: null,
+      agencyName: "",
       workerId: null,
       email: "",
       name: "Guest",
@@ -677,6 +690,8 @@
       role: null,
       userId: null,
       agencyId: null,
+      agency: null,
+      agencyName: "",
       workerId: null,
       email: "",
       name: "Guest",
@@ -689,8 +704,10 @@
 
   async function establishCloudSession(authUser) {
     console.log("[Portaly] Establishing cloud session");
+    console.log("[Portaly] auth uid", authUser?.uid || "");
     state.authUser = authUser;
     const profile = await loadCloudUserProfile(authUser.uid);
+    console.log("[Portaly] loaded user profile", profile);
 
     if (!profile) {
       const pendingInviteToken = parseInviteHash() || getStoredPendingInviteToken();
@@ -721,6 +738,23 @@
     state.session = buildSessionFromUser(profile, "cloud");
     state.session.email = authUser.email || profile.email || "";
     state.session.name = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || profile.email || "Cloud User";
+    state.session.userId = profile.id || authUser.uid;
+    state.session.role = profile.role || state.session.role;
+    state.session.agencyId = profile.agencyId || state.session.agencyId || null;
+
+    let agency = null;
+    if (state.session.agencyId && state.firebase.db) {
+      const agencySnapshot = await state.firebase.db.collection("agencies").doc(state.session.agencyId).get();
+      if (agencySnapshot.exists) {
+        agency = { id: agencySnapshot.id, ...agencySnapshot.data() };
+      }
+    }
+
+    state.session.agency = agency;
+    state.session.agencyName = agency?.name || "";
+    state.cache.agencies = agency ? [agency] : [];
+    console.log("[Portaly] loaded agency", agency);
+    console.log("[Portaly] final session state", state.session);
 
     if (state.pendingLink && state.pendingLink.type === "worker" && state.session.role === "worker" && state.session.workerId === state.pendingLink.workerId) {
       navigate("worker-punch", { replace: true });
@@ -745,6 +779,8 @@
       role: user.role,
       userId: user.id,
       agencyId: user.agencyId || null,
+      agency: null,
+      agencyName: "",
       workerId: user.workerId || null,
       email: user.email || "",
       name: [user.firstName, user.lastName].filter(Boolean).join(" ") || user.displayName || user.email || ROLE_META[user.role]?.label || "User",
@@ -779,6 +815,10 @@
     results.forEach(([collection, rows]) => {
       state.cache[collection] = rows;
     });
+
+    const cachedAgency = (state.cache.agencies || []).find(agency => agency.id === state.session.agencyId) || state.session.agency || null;
+    state.session.agency = cachedAgency;
+    state.session.agencyName = cachedAgency?.name || "";
 
     syncSubscriptionStatus();
     applyTheme();
@@ -831,7 +871,7 @@
 
     const db = state.firebase.db;
     const role = state.session.role;
-    const agencyId = state.session.agencyId;
+    const agencyId = state.session.agencyId || state.session.agency?.id;
     const assignedClientIds = state.session.assignedClientIds || [];
     const assignedSiteIds = state.session.assignedSiteIds || [];
 
@@ -925,13 +965,30 @@
     const now = new Date().toISOString();
     const recordId = id || createId(collection);
     const existing = findRecord(collection, recordId);
-    const payload = {
+    let payload = {
       ...existing,
       ...data,
       id: recordId,
       updatedAt: now,
       createdAt: existing?.createdAt || data.createdAt || now
     };
+
+    if (AGENCY_SCOPED_COLLECTIONS.has(collection)) {
+      payload = {
+        ...payload,
+        agencyId: payload.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || ""
+      };
+
+      if (!payload.agencyId) {
+        console.error("[Portaly] Missing agencyId for save", {
+          collection,
+          recordId,
+          session: state.session,
+          payload
+        });
+        throw new Error("Your agency workspace is not loaded. Please log out and log back in.");
+      }
+    }
 
     if (state.session.mode === "cloud") {
       await state.firebase.db.collection(collection).doc(recordId).set(payload, { merge: false });
@@ -2076,7 +2133,7 @@
     enforcePlanLimit("worker", willBeActive, existing);
 
     const worker = {
-      agencyId: values.agencyId || state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       firstName: values.firstName || "",
       lastName: values.lastName || "",
       phone: values.phone || "",
@@ -2112,8 +2169,16 @@
     requirePermission(canManageClients(), "Only agency owners, admins, or platform owners can edit clients.");
     const clientId = values.id || createId("client");
     const existing = findRecord("clients", clientId);
+    const now = new Date().toISOString();
+    const agencyId = values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || "";
+    console.log("[Portaly] saveClientForm state.session", state.session);
+    console.log("[Portaly] saveClientForm role", state.session.role);
+    console.log("[Portaly] saveClientForm agencyId", agencyId);
+    if (!agencyId) {
+      throw new Error("Your agency workspace is not loaded. Please log out and log back in.");
+    }
     const client = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId,
       name: values.name || "",
       contactName: values.contactName || "",
       contactEmail: values.contactEmail || "",
@@ -2122,8 +2187,12 @@
       billingContact: values.billingContact || "",
       notes: values.notes || "",
       internalNotes: values.internalNotes || "",
-      clientVisibleNotes: values.clientVisibleNotes || ""
+      clientVisibleNotes: values.clientVisibleNotes || "",
+      createdBy: existing?.createdBy || state.session.userId || "",
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
     };
+    console.log("[Portaly] saveClientForm payload", client);
     await saveData("clients", clientId, client);
     await appendAuditLog("client_saved", "clients", clientId, existing, client);
     state.modal = null;
@@ -2139,7 +2208,7 @@
     enforcePlanLimit("site", willBeActive, existing);
 
     const site = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       clientId: values.clientId || "",
       name: values.name || "",
       address: values.address || "",
@@ -2167,7 +2236,7 @@
     const assignmentId = values.id || createId("assignment");
     const existing = findRecord("assignments", assignmentId);
     const assignment = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       workerId: values.workerId || "",
       clientId: values.clientId || "",
       siteId: values.siteId || "",
@@ -2207,7 +2276,7 @@
     const punchTime = values.punchTime || formatTimeInput(existing?.timestamp || state.now);
     const timestamp = new Date(`${punchDate}T${punchTime}:00`).toISOString();
     const punch = {
-      agencyId: worker.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId: worker.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       workerId: worker.id,
       workerName: fullName(worker),
       assignmentId: assignment?.id || existing?.assignmentId || "",
@@ -2408,7 +2477,7 @@
     }
 
     const user = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId,
+      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       role: values.role || "agencyAdmin",
       firstName: values.firstName || "",
       lastName: values.lastName || "",
@@ -2465,7 +2534,7 @@
       await updateData("settings", settingsRecord.id, nextSettings);
     } else {
       await saveData("settings", createId("setting"), {
-        agencyId: agency?.id || state.session.agencyId,
+        agencyId: agency?.id || state.session.agencyId || state.session.agency?.id,
         ...nextSettings
       });
     }
@@ -2928,7 +2997,7 @@
     const assignment = getAssignmentsForWorker(worker.id)[0];
     const timestamp = new Date().toISOString();
     const punch = {
-      agencyId: worker.agencyId || state.session.agencyId,
+      agencyId: worker.agencyId || state.session.agencyId || state.session.agency?.id,
       workerId: worker.id,
       workerName: fullName(worker),
       assignmentId: assignment?.id || "",
@@ -8830,7 +8899,7 @@
       return deepClone(source);
     }
 
-    const agencyId = state.session.agencyId;
+    const agencyId = state.session.agencyId || state.session.agency?.id;
     const filterAgency = rows => (rows || []).filter(row => !row.agencyId || row.agencyId === agencyId);
     const scoped = {
       agencies: (source.agencies || []).filter(agency => agency.id === agencyId),
@@ -8891,12 +8960,18 @@
 
   function getCurrentAgency() {
     const scoped = getScopedData();
-    return scoped.agencies[0] || state.demoStore.agencies.find(agency => agency.id === state.session.agencyId) || null;
+    const sessionAgencyId = state.session.agencyId || state.session.agency?.id;
+    return scoped.agencies.find(agency => agency.id === sessionAgencyId)
+      || state.session.agency
+      || state.cache.agencies.find(agency => agency.id === sessionAgencyId)
+      || state.demoStore.agencies.find(agency => agency.id === sessionAgencyId)
+      || null;
   }
 
   function getCurrentSubscription() {
     const scoped = getScopedData();
-    return (scoped.subscriptions || []).find(subscription => subscription.agencyId === state.session.agencyId) || null;
+    const sessionAgencyId = state.session.agencyId || state.session.agency?.id;
+    return (scoped.subscriptions || []).find(subscription => subscription.agencyId === sessionAgencyId) || null;
   }
 
   function getCurrentSettings() {

@@ -40,6 +40,11 @@ const squarePaymentLinkGrowth = defineString("SQUARE_PAYMENT_LINK_GROWTH", {
 const squarePaymentLinkEnterprise = defineString("SQUARE_PAYMENT_LINK_ENTERPRISE", {
   default: "https://square.link/u/96br6x5W"
 });
+const inviteCorsOrigins = [
+  "https://zaspdragon.github.io",
+  "http://localhost:5000",
+  "http://localhost:5173"
+];
 
 function createHttpError(status, message) {
   const error = new Error(message);
@@ -545,7 +550,7 @@ function responseJson(res, status, body) {
 
 exports.createClientManagerInvite = onRequest(
   {
-    cors: true
+    cors: inviteCorsOrigins
   },
   async (req, res) => {
     try {
@@ -629,7 +634,7 @@ exports.createClientManagerInvite = onRequest(
 
 exports.sendClientManagerInviteEmail = onRequest(
   {
-    cors: true,
+    cors: inviteCorsOrigins,
     secrets: [resendApiKey]
   },
   async (req, res) => {
@@ -720,7 +725,7 @@ exports.sendClientManagerInviteEmail = onRequest(
 
 exports.verifyClientManagerInvite = onRequest(
   {
-    cors: true
+    cors: inviteCorsOrigins
   },
   async (req, res) => {
     try {
@@ -758,7 +763,7 @@ exports.verifyClientManagerInvite = onRequest(
 
 exports.acceptClientManagerInvite = onRequest(
   {
-    cors: true
+    cors: inviteCorsOrigins
   },
   async (req, res) => {
     try {

@@ -268,7 +268,7 @@ service cloud.firestore {
         resource.data.id == inviteId
         && resource.data.inviteToken == inviteId
         && resource.data.role == 'clientManager'
-        && resource.data.status != 'revoked'
+        && resource.data.status == 'pending'
       ) || (signedIn() && (
         isPlatformOwner()
         || (isAgencyStaff() && sameAgencyResource())
@@ -290,7 +290,7 @@ service cloud.firestore {
 
       allow update: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+        || (isAgencyStaff() && sameAgencyResource())
         || clientInviteSelfAcceptUpdate()
       );
 

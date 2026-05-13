@@ -4388,6 +4388,23 @@
     };
   }
 
+  function getPublicInviteErrorMessage(error) {
+    const code = String(error?.code || "").trim().toLowerCase();
+    const message = String(error?.message || "").trim().toLowerCase();
+    if (
+      ["permission-denied", "unauthenticated", "unavailable", "failed-precondition", "not-found"].includes(code)
+      || message.includes("failed to fetch")
+      || message.includes("permission")
+      || message.includes("insufficient permissions")
+      || message.includes("could not be found")
+      || message.includes("no longer available")
+      || message.includes("network")
+    ) {
+      return "This invite link is invalid, expired, or no longer available.";
+    }
+    return "This invite link is invalid, expired, or no longer available.";
+  }
+
   async function createCloudClientManagerInvite(payload) {
     if (!state.firebase.ready || !state.firebase.db) {
       throw new Error("Cloud invite links are not available until Firebase is fully connected.");
@@ -4431,11 +4448,30 @@
     if (!state.firebase.ready || !state.firebase.db) {
       throw new Error("Cloud invite links are not available until Firebase is fully connected.");
     }
-    const snapshot = await state.firebase.db.collection("clientInvites").doc(token).get();
-    if (!snapshot.exists) {
-      throw new Error("This Portaly invite could not be found.");
+
+    console.log("[Portaly] loadFrontendCloudInvite token", token);
+    console.log("[Portaly] loadFrontendCloudInvite firebaseReady", state.firebase.ready);
+
+    try {
+      const snapshot = await state.firebase.db.collection("clientInvites").doc(token).get();
+      if (!snapshot.exists) {
+        throw new Error("This Portaly invite could not be found.");
+      }
+      const invite = buildCloudInviteDetails({ id: snapshot.id, ...snapshot.data() }, "cloud-frontend");
+      if ((invite?.status || "pending") !== "pending") {
+        throw new Error("This invite link is invalid, expired, or no longer available.");
+      }
+      return invite;
+    } catch (error) {
+      console.error("[Portaly] loadFrontendCloudInvite failed", {
+        token,
+        firebaseReady: state.firebase.ready,
+        errorCode: error?.code || "",
+        errorMessage: error?.message || "",
+        error
+      });
+      throw new Error(getPublicInviteErrorMessage(error));
     }
-    return buildCloudInviteDetails({ id: snapshot.id, ...snapshot.data() }, "cloud-frontend");
   }
 
   async function acceptFrontendCloudInvite(invite, authUser) {
@@ -4519,19 +4555,21 @@
       renderApp();
     }
 
-      try {
-        const localInvite = buildLocalClientInviteDetails(findLocalClientInvite(token));
-        if (localInvite) {
-          state.inviteFlow = {
-            token,
+    try {
+      const localInvite = buildLocalClientInviteDetails(findLocalClientInvite(token));
+      if (localInvite) {
+        state.inviteFlow = {
+          token,
           loading: false,
           details: localInvite,
           error: ""
-          };
-          return localInvite;
-        }
+        };
+        return localInvite;
+      }
 
-        if (!hasSecureBackend() && canUseFrontendInviteLinks()) {
+      let frontendInviteError = null;
+      if (canUseFrontendInviteLinks()) {
+        try {
           const details = await loadFrontendCloudInvite(token);
           state.inviteFlow = {
             token,
@@ -4540,19 +4578,33 @@
             error: ""
           };
           return details;
+        } catch (error) {
+          frontendInviteError = error;
+          console.error("[Portaly] loadInviteFlowState frontendInviteError", {
+            token,
+            firebaseReady: state.firebase.ready,
+            errorCode: error?.code || "",
+            errorMessage: error?.message || "",
+            error
+          });
+          if (!hasSecureBackend()) {
+            throw error;
+          }
         }
+      }
 
-        const result = await callSecureFunction("verifyClientManagerInvite", {
-          token
-        }, {
+      const result = await callSecureFunction("verifyClientManagerInvite", {
+        token
+      }, {
         requireAuth: false,
         fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can verify them.",
-        errorMessage: "We could not load this Portaly invite."
+        errorMessage: "This invite link is invalid, expired, or no longer available.",
+        networkErrorMessage: "This invite link is invalid, expired, or no longer available."
       });
 
       const details = result?.invite || null;
       if (!details) {
-        throw new Error("This Portaly invite could not be found.");
+        throw new Error("This invite link is invalid, expired, or no longer available.");
       }
 
       state.inviteFlow = {
@@ -4563,11 +4615,18 @@
       };
       return details;
     } catch (error) {
+      console.error("[Portaly] loadInviteFlowState failed", {
+        token,
+        firebaseReady: state.firebase.ready,
+        errorCode: error?.code || "",
+        errorMessage: error?.message || "",
+        error
+      });
       state.inviteFlow = {
         token,
         loading: false,
         details: null,
-        error: error.message || "We could not load this Portaly invite."
+        error: getPublicInviteErrorMessage(error)
       };
       console.error("[Portaly] loadInviteFlowState failed", {
         token,
@@ -5058,19 +5117,54 @@
       throw new Error("Sign in with the invited email before continuing.");
     }
 
-    const result = hasSecureBackend()
-      ? await callSecureFunction("acceptClientManagerInvite", {
-        token: invite.inviteToken || state.inviteFlow.token
-      }, {
-        requireAuth: true,
-        authMessage: "Sign in with the invited email before continuing.",
-        errorMessage: "Portaly could not finish accepting this invite."
-      })
-      : canUseFrontendInviteLinks()
-        ? await acceptFrontendCloudInvite(invite, authUser)
-        : (() => {
-          throw new Error("Client manager invites need the secure backend before Cloud Mode can finish setup.");
-        })();
+    const preferFrontendInviteAcceptance = canUseFrontendInviteLinks() && invite.source === "cloud-frontend";
+    let result;
+    if (preferFrontendInviteAcceptance) {
+      try {
+        result = await acceptFrontendCloudInvite(invite, authUser);
+      } catch (error) {
+        console.error("[Portaly] acceptCurrentInvite frontendAcceptFailed", {
+          token: invite.inviteToken || state.inviteFlow.token,
+          errorCode: error?.code || "",
+          errorMessage: error?.message || "",
+          error
+        });
+        if (!hasSecureBackend()) {
+          throw error;
+        }
+      }
+    }
+    if (!result && hasSecureBackend()) {
+      try {
+        result = await callSecureFunction("acceptClientManagerInvite", {
+          token: invite.inviteToken || state.inviteFlow.token
+        }, {
+          requireAuth: true,
+          authMessage: "Sign in with the invited email before continuing.",
+          errorMessage: "Portaly could not finish accepting this invite.",
+          networkErrorMessage: "Portaly could not finish accepting this invite."
+        });
+      } catch (error) {
+        console.error("[Portaly] acceptCurrentInvite backendAcceptFailed", {
+          token: invite.inviteToken || state.inviteFlow.token,
+          errorCode: error?.code || "",
+          errorMessage: error?.message || "",
+          error
+        });
+        if (canUseFrontendInviteLinks()) {
+          result = await acceptFrontendCloudInvite(invite, authUser);
+        } else {
+          throw error;
+        }
+      }
+    }
+    if (!result) {
+      if (canUseFrontendInviteLinks()) {
+        result = await acceptFrontendCloudInvite(invite, authUser);
+      } else {
+        throw new Error("Client manager invites need the secure backend before Cloud Mode can finish setup.");
+      }
+    }
 
     state.authUser = authUser;
     clearPendingInviteToken();

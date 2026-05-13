@@ -4471,6 +4471,9 @@
       createdAt,
       updatedAt: createdAt,
       emailStatus: "pending",
+      emailProvider: "resend",
+      resendEmailId: "",
+      emailLastError: "",
       agencyName: getAgencyName(payload.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
       assignedClientNames: payload.assignedClientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
       assignedSiteNames: payload.assignedSiteIds.map(id => getSiteName(id)).filter(name => name && name !== "Unknown Site"),
@@ -4804,6 +4807,9 @@
       inviteLink: buildClientManagerInviteLink(inviteToken),
       authAccountExists: false,
       emailStatus: "pending",
+      emailProvider: "resend",
+      resendEmailId: "",
+      emailLastError: "",
       userId
     };
     return saveData("clientInvites", inviteId, invite);
@@ -4850,6 +4856,7 @@
           <button class="button button-ghost" data-action="magic-link-placeholder" type="button">Magic Link Login</button>
         </div>
         <p class="helper-copy" style="margin-top: 16px;">You've been invited to Portaly to review and approve timecards for your assigned site.</p>
+        <p class="helper-copy" style="margin-top: 8px;">If the email does not arrive, copy the invite link and send it manually.</p>
       </div>
     `, null, {
       readOnly: true,
@@ -4938,6 +4945,12 @@
     console.log("[Portaly] sendClientManagerInviteEmail responseBody", result);
     if (!response.ok) {
       console.error("[Portaly] sendClientManagerInviteEmail backendError", result);
+      try {
+        await refreshSessionData();
+        renderApp();
+      } catch (refreshError) {
+        console.error("[Portaly] sendClientManagerInviteEmail refreshAfterErrorFailed", refreshError);
+      }
       throw new Error(result.error || result.message || "Portaly could not send this invite email.");
     }
 

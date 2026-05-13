@@ -2623,16 +2623,17 @@
       });
     }
 
+    let savedSettings = settingsRecord;
     if (settingsRecord) {
-      await updateData("settings", settingsRecord.id, nextSettings);
+      savedSettings = await updateData("settings", settingsRecord.id, nextSettings);
     } else {
-      await saveData("settings", createId("setting"), {
+      savedSettings = await saveData("settings", createId("setting"), {
         agencyId: agency?.id || state.session.agencyId || state.session.agency?.id,
         ...nextSettings
       });
     }
 
-    await appendAuditLog("settings_saved", "settings", settingsRecord?.id || "new", settingsRecord, nextSettings);
+    await appendAuditLog("settings_saved", "settings", savedSettings?.id || settingsRecord?.id || "new", settingsRecord, savedSettings || nextSettings);
     await refreshCurrentView();
     applyTheme(nextSettings.primaryColor);
     pushToast("Settings saved.", "success");
@@ -2891,8 +2892,8 @@
       notes: ""
     };
 
-    await saveData("punches", createId("punch"), punch);
-    await appendAuditLog("punch_captured", "punches", punch.id || "new", null, punch);
+    const savedPunch = await saveData("punches", createId("punch"), punch);
+    await appendAuditLog("punch_captured", "punches", savedPunch.id, null, savedPunch);
     await refreshSessionData();
 
     const messageMap = {
@@ -3106,8 +3107,8 @@
       notes: "Missing clock out fixed manually by admin.",
       editReason: "Missing clock out fixed manually."
     };
-    await saveData("punches", createId("punch"), punch);
-    await appendAuditLog("missing_clock_out_fixed", "punches", punch.id || "new", null, punch);
+    const savedPunch = await saveData("punches", createId("punch"), punch);
+    await appendAuditLog("missing_clock_out_fixed", "punches", savedPunch.id, null, savedPunch);
     await refreshCurrentView();
     pushToast("Missing clock out fixed.", "success");
   }

@@ -264,10 +264,7 @@ service cloud.firestore {
     }
 
     match /clientInvites/{inviteId} {
-      allow get: if resource.data.status == 'pending' || (signedIn() && (
-        isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyResource())
-      ));
+      allow get: if resource.data.status == 'pending';
 
       allow list: if signedIn() && (
         isPlatformOwner()

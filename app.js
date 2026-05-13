@@ -2623,16 +2623,17 @@
       });
     }
 
+    let savedSettings = settingsRecord;
     if (settingsRecord) {
-      await updateData("settings", settingsRecord.id, nextSettings);
+      savedSettings = await updateData("settings", settingsRecord.id, nextSettings);
     } else {
-      await saveData("settings", createId("setting"), {
+      savedSettings = await saveData("settings", createId("setting"), {
         agencyId: agency?.id || state.session.agencyId || state.session.agency?.id,
         ...nextSettings
       });
     }
 
-    await appendAuditLog("settings_saved", "settings", settingsRecord?.id || "new", settingsRecord, nextSettings);
+    await appendAuditLog("settings_saved", "settings", savedSettings?.id || settingsRecord?.id || "new", settingsRecord, savedSettings || nextSettings);
     await refreshCurrentView();
     applyTheme(nextSettings.primaryColor);
     pushToast("Settings saved.", "success");
@@ -2891,8 +2892,8 @@
       notes: ""
     };
 
-    await saveData("punches", createId("punch"), punch);
-    await appendAuditLog("punch_captured", "punches", punch.id || "new", null, punch);
+    const savedPunch = await saveData("punches", createId("punch"), punch);
+    await appendAuditLog("punch_captured", "punches", savedPunch.id, null, savedPunch);
     await refreshSessionData();
 
     const messageMap = {
@@ -3106,8 +3107,8 @@
       notes: "Missing clock out fixed manually by admin.",
       editReason: "Missing clock out fixed manually."
     };
-    await saveData("punches", createId("punch"), punch);
-    await appendAuditLog("missing_clock_out_fixed", "punches", punch.id || "new", null, punch);
+    const savedPunch = await saveData("punches", createId("punch"), punch);
+    await appendAuditLog("missing_clock_out_fixed", "punches", savedPunch.id, null, savedPunch);
     await refreshCurrentView();
     pushToast("Missing clock out fixed.", "success");
   }
@@ -4430,10 +4431,15 @@
       return getRevokedInviteMessage();
     }
     if (
-      ["permission-denied", "unauthenticated", "unavailable", "failed-precondition", "not-found"].includes(code)
-      || message.includes("failed to fetch")
+      code === "permission-denied"
       || message.includes("permission")
       || message.includes("insufficient permissions")
+    ) {
+      return "This invite could not be opened because it is missing pending status or rules were not published.";
+    }
+    if (
+      ["unauthenticated", "unavailable", "failed-precondition", "not-found"].includes(code)
+      || message.includes("failed to fetch")
       || message.includes("could not be found")
       || message.includes("no longer available")
       || message.includes("network")
@@ -4488,9 +4494,11 @@
       throw new Error("Cloud invite links are not available until Firebase is fully connected.");
     }
 
+    const documentPath = `clientInvites/${String(token || "").trim()}`;
     const authUser = state.firebase.auth?.currentUser || state.authUser || null;
     console.log("[Portaly] loadFrontendCloudInvite", {
       token,
+      documentPath,
       firebaseReady: state.firebase.ready,
       authState: authUser
         ? {
@@ -4505,21 +4513,35 @@
       const snapshotData = snapshot.exists ? (snapshot.data() || {}) : null;
       console.log("[Portaly] loadFrontendCloudInvite snapshot", {
         token,
+        documentPath,
         exists: snapshot.exists,
-        status: snapshot.exists ? (snapshotData?.status || "") : "",
-        inviteId: snapshot.id || ""
+        inviteId: snapshot.id || "",
+        inviteData: snapshotData
       });
       if (!snapshot.exists) {
         throw new Error(getMissingInviteMessage());
       }
+      if (snapshot.id !== token) {
+        throw new Error(getMalformedInviteMessage());
+      }
       if (!snapshotData || typeof snapshotData.status !== "string" || !snapshotData.status.trim()) {
         throw new Error(getMalformedInviteMessage());
+      }
+      if (snapshotData.inviteToken !== snapshot.id) {
+        throw new Error(getMalformedInviteMessage());
+      }
+      if (snapshotData.status === "accepted") {
+        throw new Error(getAcceptedInviteMessage());
+      }
+      if (snapshotData.status === "revoked") {
+        throw new Error(getRevokedInviteMessage());
       }
       const invite = buildCloudInviteDetails({ id: snapshot.id, ...snapshotData }, "cloud-frontend");
       return invite;
     } catch (error) {
       console.error("[Portaly] loadFrontendCloudInvite failed", {
         token,
+        documentPath,
         firebaseReady: state.firebase.ready,
         authState: authUser
           ? {
@@ -4766,7 +4788,6 @@
 
   async function createDemoClientManagerInvite(payload) {
     const createdAt = new Date().toISOString();
-    const inviteId = createId("invite");
     const userId = createId("user");
     const inviteToken = `${createId("cm")}_${Math.random().toString(36).slice(2, 12)}`;
     const tokenExpiresAt = addDays(new Date(createdAt), 14).toISOString();
@@ -4805,7 +4826,10 @@
       emailStatus: "pending",
       userId
     };
-    return saveData("clientInvites", inviteId, invite);
+    return saveData("clientInvites", inviteToken, {
+      ...invite,
+      id: inviteToken
+    });
   }
 
   function buildInviteEmailActionAttributes(invite) {

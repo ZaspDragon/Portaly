@@ -20,6 +20,7 @@ The frontend stays plain `HTML`, `CSS`, and `JavaScript`. No npm or frontend bui
 - `billing-config.js`
 - `firestore.rules`
 - `functions/index.js`
+- `functions/package.json`
 
 ## Product modes
 
@@ -91,6 +92,13 @@ Current frontend config uses:
 - `messagingSenderId`
 - `appId`
 - `measurementId`
+- `functionsBaseUrl`
+
+Portaly now points invite emails to:
+
+```js
+functionsBaseUrl: "https://us-central1-portaly-d6617.cloudfunctions.net"
+```
 
 ### 5. Deploy Firestore rules
 
@@ -206,10 +214,16 @@ The frontend never stores:
 
 If `functionsBaseUrl` is blank, Portaly shows professional placeholders for pause, resume, cancel, refresh, payment history, and payment method actions.
 
-## Firebase Functions for Square
+## Firebase Functions v2
 
-`functions/index.js` now includes Square-ready endpoints:
+Portaly uses Firebase Functions v2 with CommonJS in `functions/index.js`.
 
+Current functions include:
+
+- `sendClientManagerInviteEmail`
+- `createClientManagerInvite`
+- `verifyClientManagerInvite`
+- `acceptClientManagerInvite`
 - `createSquareSubscriptionLink`
 - `cancelSquareSubscription`
 - `pauseSquareSubscription`
@@ -220,13 +234,34 @@ If `functionsBaseUrl` is blank, Portaly shows professional placeholders for paus
 - `updateSquarePaymentMethod`
 - `squareWebhook`
 
-### Install backend dependencies
+### Create or reuse the Functions workspace
 
-Inside a Firebase Functions workspace:
+If you have not initialized functions in this Firebase project yet:
 
 ```bash
-npm install firebase-admin firebase-functions
+firebase login
+firebase init functions
 ```
+
+Choose:
+
+- JavaScript
+- Node.js 20
+- do not overwrite your existing Portaly frontend files
+
+### Install backend dependencies
+
+Inside `functions/`:
+
+```bash
+npm install
+```
+
+This installs:
+
+- `firebase-admin`
+- `firebase-functions`
+- `resend`
 
 ### Set Firebase Functions secrets and params
 
@@ -237,9 +272,17 @@ firebase functions:secrets:set SQUARE_ACCESS_TOKEN
 firebase functions:secrets:set SQUARE_WEBHOOK_SIGNATURE_KEY
 ```
 
-Set optional params for Square subscription plan variation IDs and hosted payment links:
+Set the Resend secret used for automatic client manager invite emails:
+
+```bash
+firebase functions:secrets:set RESEND_API_KEY
+```
+
+Optional params you can customize later for Portaly email and Square behavior:
 
 - `APP_URL`
+- `INVITE_EMAIL_FROM`
+- `INVITE_EMAIL_REPLY_TO`
 - `SQUARE_API_BASE_URL`
 - `SQUARE_API_VERSION`
 - `SQUARE_PLAN_VARIATION_STARTER`
@@ -250,11 +293,28 @@ Set optional params for Square subscription plan variation IDs and hosted paymen
 - `SQUARE_PAYMENT_LINK_GROWTH`
 - `SQUARE_PAYMENT_LINK_ENTERPRISE`
 
+Defaults already included in `functions/index.js`:
+
+- `APP_URL`
+- `INVITE_EMAIL_FROM = Portaly <onboarding@resend.dev>`
+- `INVITE_EMAIL_REPLY_TO = ""`
+
 ### Deploy functions
 
 ```bash
 firebase deploy --only functions
 ```
+
+### What `sendClientManagerInviteEmail` does
+
+- verifies the Firebase Bearer token
+- confirms the caller is `agencyOwner`, `agencyAdmin`, or `platformOwner`
+- loads `clientInvites/{inviteToken}` for the current agency
+- sends the invite email through Resend
+- updates Firestore with:
+  - `emailSentAt`
+  - `emailSentBy`
+  - `emailStatus: "sent"`
 
 ### Future Square automation
 
@@ -324,6 +384,14 @@ Recommended Square webhook events to monitor next:
 - direct Square checkout links work
 - placeholder self-service actions do not break if backend is not connected
 - backend functions work once `functionsBaseUrl` and Firebase Functions are deployed
+
+### Client manager invites
+
+- create a client manager invite from Clients or Users
+- invite link copies successfully
+- `Send Invite Email` works after Functions + Resend are deployed
+- invite opens `#/accept-invite/{token}`
+- invite status remains `pending` until accepted
 
 ## Notes
 

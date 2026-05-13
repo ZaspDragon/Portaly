@@ -24,10 +24,7 @@ window.PORTALY_FIREBASE_CONFIG = {
   billingProvider: "square",
 
   // Firebase Functions
-  // Leave blank for now until backend is deployed.
-  // Example later:
-  // "https://us-central1-portaly-d6617.cloudfunctions.net"
-  functionsBaseUrl: "functionsBaseUrl: "https://us-central1-portaly-d6617.cloudfunctions.net",",
+  functionsBaseUrl: "https://us-central1-portaly-d6617.cloudfunctions.net",
 
   // Firebase Web SDK Config
   apiKey: "AIzaSyDfF4mmLeI4IbOl3TsWJnCfMg_nsSfqTp0",

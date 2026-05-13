@@ -1512,7 +1512,16 @@
           openUserModal(trigger.dataset.userId || "");
           break;
         case "send-invite-email-placeholder":
-          openInviteEmailPlaceholder(trigger.dataset.link || "", trigger.dataset.email || "");
+        case "send-client-invite-email":
+          await sendClientManagerInviteEmail({
+            inviteId: trigger.dataset.inviteId || "",
+            inviteToken: trigger.dataset.inviteToken || "",
+            agencyId: trigger.dataset.agencyId || "",
+            email: trigger.dataset.email || "",
+            firstName: trigger.dataset.firstName || "",
+            lastName: trigger.dataset.lastName || "",
+            inviteUrl: trigger.dataset.link || ""
+          });
           break;
         case "magic-link-placeholder":
           pushToast("Passwordless email link sign-in is the next step. For now, use the invite link to set up email and password access.", "warning");
@@ -1536,7 +1545,7 @@
           await capturePunch(trigger.dataset.punch || "");
           break;
         case "copy-link":
-          await copyText(trigger.dataset.copy || "");
+          await copyText(trigger.dataset.copy || "", trigger.dataset.copySuccess || "");
           break;
         case "copy-payroll-csv":
           await copyPayrollCsv(false);
@@ -4624,17 +4633,35 @@
     return saveData("clientInvites", inviteId, invite);
   }
 
+  function buildInviteEmailActionAttributes(invite) {
+    const inviteLink = invite?.inviteLink || buildClientManagerInviteLink(invite?.inviteToken || invite?.id || "");
+    return `
+      data-invite-id="${escapeAttribute(invite?.id || "")}"
+      data-invite-token="${escapeAttribute(invite?.inviteToken || invite?.id || "")}"
+      data-agency-id="${escapeAttribute(invite?.agencyId || "")}"
+      data-email="${escapeAttribute(invite?.email || "")}"
+      data-first-name="${escapeAttribute(invite?.firstName || "")}"
+      data-last-name="${escapeAttribute(invite?.lastName || "")}"
+      data-link="${escapeAttribute(inviteLink)}"
+    `.replace(/\s+/g, " ").trim();
+  }
+
   function openInviteSuccessModal(invite) {
     if (!invite) {
       return;
     }
     const assignedClients = (invite.assignedClientNames || normalizeStringArray(invite.assignedClientIds).map(id => getClientName(id))).filter(Boolean);
     const assignedSites = (invite.assignedSiteNames || normalizeStringArray(invite.assignedSiteIds).map(id => getSiteName(id))).filter(Boolean);
+    const inviteLink = invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || invite.id || "");
+    const inviteEmailAttrs = buildInviteEmailActionAttributes({
+      ...invite,
+      inviteLink
+    });
     openModal("Client Manager Invite Ready", `
       <div class="approval-review-card">
         <p class="eyebrow">Invite ready</p>
-        <h3>${escapeHtml(invite.firstName || "Client")} is ready for Portaly access</h3>
-        <p>Copy the invite link below and send it to the client manager from your agency email.</p>
+        <h3>Copy this secure invite link and send it to the client manager.</h3>
+        <p>The client manager will use this invite to set up access and approve assigned site timecards in Portaly.</p>
         <div class="detail-grid" style="margin-top: 18px;">
           ${renderDetailBox("Email", invite.email || "-")}
           ${renderDetailBox("Status", formatStatusLabel(invite.status || "pending"))}
@@ -4642,8 +4669,8 @@
           ${renderDetailBox("Assigned sites", assignedSites.join(", ") || "None selected")}
         </div>
         <div class="approval-action-row" style="margin-top: 18px;">
-          <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" type="button">Copy Invite Link</button>
-          <button class="button button-secondary" data-action="send-invite-email-placeholder" data-link="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" data-email="${escapeAttribute(invite.email || "")}" type="button">Send Invite Email</button>
+          <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(inviteLink)}" data-copy-success="${escapeAttribute("Invite link copied successfully. Send this link to the client manager.")}" type="button">Copy Invite Link</button>
+          <button class="button button-secondary" data-action="send-client-invite-email" ${inviteEmailAttrs} type="button">Send Invite Email</button>
           <button class="button button-ghost" data-action="magic-link-placeholder" type="button">Magic Link Login</button>
         </div>
         <p class="helper-copy" style="margin-top: 16px;">You've been invited to Portaly to review and approve timecards for your assigned site.</p>
@@ -4656,11 +4683,71 @@
   }
 
   function openInviteEmailPlaceholder(link, email) {
-    const destination = email ? ` for ${email}` : "";
-    pushToast(`Automatic invite email sending is not connected yet. Copy the invite link${destination} and send it from your agency email.`, "warning");
-    if (link) {
-      void copyText(link);
+    console.log("[Portaly] client manager invite email fallback", { link, email });
+    pushToast("Email sending is coming soon. For now, copy the invite link and send it by email or text.", "warning");
+  }
+
+  function normalizeInviteEmailPayload(values = {}) {
+    const inviteRecord = values.inviteId ? findRecord("clientInvites", values.inviteId) : null;
+    const invite = inviteRecord ? { ...inviteRecord, ...values } : { ...values };
+    const inviteToken = String(invite.inviteToken || invite.id || values.inviteToken || "").trim();
+    const inviteId = String(invite.id || values.inviteId || inviteToken).trim();
+    return {
+      inviteId,
+      inviteToken,
+      agencyId: String(invite.agencyId || values.agencyId || state.session.agencyId || "").trim(),
+      email: String(invite.email || values.email || "").trim().toLowerCase(),
+      firstName: String(invite.firstName || values.firstName || "").trim(),
+      lastName: String(invite.lastName || values.lastName || "").trim(),
+      inviteUrl: String(invite.inviteLink || values.inviteUrl || values.link || (inviteToken ? buildClientManagerInviteLink(inviteToken) : "")).trim()
+    };
+  }
+
+  async function sendClientManagerInviteEmail(values = {}) {
+    const payload = normalizeInviteEmailPayload(values);
+    if (!payload.inviteToken || !payload.email) {
+      throw new Error("This client manager invite is missing the email details needed to send it.");
     }
+
+    const functionsBaseUrl = getFunctionsBaseUrl();
+    console.log("[Portaly] sendClientManagerInviteEmail functionsBaseUrl", functionsBaseUrl || "(empty)");
+    console.log("[Portaly] sendClientManagerInviteEmail inviteToken", payload.inviteToken);
+    console.log("[Portaly] sendClientManagerInviteEmail inviteUrl", payload.inviteUrl);
+
+    if (!functionsBaseUrl) {
+      openInviteEmailPlaceholder(payload.inviteUrl, payload.email);
+      return;
+    }
+
+    const authUser = state.firebase.auth?.currentUser;
+    if (!authUser) {
+      throw new Error("Sign in to your cloud agency before sending invite emails.");
+    }
+    const idToken = await authUser.getIdToken();
+
+    const response = await fetch(`${functionsBaseUrl}/sendClientManagerInviteEmail`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        inviteToken: payload.inviteToken,
+        inviteUrl: payload.inviteUrl
+      })
+    });
+
+    console.log("[Portaly] sendClientManagerInviteEmail responseStatus", response.status);
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("[Portaly] sendClientManagerInviteEmail backendError", result);
+      throw new Error(result.error || result.message || "Portaly could not send this invite email.");
+    }
+
+    await refreshSessionData();
+    renderApp();
+    pushToast("Invite email sent successfully.", "success");
   }
 
   async function submitClientManagerInvite(values) {
@@ -4720,7 +4807,17 @@
     });
     state.modal = null;
     await refreshCurrentView();
-    pushToast("Invite link created successfully.", "success");
+    const inviteLink = invite?.inviteLink || buildClientManagerInviteLink(invite?.inviteToken || invite?.id || "");
+    if (inviteLink) {
+      try {
+        await copyText(inviteLink, "Invite link copied successfully. Send this link to the client manager.");
+      } catch (error) {
+        console.warn("[Portaly] invite link copy failed", error);
+        pushToast("Invite link created successfully.", "success");
+      }
+    } else {
+      pushToast("Invite link created successfully.", "success");
+    }
     openInviteSuccessModal(invite);
   }
 
@@ -7809,8 +7906,8 @@
                       <td>${escapeHtml((invite.assignedSiteIds || []).map(id => getSiteName(id)).join(", ") || "-")}</td>
                       <td>
                         <div class="table-actions">
-                          <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" type="button">Copy Invite Link</button>
-                          <button class="button button-ghost" data-action="send-invite-email-placeholder" data-link="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" data-email="${escapeAttribute(invite.email || "")}" type="button">Send Invite Email</button>
+                          <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" data-copy-success="${escapeAttribute("Invite link copied successfully. Send this link to the client manager.")}" type="button">Copy Invite Link</button>
+                          <button class="button button-ghost" data-action="send-client-invite-email" ${buildInviteEmailActionAttributes(invite)} type="button">Send Invite Email</button>
                           ${canInviteClientManagers() && (invite.status || "pending") === "pending" ? `<button class="button button-danger" data-action="revoke-client-invite" data-invite-id="${escapeHtml(invite.id)}" type="button">Revoke Invite</button>` : ""}
                         </div>
                       </td>
@@ -9916,14 +10013,14 @@
     }, 2800);
   }
 
-  async function copyText(value) {
+  async function copyText(value, successMessage = "") {
     if (!value) {
       throw new Error("There was nothing to copy.");
     }
 
     if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(value);
-      pushToast("Copied to clipboard.", "success");
+      pushToast(successMessage || "Copied to clipboard.", "success");
       return;
     }
 

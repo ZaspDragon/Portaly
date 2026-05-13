@@ -4628,46 +4628,7 @@
         return localInvite;
       }
 
-      let frontendInviteError = null;
-      if (canUseFrontendInviteLinks()) {
-        try {
-          const details = await loadFrontendCloudInvite(token);
-          state.inviteFlow = {
-            token,
-            loading: false,
-            details,
-            error: ""
-          };
-          return details;
-        } catch (error) {
-          frontendInviteError = error;
-          console.error("[Portaly] loadInviteFlowState frontendInviteError", {
-            token,
-            firebaseReady: state.firebase.ready,
-            errorCode: error?.code || "",
-            errorMessage: error?.message || "",
-            error
-          });
-          if (!hasSecureBackend() || error?.message === getMissingInviteMessage()) {
-            throw error;
-          }
-        }
-      }
-
-      const result = await callSecureFunction("verifyClientManagerInvite", {
-        token
-      }, {
-        requireAuth: false,
-        fallbackMessage: "Client manager invites need the secure backend URL before Cloud Mode can verify them.",
-        errorMessage: "This invite link is invalid, expired, or no longer available.",
-        networkErrorMessage: "This invite link is invalid, expired, or no longer available."
-      });
-
-      const details = result?.invite || null;
-      if (!details) {
-        throw new Error(getMissingInviteMessage());
-      }
-
+      const details = await loadFrontendCloudInvite(token);
       state.inviteFlow = {
         token,
         loading: false,

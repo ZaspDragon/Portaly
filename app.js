@@ -4216,13 +4216,40 @@
       headers.Authorization = `Bearer ${await state.firebase.auth.currentUser.getIdToken()}`;
     }
 
-    const response = await fetch(`${getFunctionsBaseUrl()}/${endpoint}`, {
-      method: options.method || "POST",
-      headers,
-      body: JSON.stringify(payload)
-    });
+    const requestUrl = `${getFunctionsBaseUrl()}/${endpoint}`;
+    console.log("[Portaly] callSecureFunction requestUrl", requestUrl);
+    let response;
+    try {
+      response = await fetch(requestUrl, {
+        method: options.method || "POST",
+        headers,
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      console.error("[Portaly] callSecureFunction fetchError", {
+        endpoint,
+        requestUrl,
+        error
+      });
+      if (options.networkErrorMessage) {
+        const networkError = new Error(options.networkErrorMessage);
+        networkError.code = "network-error";
+        networkError.requestUrl = requestUrl;
+        networkError.cause = error;
+        throw networkError;
+      }
+      error.code = error.code || "network-error";
+      error.requestUrl = requestUrl;
+      throw error;
+    }
 
     const data = await response.json().catch(() => ({}));
+    console.log("[Portaly] callSecureFunction response", {
+      endpoint,
+      requestUrl,
+      status: response.status,
+      body: data
+    });
     if (!response.ok) {
       throw new Error(data.error || options.errorMessage || "Portaly could not complete this secure request.");
     }
@@ -4737,22 +4764,42 @@
       throw new Error("Sign in to your cloud agency before sending invite emails.");
     }
     const idToken = await authUser.getIdToken();
+    const requestUrl = `${functionsBaseUrl}/sendClientManagerInviteEmail`;
+    console.log("[Portaly] sendClientManagerInviteEmail requestUrl", requestUrl);
 
-    const response = await fetch(`${functionsBaseUrl}/sendClientManagerInviteEmail`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${idToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        inviteToken: payload.inviteToken,
-        inviteUrl: payload.inviteUrl
-      })
-    });
+    let response;
+    try {
+      response = await fetch(requestUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          inviteToken: payload.inviteToken,
+          inviteUrl: payload.inviteUrl
+        })
+      });
+    } catch (error) {
+      console.error("[Portaly] sendClientManagerInviteEmail fetchError", error);
+      pushToast("Could not reach invite email backend. Invite link was still created. Copy the link manually.", "warning");
+      return;
+    }
 
     console.log("[Portaly] sendClientManagerInviteEmail responseStatus", response.status);
 
-    const result = await response.json().catch(() => ({}));
+    const responseText = await response.text().catch(() => "");
+    let result = {};
+    if (responseText) {
+      try {
+        result = JSON.parse(responseText);
+      } catch (error) {
+        result = {
+          rawBody: responseText
+        };
+      }
+    }
+    console.log("[Portaly] sendClientManagerInviteEmail responseBody", result);
     if (!response.ok) {
       console.error("[Portaly] sendClientManagerInviteEmail backendError", result);
       throw new Error(result.error || result.message || "Portaly could not send this invite email.");
@@ -4794,15 +4841,25 @@
     let invite;
     if (state.session.mode === "cloud") {
       if (functionsBaseUrl) {
-        const result = await callSecureFunction("createClientManagerInvite", payload, {
-          requireAuth: true,
-          authMessage: "Sign in to your cloud agency before inviting client managers.",
-          errorMessage: "Portaly could not create this client manager invite."
-        });
-        if (!result?.invite) {
-          return;
+        try {
+          const result = await callSecureFunction("createClientManagerInvite", payload, {
+            requireAuth: true,
+            authMessage: "Sign in to your cloud agency before inviting client managers.",
+            errorMessage: "Portaly could not create this client manager invite.",
+            networkErrorMessage: "Could not reach the secure Portaly invite service."
+          });
+          if (!result?.invite) {
+            return;
+          }
+          invite = result.invite;
+        } catch (error) {
+          if (allowFrontendInviteLinks && error.code === "network-error") {
+            console.warn("[Portaly] submitClientManagerInvite falling back to frontend invite links", error);
+            invite = await createCloudClientManagerInvite(payload);
+          } else {
+            throw error;
+          }
         }
-        invite = result.invite;
       } else if (allowFrontendInviteLinks) {
         invite = await createCloudClientManagerInvite(payload);
       } else {

@@ -16,6 +16,8 @@ const appUrl = defineString("APP_URL", {
 const inviteEmailFrom = defineString("INVITE_EMAIL_FROM", {
   default: "Portaly <onboarding@resend.dev>"
 });
+// Use onboarding@resend.dev for testing. Use a verified sending domain such as
+// noreply@verified-domain.com in production so recipient inbox placement improves.
 const inviteEmailReplyTo = defineString("INVITE_EMAIL_REPLY_TO", {
   default: ""
 });
@@ -306,12 +308,14 @@ async function sendInviteEmailMessage({ to, subject, html, text }) {
     payload.replyTo = inviteEmailReplyTo.value();
   }
 
-  const response = await resend.emails.send(payload);
-  if (response?.error) {
-    throw createHttpError(502, response.error.message || "Invite email sending failed.");
+  const emailResult = await resend.emails.send(payload);
+  console.log("Resend response", emailResult);
+  logger.info("Resend response", emailResult || {});
+  if (emailResult?.error) {
+    throw createHttpError(502, emailResult.error.message || "Invite email sending failed.");
   }
 
-  return response;
+  return emailResult;
 }
 
 async function writeInviteAuditLog({ agencyId, action, entityId, actorId = "", actorRole = "system", oldValue = null, newValue = null, reason = "" }) {
@@ -620,7 +624,10 @@ exports.createClientManagerInvite = onRequest(
         createdBy: auth.uid,
         inviteLink,
         authAccountExists: false,
-        emailStatus: "pending"
+        emailStatus: "pending",
+        emailProvider: "resend",
+        resendEmailId: "",
+        emailLastError: ""
       };
 
       await inviteRef.set(inviteRecord, { merge: true });
@@ -692,18 +699,37 @@ exports.sendClientManagerInviteEmail = onRequest(
         assignedSiteNames: scopedInvite.assignedSiteNames || []
       });
 
-      await sendInviteEmailMessage({
-        to: email,
-        subject: emailContent.subject,
-        html: emailContent.html,
-        text: emailContent.text
-      });
+      let emailResult;
+      try {
+        emailResult = await sendInviteEmailMessage({
+          to: email,
+          subject: emailContent.subject,
+          html: emailContent.html,
+          text: emailContent.text
+        });
+      } catch (error) {
+        const failedAt = nowIso();
+        await result.ref.set({
+          emailSentAt: "",
+          emailSentBy: auth.uid,
+          emailStatus: "failed",
+          emailProvider: "resend",
+          emailLastError: error.message || "Invite email sending failed.",
+          updatedAt: failedAt
+        }, { merge: true });
+        throw error;
+      }
+
+      const resendEmailId = String(emailResult?.data?.id || emailResult?.id || "").trim();
 
       const emailSentAt = nowIso();
       await result.ref.set({
         emailSentAt,
         emailSentBy: auth.uid,
         emailStatus: "sent",
+        emailProvider: "resend",
+        resendEmailId,
+        emailLastError: "",
         updatedAt: emailSentAt
       }, { merge: true });
 
@@ -713,6 +739,9 @@ exports.sendClientManagerInviteEmail = onRequest(
         emailSentAt,
         emailSentBy: auth.uid,
         emailStatus: "sent",
+        emailProvider: "resend",
+        resendEmailId,
+        emailLastError: "",
         updatedAt: emailSentAt
       };
 

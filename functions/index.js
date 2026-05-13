@@ -3,13 +3,21 @@ const admin = require("firebase-admin");
 const { onRequest } = require("firebase-functions/v2/https");
 const { defineSecret, defineString } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
+const { Resend } = require("resend");
 
 admin.initializeApp();
 
 const squareAccessToken = defineSecret("SQUARE_ACCESS_TOKEN");
 const squareWebhookSignatureKey = defineSecret("SQUARE_WEBHOOK_SIGNATURE_KEY");
+const resendApiKey = defineSecret("RESEND_API_KEY");
 const appUrl = defineString("APP_URL", {
   default: "https://zaspdragon.github.io/Portaly/"
+});
+const inviteEmailFrom = defineString("INVITE_EMAIL_FROM", {
+  default: "Portaly <onboarding@resend.dev>"
+});
+const inviteEmailReplyTo = defineString("INVITE_EMAIL_REPLY_TO", {
+  default: ""
 });
 const squareApiBaseUrl = defineString("SQUARE_API_BASE_URL", {
   default: "https://connect.squareup.com"
@@ -167,6 +175,15 @@ function createInviteToken() {
   return crypto.randomBytes(24).toString("hex");
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function getInviteByToken(inviteToken) {
   const querySnapshot = await admin.firestore()
     .collection("clientInvites")
@@ -186,6 +203,110 @@ async function getInviteByToken(inviteToken) {
       ...docSnap.data()
     }
   };
+}
+
+async function getInviteByIdOrToken(inviteId, inviteToken) {
+  const collection = admin.firestore().collection("clientInvites");
+  const normalizedId = String(inviteId || "").trim();
+  const normalizedToken = String(inviteToken || "").trim();
+
+  if (normalizedId) {
+    const inviteSnap = await collection.doc(normalizedId).get();
+    if (inviteSnap.exists) {
+      const invite = {
+        id: inviteSnap.id,
+        ...inviteSnap.data()
+      };
+      if (!normalizedToken || invite.inviteToken === normalizedToken || invite.id === normalizedToken) {
+        return {
+          ref: inviteSnap.ref,
+          invite
+        };
+      }
+    }
+  }
+
+  if (!normalizedToken) {
+    return null;
+  }
+
+  return getInviteByToken(normalizedToken);
+}
+
+function buildClientInviteEmailContent({ firstName, agencyName, inviteUrl, assignedClientNames = [], assignedSiteNames = [] }) {
+  const safeName = firstName || "there";
+  const clientsText = assignedClientNames.length ? assignedClientNames.join(", ") : "your assigned client";
+  const sitesText = assignedSiteNames.length ? assignedSiteNames.join(", ") : "your assigned site";
+  const escapedUrl = escapeHtml(inviteUrl);
+  const escapedAgencyName = escapeHtml(agencyName || "Portaly Agency");
+  const escapedClients = escapeHtml(clientsText);
+  const escapedSites = escapeHtml(sitesText);
+
+  return {
+    subject: "You've been invited to approve timecards in Portaly",
+    text: [
+      `Hi ${safeName},`,
+      "",
+      `${agencyName || "A staffing agency"} has invited you to Portaly to review and approve timecards for ${sitesText}.`,
+      "",
+      `Assigned clients: ${clientsText}`,
+      `Assigned sites: ${sitesText}`,
+      "",
+      "Use this secure link to set up access and continue to approvals:",
+      inviteUrl,
+      "",
+      "Once you sign in, you can review assigned worker timecards, correct missed punches, and approve submitted hours.",
+      "",
+      "Thank you,",
+      "Portaly"
+    ].join("\n"),
+    html: `
+      <div style="font-family:Arial,Helvetica,sans-serif;background:#f5f8ff;padding:24px;color:#10203a;">
+        <div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #dbe7ff;border-radius:18px;padding:32px;box-shadow:0 16px 48px rgba(16,32,58,0.08);">
+          <p style="margin:0 0 8px;color:#1f6fff;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;">Portaly</p>
+          <h1 style="margin:0 0 14px;font-size:28px;line-height:1.2;color:#10203a;">You've been invited to approve timecards in Portaly</h1>
+          <p style="margin:0 0 16px;font-size:16px;line-height:1.65;">Hi ${escapeHtml(safeName)},</p>
+          <p style="margin:0 0 16px;font-size:16px;line-height:1.65;">${escapedAgencyName} invited you to review and approve timecards for your assigned warehouse or client site in Portaly.</p>
+          <div style="margin:20px 0;padding:18px;border-radius:14px;background:#f7faff;border:1px solid #dbe7ff;">
+            <p style="margin:0 0 8px;font-size:14px;color:#52627a;"><strong>Assigned clients:</strong> ${escapedClients}</p>
+            <p style="margin:0;font-size:14px;color:#52627a;"><strong>Assigned sites:</strong> ${escapedSites}</p>
+          </div>
+          <p style="margin:0 0 20px;font-size:16px;line-height:1.65;">Use this secure link to set up access, review assigned worker timecards, and approve submitted hours.</p>
+          <p style="margin:0 0 24px;">
+            <a href="${escapedUrl}" style="display:inline-block;background:#1f6fff;color:#ffffff;text-decoration:none;padding:14px 22px;border-radius:12px;font-weight:700;">Set Up Access</a>
+          </p>
+          <p style="margin:0 0 8px;font-size:13px;color:#6b7b93;">If the button does not open, copy and paste this link into your browser:</p>
+          <p style="margin:0;word-break:break-all;font-size:13px;color:#1f6fff;">${escapedUrl}</p>
+        </div>
+      </div>
+    `
+  };
+}
+
+async function sendInviteEmailMessage({ to, subject, html, text }) {
+  if (!resendApiKey.value()) {
+    throw createHttpError(503, "Email sending is not connected yet. Copy the invite link and send it manually.");
+  }
+
+  const resend = new Resend(resendApiKey.value());
+  const payload = {
+    from: inviteEmailFrom.value(),
+    to: [to],
+    subject,
+    html,
+    text
+  };
+
+  if (inviteEmailReplyTo.value()) {
+    payload.replyTo = inviteEmailReplyTo.value();
+  }
+
+  const response = await resend.emails.send(payload);
+  if (response?.error) {
+    throw createHttpError(502, response.error.message || "Invite email sending failed.");
+  }
+
+  return response;
 }
 
 async function writeInviteAuditLog({ agencyId, action, entityId, actorId = "", actorRole = "system", oldValue = null, newValue = null, reason = "" }) {
@@ -501,6 +622,97 @@ exports.createClientManagerInvite = onRequest(
       logger.error("createClientManagerInvite failed", error);
       responseJson(res, error.status || 500, {
         error: error.message || "Unable to create the client manager invite."
+      });
+    }
+  }
+);
+
+exports.sendClientManagerInviteEmail = onRequest(
+  {
+    cors: true,
+    secrets: [resendApiKey]
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
+      if (!canInviteClientManagers(auth.profile)) {
+        throw createHttpError(403, "Only agency leadership can send client manager invites.");
+      }
+
+      const inviteId = String(req.body.inviteId || "").trim();
+      const inviteToken = String(req.body.inviteToken || "").trim();
+      const requestedAgencyId = String(req.body.agencyId || "").trim();
+      if (!inviteToken && !inviteId) {
+        throw createHttpError(400, "Invite details are required.");
+      }
+
+      const agencyId = resolveAgencyId(auth.profile, requestedAgencyId);
+      const result = await markInviteExpired(await getInviteByIdOrToken(inviteId, inviteToken));
+      if (!result) {
+        throw createHttpError(404, "This client manager invite could not be found.");
+      }
+
+      const invite = result.invite;
+      if (invite.agencyId !== agencyId) {
+        throw createHttpError(403, "This invite does not belong to your agency.");
+      }
+      if ((invite.status || "pending") !== "pending") {
+        throw createHttpError(409, "Only pending client manager invites can be emailed.");
+      }
+
+      const scopedInvite = await resolveClientInviteScope(invite);
+      const email = String(req.body.email || invite.email || "").trim().toLowerCase();
+      if (!email || email !== String(invite.email || "").trim().toLowerCase()) {
+        throw createHttpError(400, "Invite email does not match the stored client manager invite.");
+      }
+
+      const { agency } = await getAgencyRefAndData(agencyId);
+      const inviteUrl = String(req.body.inviteUrl || scopedInvite.inviteLink || buildHashUrl(`accept-invite/${invite.inviteToken}`)).trim();
+      const emailContent = buildClientInviteEmailContent({
+        firstName: invite.firstName || req.body.firstName || "",
+        agencyName: agency.name || scopedInvite.agencyName || "Portaly Agency",
+        inviteUrl,
+        assignedClientNames: scopedInvite.assignedClientNames || [],
+        assignedSiteNames: scopedInvite.assignedSiteNames || []
+      });
+
+      await sendInviteEmailMessage({
+        to: email,
+        subject: emailContent.subject,
+        html: emailContent.html,
+        text: emailContent.text
+      });
+
+      const emailSentAt = nowIso();
+      await result.ref.set({
+        emailSentAt,
+        emailSentBy: auth.uid,
+        emailStatus: "sent",
+        updatedAt: emailSentAt
+      }, { merge: true });
+
+      const updatedInvite = {
+        ...scopedInvite,
+        inviteLink: inviteUrl,
+        emailSentAt,
+        emailSentBy: auth.uid,
+        emailStatus: "sent",
+        updatedAt: emailSentAt
+      };
+
+      responseJson(res, 200, {
+        ok: true,
+        invite: updatedInvite
+      });
+    } catch (error) {
+      logger.error("sendClientManagerInviteEmail failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to send the client manager invite email."
       });
     }
   }

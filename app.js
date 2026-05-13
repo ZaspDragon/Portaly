@@ -323,15 +323,19 @@
   async function initializeFirebase() {
     const config = normalizeFirebaseConfig(window.PORTALY_FIREBASE_CONFIG || {});
     state.firebase.config = config;
+    console.log("[Portaly] initializeFirebase config", window.PORTALY_FIREBASE_CONFIG || {});
 
     if (!config.enabled) {
+      console.warn("[Portaly] Firebase disabled in config");
       return;
     }
 
     await waitForFirebaseLayer();
+    console.log("[Portaly] initializeFirebase bridge", window.PortalyFirebase || null);
 
     if (!window.PortalyFirebase) {
       state.firebase.error = "Firebase browser modules did not load.";
+      console.error("[Portaly] initializeFirebase error", state.firebase.error);
       return;
     }
 
@@ -344,8 +348,12 @@
       state.firebase.ready = !!bridge.ready;
       state.firebase.error = bridge.error || "";
       state.firebase.billing = "square";
+      console.log("[Portaly] initializeFirebase readyState", state.firebase.ready);
+      if (state.firebase.error) {
+        console.error("[Portaly] initializeFirebase bridgeError", state.firebase.error);
+      }
     } catch (error) {
-      console.error(error);
+      console.error("[Portaly] initializeFirebase exception", error);
       state.firebase.error = error.message || "Unable to initialize Firebase.";
       state.firebase.ready = false;
     }
@@ -408,6 +416,11 @@
     }
 
     return normalized;
+  }
+
+  function getFirebaseUnavailableMessage(defaultMessage) {
+    const detail = String(state.firebase.error || "").trim();
+    return detail ? `${defaultMessage} ${detail}` : defaultMessage;
   }
 
   function renderLoading() {
@@ -1757,7 +1770,7 @@
 
   async function submitLogin(values) {
     if (!state.firebase.ready) {
-      throw new Error("Cloud Mode is not configured yet. Use Demo Mode until Firebase is enabled.");
+      throw new Error(getFirebaseUnavailableMessage("Cloud Mode is not configured yet. Use Demo Mode until Firebase is enabled."));
     }
 
     if (!values.email || !values.password) {
@@ -1803,7 +1816,7 @@
 
   async function submitForgotPassword(values) {
     if (!state.firebase.ready) {
-      throw new Error("Cloud Mode is not configured yet. Add Firebase first.");
+      throw new Error(getFirebaseUnavailableMessage("Cloud Mode is not configured yet. Add Firebase first."));
     }
 
     if (!values.email) {
@@ -1817,7 +1830,7 @@
 
   async function submitTrialSignup(values) {
     if (!state.firebase.ready) {
-      throw new Error("Cloud Mode is not configured yet. Add your Firebase config first.");
+      throw new Error(getFirebaseUnavailableMessage("Cloud Mode is not configured yet. Add your Firebase config first."));
     }
     console.log("[Portaly] Trial signup started");
 
@@ -1976,7 +1989,7 @@
 
   async function submitCompleteProfile(values) {
     if (!state.firebase.ready) {
-      throw new Error("Cloud Mode is not configured yet. Add your Firebase config first.");
+      throw new Error(getFirebaseUnavailableMessage("Cloud Mode is not configured yet. Add your Firebase config first."));
     }
     console.log("[Portaly] Complete profile started");
 
@@ -6377,7 +6390,7 @@
               <div class="notice-card warning" style="margin: 18px 0;">
                 <div>
                   <strong>Cloud Mode is not configured yet.</strong>
-                  <p>Paste your Firebase config into <code>firebase-config.js</code> before using real sign-up.</p>
+                  <p>${escapeHtml(state.firebase.error || "Paste your Firebase config into firebase-config.js before using real sign-up.")}</p>
                 </div>
               </div>
             `}

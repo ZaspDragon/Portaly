@@ -571,6 +571,10 @@
     return hash.split("/")[1] || "";
   }
 
+  function getMissingInviteMessage() {
+    return "This invite no longer exists or has already been accepted.";
+  }
+
   function getStoredPendingInviteToken() {
     return String(window.localStorage.getItem(STORAGE_KEYS.pendingInvite) || "").trim();
   }
@@ -1748,8 +1752,18 @@
 
   async function handleLogout() {
     const pendingInviteToken = state.route === "accept-invite"
-      ? (state.inviteFlow.token || getStoredPendingInviteToken())
+      ? (parseInviteHash() || state.inviteFlow.token || getStoredPendingInviteToken())
       : "";
+    console.log("[Portaly] handleLogout", {
+      pendingInviteToken,
+      route: state.route,
+      authState: state.firebase.auth?.currentUser
+        ? {
+          uid: state.firebase.auth.currentUser.uid || "",
+          email: state.firebase.auth.currentUser.email || ""
+        }
+        : null
+    });
     state.modal = null;
     state.mobileNavOpen = false;
     if (state.session.mode === "cloud" && state.firebase.ready) {
@@ -4319,6 +4333,9 @@
   function getPublicInviteErrorMessage(error) {
     const code = String(error?.code || "").trim().toLowerCase();
     const message = String(error?.message || "").trim().toLowerCase();
+    if (message === getMissingInviteMessage().toLowerCase()) {
+      return getMissingInviteMessage();
+    }
     if (
       ["permission-denied", "unauthenticated", "unavailable", "failed-precondition", "not-found"].includes(code)
       || message.includes("failed to fetch")
@@ -4377,23 +4394,44 @@
       throw new Error("Cloud invite links are not available until Firebase is fully connected.");
     }
 
-    console.log("[Portaly] loadFrontendCloudInvite token", token);
-    console.log("[Portaly] loadFrontendCloudInvite firebaseReady", state.firebase.ready);
+    const authUser = state.firebase.auth?.currentUser || state.authUser || null;
+    console.log("[Portaly] loadFrontendCloudInvite", {
+      token,
+      firebaseReady: state.firebase.ready,
+      authState: authUser
+        ? {
+          uid: authUser.uid || "",
+          email: authUser.email || ""
+        }
+        : null
+    });
 
     try {
       const snapshot = await state.firebase.db.collection("clientInvites").doc(token).get();
+      console.log("[Portaly] loadFrontendCloudInvite snapshot", {
+        token,
+        exists: snapshot.exists,
+        status: snapshot.exists ? (snapshot.data()?.status || "") : "",
+        inviteId: snapshot.id || ""
+      });
       if (!snapshot.exists) {
-        throw new Error("This Portaly invite could not be found.");
+        throw new Error(getMissingInviteMessage());
       }
       const invite = buildCloudInviteDetails({ id: snapshot.id, ...snapshot.data() }, "cloud-frontend");
       if ((invite?.status || "pending") !== "pending") {
-        throw new Error("This invite link is invalid, expired, or no longer available.");
+        throw new Error(getMissingInviteMessage());
       }
       return invite;
     } catch (error) {
       console.error("[Portaly] loadFrontendCloudInvite failed", {
         token,
         firebaseReady: state.firebase.ready,
+        authState: authUser
+          ? {
+            uid: authUser.uid || "",
+            email: authUser.email || ""
+          }
+          : null,
         errorCode: error?.code || "",
         errorMessage: error?.message || "",
         error
@@ -4456,7 +4494,7 @@
   }
 
   async function loadInviteFlowState(tokenInput = "", options = {}) {
-    const token = String(tokenInput || parseInviteHash() || getStoredPendingInviteToken() || "").trim();
+    const token = String(parseInviteHash() || tokenInput || getStoredPendingInviteToken() || "").trim();
     if (!token) {
       state.inviteFlow = {
         token: "",
@@ -4515,7 +4553,7 @@
             errorMessage: error?.message || "",
             error
           });
-          if (!hasSecureBackend()) {
+          if (!hasSecureBackend() || error?.message === getMissingInviteMessage()) {
             throw error;
           }
         }
@@ -4532,7 +4570,7 @@
 
       const details = result?.invite || null;
       if (!details) {
-        throw new Error("This invite link is invalid, expired, or no longer available.");
+        throw new Error(getMissingInviteMessage());
       }
 
       state.inviteFlow = {
@@ -4554,7 +4592,9 @@
         token,
         loading: false,
         details: null,
-        error: getPublicInviteErrorMessage(error)
+        error: error?.message === getMissingInviteMessage()
+          ? getMissingInviteMessage()
+          : getPublicInviteErrorMessage(error)
       };
       return null;
     }

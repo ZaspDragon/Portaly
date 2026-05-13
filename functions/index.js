@@ -583,16 +583,20 @@ exports.createClientManagerInvite = onRequest(
         .map(docSnap => ({ ref: docSnap.ref, data: docSnap.data() }))
         .find(item => item.data.agencyId === agencyId && item.data.status === "pending");
 
-      const inviteRef = existingPendingInvite ? existingPendingInvite.ref : inviteCollection.doc();
-      const createdAt = existingPendingInvite
-        ? (existingPendingInvite.data.createdAt || nowIso())
+      const reusablePendingInvite = existingPendingInvite
+        && existingPendingInvite.ref.id === existingPendingInvite.data.inviteToken
+        ? existingPendingInvite
+        : null;
+      const inviteToken = reusablePendingInvite ? reusablePendingInvite.ref.id : createInviteToken();
+      const inviteRef = reusablePendingInvite ? reusablePendingInvite.ref : inviteCollection.doc(inviteToken);
+      const createdAt = reusablePendingInvite
+        ? (reusablePendingInvite.data.createdAt || nowIso())
         : nowIso();
-      const inviteToken = createInviteToken();
       const tokenExpiresAt = new Date(Date.now() + (14 * 24 * 60 * 60 * 1000)).toISOString();
       const inviteLink = buildHashUrl(`accept-invite/${inviteToken}`);
 
       const inviteRecord = {
-        id: inviteRef.id,
+        id: inviteToken,
         agencyId,
         email,
         firstName,

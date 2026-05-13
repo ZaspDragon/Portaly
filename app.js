@@ -287,8 +287,23 @@
       renderApp();
       startClock();
     } catch (error) {
-      console.error(error);
-      renderFatalError(error);
+      console.error("[Portaly] initializeApp failed", error);
+      console.error("[Portaly] initializeApp state", {
+        route: state.route,
+        session: state.session,
+        inviteFlow: state.inviteFlow
+      });
+      try {
+        normalizeFilters();
+        applyTheme();
+        state.initialized = true;
+        renderApp();
+        startClock();
+        pushToast("Portaly recovered from a startup issue. Some live data may need a refresh.", "warning");
+      } catch (recoveryError) {
+        console.error("[Portaly] initializeApp recovery failed", recoveryError);
+        renderFatalError(error);
+      }
     }
   }
 
@@ -443,13 +458,25 @@
     if (!state.initialized) {
       return;
     }
-    state.route = normalizeRoute(parseHashRoute());
-    if (state.route === "accept-invite") {
-      await loadInviteFlowState();
+    try {
+      state.route = normalizeRoute(parseHashRoute());
+      if (state.route === "accept-invite") {
+        await loadInviteFlowState();
+      }
+      state.mobileNavOpen = false;
+      applyBodyState();
+      renderApp();
+    } catch (error) {
+      console.error("[Portaly] handleHashChange failed", {
+        route: state.route,
+        error
+      });
+      state.route = "landing";
+      state.mobileNavOpen = false;
+      applyBodyState();
+      renderApp();
+      pushToast("That page could not be loaded. Portaly returned you to the landing page.", "warning");
     }
-    state.mobileNavOpen = false;
-    applyBodyState();
-    renderApp();
   }
 
   async function applyEntryRoute() {
@@ -819,9 +846,24 @@
     }
 
     const collections = collectionsForRole(state.session.role);
+    const failedCollections = [];
     const results = await Promise.all(collections.map(async collection => {
-      const rows = await getData(collection);
-      return [collection, rows];
+      try {
+        const rows = await getData(collection);
+        return [collection, Array.isArray(rows) ? rows.filter(Boolean) : []];
+      } catch (error) {
+        failedCollections.push(collection);
+        console.error("[Portaly] refreshSessionData collection failed", {
+          collection,
+          session: {
+            mode: state.session.mode,
+            role: state.session.role,
+            agencyId: state.session.agencyId
+          },
+          error
+        });
+        return [collection, []];
+      }
     }));
 
     state.cache = emptyStore();
@@ -835,6 +877,9 @@
 
     syncSubscriptionStatus();
     applyTheme();
+    if (failedCollections.length) {
+      pushToast("Some live data could not be loaded. Portaly kept the app running with the data it could recover.", "warning");
+    }
   }
 
   function collectionsForRole(role) {
@@ -4131,7 +4176,7 @@
       if (subscription) {
         await updateData("subscriptions", subscription.id, {
           planId,
-          status: subscription.status || "trialing",
+          status: subscription?.status || "trialing",
           updatedAt: new Date().toISOString()
         });
       }
@@ -4247,7 +4292,7 @@
     console.log("[Portaly] callSecureFunction response", {
       endpoint,
       requestUrl,
-      status: response.status,
+      status: response?.status ?? "unknown",
       body: data
     });
     if (!response.ok) {
@@ -4524,6 +4569,11 @@
         details: null,
         error: error.message || "We could not load this Portaly invite."
       };
+      console.error("[Portaly] loadInviteFlowState failed", {
+        token,
+        inviteFlow: state.inviteFlow,
+        error
+      });
       return null;
     }
   }
@@ -4786,7 +4836,7 @@
       return;
     }
 
-    console.log("[Portaly] sendClientManagerInviteEmail responseStatus", response.status);
+    console.log("[Portaly] sendClientManagerInviteEmail responseStatus", response?.status ?? "unknown");
 
     const responseText = await response.text().catch(() => "");
     let result = {};
@@ -5441,24 +5491,42 @@
       return;
     }
 
-    state.route = normalizeRoute(state.route || parseHashRoute());
-    applyBodyState();
+    try {
+      state.route = normalizeRoute(state.route || parseHashRoute());
+      applyBodyState();
 
-    let html = "";
-    if (state.route === "approval-link") {
-      html = renderApprovalLinkShell();
-    } else if (state.route === "accept-invite") {
-      html = renderPublicShell();
-    } else if (state.session.role === "worker" && state.session.mode !== "public") {
-      html = renderWorkerShell();
-    } else if (state.session.mode === "public" || !state.session.role) {
-      html = renderPublicShell();
-    } else {
-      html = renderOwnerShell();
+      let html = "";
+      if (state.route === "approval-link") {
+        html = renderApprovalLinkShell();
+      } else if (state.route === "accept-invite") {
+        html = renderPublicShell();
+      } else if (state.session.role === "worker" && state.session.mode !== "public") {
+        html = renderWorkerShell();
+      } else if (state.session.mode === "public" || !state.session.role) {
+        html = renderPublicShell();
+      } else {
+        html = renderOwnerShell();
+      }
+
+      root.innerHTML = html + renderModal();
+      renderToasts();
+    } catch (error) {
+      console.error("[Portaly] renderApp failed", {
+        route: state.route,
+        session: state.session,
+        inviteFlow: state.inviteFlow,
+        error
+      });
+      try {
+        state.route = "landing";
+        root.innerHTML = renderPublicShell() + renderModal();
+        pushToast("Portaly recovered from a loading problem. You can keep using the app.", "warning");
+        renderToasts();
+      } catch (fallbackError) {
+        console.error("[Portaly] renderApp fallback failed", fallbackError);
+        renderFatalError(error);
+      }
     }
-
-    root.innerHTML = html + renderModal();
-    renderToasts();
   }
 
   function applyBodyState() {
@@ -6149,15 +6217,17 @@
   }
 
   function renderAcceptInvitePage() {
-    const invite = state.inviteFlow.details;
+    const invite = state.inviteFlow.details || null;
     const authUser = state.firebase.auth?.currentUser || state.authUser || null;
     const authEmail = String(authUser?.email || "").trim().toLowerCase();
     const inviteEmail = String(invite?.email || "").trim().toLowerCase();
+    const inviteStatus = String(invite?.status || "pending");
+    const normalizedInviteStatus = inviteStatus.toLowerCase();
     const emailMatches = !!authEmail && !!inviteEmail && authEmail === inviteEmail;
     const signedInReady = !!authUser && emailMatches;
     const wrongAccount = !!authUser && !!inviteEmail && authEmail !== inviteEmail;
     const inviteExpired = !!invite?.tokenExpiresAt && compareDates(invite.tokenExpiresAt, new Date().toISOString()) < 0;
-    const inviteUnavailable = inviteExpired || (!!invite.status && !["pending", "accepted"].includes(invite.status));
+    const inviteUnavailable = inviteExpired || !["pending", "accepted"].includes(normalizedInviteStatus);
     const assignedClients = (invite?.assignedClientNames || []).filter(Boolean);
     const assignedSites = (invite?.assignedSiteNames || []).filter(Boolean);
 
@@ -6176,6 +6246,13 @@
     }
 
     if (state.inviteFlow.error || !invite) {
+      console.error("[Portaly] renderAcceptInvitePage missing invite", {
+        inviteFlow: state.inviteFlow,
+        authUser: authUser ? {
+          uid: authUser.uid || "",
+          email: authUser.email || ""
+        } : null
+      });
       return `
         <main class="auth-shell">
           <div class="container auth-grid onboarding-auth-grid">
@@ -6230,12 +6307,12 @@
           ? `
             <div class="support-card onboarding-support-card">
               <p class="eyebrow">Access Ready</p>
-              <h3>${invite.status === "accepted" ? "Continue to approvals" : "Accept invite and continue"}</h3>
-              <p>${invite.status === "accepted"
+              <h3>${normalizedInviteStatus === "accepted" ? "Continue to approvals" : "Accept invite and continue"}</h3>
+              <p>${normalizedInviteStatus === "accepted"
                 ? "This invite has already been accepted for your login. Continue to the client approvals workspace."
                 : "Your login is ready. Finish connecting this invite to your approvals workspace."}</p>
               <div class="page-actions" style="margin-top: 16px;">
-                <button class="button button-primary button-block" data-action="accept-client-invite" type="button">${invite.status === "accepted" ? "Continue to Approvals" : "Accept Invite"}</button>
+                <button class="button button-primary button-block" data-action="accept-client-invite" type="button">${normalizedInviteStatus === "accepted" ? "Continue to Approvals" : "Accept Invite"}</button>
               </div>
             </div>
           `
@@ -6344,11 +6421,11 @@
                 </div>
               </div>
             ` : ""}
-            ${invite.status !== "pending" && invite.source !== "demo" ? `
+            ${normalizedInviteStatus !== "pending" && invite.source !== "demo" ? `
               <div class="notice-card warning" style="margin-top: 18px;">
                 <div>
-                  <strong>Status: ${escapeHtml(formatStatusLabel(invite.status || "pending"))}</strong>
-                  <p>${invite.status === "accepted" ? "This invite has already been accepted. Sign in with the invited email to continue." : "This invite is no longer pending. Ask your staffing agency if you need a fresh link."}</p>
+                  <strong>Status: ${escapeHtml(formatStatusLabel(inviteStatus || "pending"))}</strong>
+                  <p>${normalizedInviteStatus === "accepted" ? "This invite has already been accepted. Sign in with the invited email to continue." : "This invite is no longer pending. Ask your staffing agency if you need a fresh link."}</p>
                 </div>
               </div>
             ` : ""}
@@ -9318,7 +9395,7 @@
   }
 
   function getClientInvites(clientId = "", siteId = "") {
-    const invites = getScopedData().clientInvites || [];
+    const invites = (getScopedData().clientInvites || []).filter(Boolean);
     return invites.filter(invite => {
       const inviteClientIds = Array.isArray(invite.assignedClientIds) ? invite.assignedClientIds : [];
       const inviteSiteIds = Array.isArray(invite.assignedSiteIds) ? invite.assignedSiteIds : [];

@@ -602,6 +602,18 @@
     return "This invite no longer exists or has already been accepted.";
   }
 
+  function getMalformedInviteMessage() {
+    return "Invite is malformed.";
+  }
+
+  function getAcceptedInviteMessage() {
+    return "This invite has already been accepted.";
+  }
+
+  function getRevokedInviteMessage() {
+    return "This invite has been revoked.";
+  }
+
   function getStoredPendingInviteToken() {
     return String(window.localStorage.getItem(STORAGE_KEYS.pendingInvite) || "").trim();
   }
@@ -4408,6 +4420,15 @@
     if (message === getMissingInviteMessage().toLowerCase()) {
       return getMissingInviteMessage();
     }
+    if (message === getMalformedInviteMessage().toLowerCase()) {
+      return getMalformedInviteMessage();
+    }
+    if (message === getAcceptedInviteMessage().toLowerCase()) {
+      return getAcceptedInviteMessage();
+    }
+    if (message === getRevokedInviteMessage().toLowerCase()) {
+      return getRevokedInviteMessage();
+    }
     if (
       ["permission-denied", "unauthenticated", "unavailable", "failed-precondition", "not-found"].includes(code)
       || message.includes("failed to fetch")
@@ -4448,6 +4469,7 @@
       createdBy: state.session.userId,
       createdAt,
       updatedAt: createdAt,
+      emailStatus: "pending",
       agencyName: getAgencyName(payload.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
       assignedClientNames: payload.assignedClientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
       assignedSiteNames: payload.assignedSiteIds.map(id => getSiteName(id)).filter(name => name && name !== "Unknown Site"),
@@ -4480,19 +4502,20 @@
 
     try {
       const snapshot = await state.firebase.db.collection("clientInvites").doc(token).get();
+      const snapshotData = snapshot.exists ? (snapshot.data() || {}) : null;
       console.log("[Portaly] loadFrontendCloudInvite snapshot", {
         token,
         exists: snapshot.exists,
-        status: snapshot.exists ? (snapshot.data()?.status || "") : "",
+        status: snapshot.exists ? (snapshotData?.status || "") : "",
         inviteId: snapshot.id || ""
       });
       if (!snapshot.exists) {
         throw new Error(getMissingInviteMessage());
       }
-      const invite = buildCloudInviteDetails({ id: snapshot.id, ...snapshot.data() }, "cloud-frontend");
-      if ((invite?.status || "pending") !== "pending") {
-        throw new Error(getMissingInviteMessage());
+      if (!snapshotData || typeof snapshotData.status !== "string" || !snapshotData.status.trim()) {
+        throw new Error(getMalformedInviteMessage());
       }
+      const invite = buildCloudInviteDetails({ id: snapshot.id, ...snapshotData }, "cloud-frontend");
       return invite;
     } catch (error) {
       console.error("[Portaly] loadFrontendCloudInvite failed", {
@@ -4817,6 +4840,8 @@
       updatedAt: createdAt,
       createdBy: state.session.userId,
       inviteLink: buildClientManagerInviteLink(inviteToken),
+      authAccountExists: false,
+      emailStatus: "pending",
       userId
     };
     return saveData("clientInvites", inviteId, invite);
@@ -6353,15 +6378,15 @@
   function renderAcceptInvitePage() {
     const invite = state.inviteFlow.details || null;
     const authUser = state.firebase.auth?.currentUser || state.authUser || null;
+    const inviteStatus = String(invite?.status || "").trim().toLowerCase();
     const authEmail = String(authUser?.email || "").trim().toLowerCase();
     const inviteEmail = String(invite?.email || "").trim().toLowerCase();
-    const inviteStatus = String(invite?.status || "pending");
-    const normalizedInviteStatus = inviteStatus.toLowerCase();
     const emailMatches = !!authEmail && !!inviteEmail && authEmail === inviteEmail;
     const signedInReady = !!authUser && emailMatches;
     const wrongAccount = !!authUser && !!inviteEmail && authEmail !== inviteEmail;
     const inviteExpired = !!invite?.tokenExpiresAt && compareDates(invite.tokenExpiresAt, new Date().toISOString()) < 0;
-    const inviteUnavailable = inviteExpired || !["pending", "accepted"].includes(normalizedInviteStatus);
+    const inviteMalformed = !inviteStatus;
+    const inviteUnavailable = inviteExpired || inviteMalformed || inviteStatus === "revoked";
     const assignedClients = (invite?.assignedClientNames || []).filter(Boolean);
     const assignedSites = (invite?.assignedSiteNames || []).filter(Boolean);
 
@@ -6408,8 +6433,12 @@
       ? `
         <div class="support-card onboarding-support-card">
           <p class="eyebrow">Invite Unavailable</p>
-          <h3>Ask for a fresh Portaly invite</h3>
-          <p>This link can no longer be used. Contact the staffing agency so they can send a new client manager invite for your site.</p>
+          <h3>${inviteMalformed ? "Invite details need attention" : inviteStatus === "revoked" ? "This invite has been revoked" : "Ask for a fresh Portaly invite"}</h3>
+          <p>${inviteMalformed
+            ? getMalformedInviteMessage()
+            : inviteStatus === "revoked"
+              ? getRevokedInviteMessage()
+              : "This link can no longer be used. Contact the staffing agency so they can send a new client manager invite for your site."}</p>
           <div class="page-actions" style="margin-top: 16px;">
             <button class="button button-secondary button-block" data-action="go-route" data-route="login" type="button">Login</button>
           </div>
@@ -6441,12 +6470,12 @@
           ? `
             <div class="support-card onboarding-support-card">
               <p class="eyebrow">Access Ready</p>
-              <h3>${normalizedInviteStatus === "accepted" ? "Continue to approvals" : "Accept invite and continue"}</h3>
-              <p>${normalizedInviteStatus === "accepted"
+              <h3>${inviteStatus === "accepted" ? "Continue to approvals" : "Accept invite and continue"}</h3>
+              <p>${inviteStatus === "accepted"
                 ? "This invite has already been accepted for your login. Continue to the client approvals workspace."
                 : "Your login is ready. Finish connecting this invite to your approvals workspace."}</p>
               <div class="page-actions" style="margin-top: 16px;">
-                <button class="button button-primary button-block" data-action="accept-client-invite" type="button">${normalizedInviteStatus === "accepted" ? "Continue to Approvals" : "Accept Invite"}</button>
+                <button class="button button-primary button-block" data-action="accept-client-invite" type="button">${inviteStatus === "accepted" ? "Continue to Approvals" : "Accept Invite"}</button>
               </div>
             </div>
           `
@@ -6555,11 +6584,17 @@
                 </div>
               </div>
             ` : ""}
-            ${normalizedInviteStatus !== "pending" && invite.source !== "demo" ? `
+            ${inviteStatus !== "pending" && invite.source !== "demo" ? `
               <div class="notice-card warning" style="margin-top: 18px;">
                 <div>
                   <strong>Status: ${escapeHtml(formatStatusLabel(inviteStatus || "pending"))}</strong>
-                  <p>${normalizedInviteStatus === "accepted" ? "This invite has already been accepted. Sign in with the invited email to continue." : "This invite is no longer pending. Ask your staffing agency if you need a fresh link."}</p>
+                  <p>${inviteMalformed
+                    ? getMalformedInviteMessage()
+                    : inviteStatus === "accepted"
+                      ? getAcceptedInviteMessage()
+                      : inviteStatus === "revoked"
+                        ? getRevokedInviteMessage()
+                        : "This invite is no longer pending. Ask your staffing agency if you need a fresh link."}</p>
                 </div>
               </div>
             ` : ""}

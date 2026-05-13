@@ -618,7 +618,9 @@ exports.createClientManagerInvite = onRequest(
         createdAt,
         updatedAt: nowIso(),
         createdBy: auth.uid,
-        inviteLink
+        inviteLink,
+        authAccountExists: false,
+        emailStatus: "pending"
       };
 
       await inviteRef.set(inviteRecord, { merge: true });

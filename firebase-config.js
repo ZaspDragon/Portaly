@@ -27,7 +27,7 @@ window.PORTALY_FIREBASE_CONFIG = {
   // Leave blank for now until backend is deployed.
   // Example later:
   // "https://us-central1-portaly-d6617.cloudfunctions.net"
-  functionsBaseUrl: "",
+  functionsBaseUrl: "functionsBaseUrl: "https://us-central1-portaly-d6617.cloudfunctions.net",",
 
   // Firebase Web SDK Config
   apiKey: "AIzaSyDfF4mmLeI4IbOl3TsWJnCfMg_nsSfqTp0",

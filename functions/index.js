@@ -186,6 +186,18 @@ function createInviteToken() {
   return crypto.randomBytes(24).toString("hex");
 }
 
+function normalizeInviteStatus(status) {
+  return String(status || "").trim().toLowerCase();
+}
+
+function isPublicInviteStatus(status) {
+  return ["pending", "sent", "opened"].includes(normalizeInviteStatus(status));
+}
+
+function nextInviteStatusAfterEmail(status) {
+  return normalizeInviteStatus(status) === "opened" ? "opened" : "sent";
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -196,9 +208,25 @@ function escapeHtml(value) {
 }
 
 async function getInviteByToken(inviteToken) {
+  const normalizedToken = String(inviteToken || "").trim();
+  if (!normalizedToken) {
+    return null;
+  }
+
+  const directSnap = await admin.firestore().collection("clientInvites").doc(normalizedToken).get();
+  if (directSnap.exists) {
+    return {
+      ref: directSnap.ref,
+      invite: {
+        id: directSnap.id,
+        ...directSnap.data()
+      }
+    };
+  }
+
   const querySnapshot = await admin.firestore()
     .collection("clientInvites")
-    .where("inviteToken", "==", inviteToken)
+    .where("inviteToken", "==", normalizedToken)
     .limit(1)
     .get();
 
@@ -691,7 +719,7 @@ exports.createClientManagerInvite = onRequest(
         .get();
       const existingPendingInvite = existingInviteQuery.docs
         .map(docSnap => ({ ref: docSnap.ref, data: docSnap.data() }))
-        .find(item => item.data.agencyId === agencyId && item.data.status === "pending");
+        .find(item => item.data.agencyId === agencyId && isPublicInviteStatus(item.data.status));
 
       const reusablePendingInvite = existingPendingInvite
         && existingPendingInvite.ref.id === existingPendingInvite.data.inviteToken
@@ -718,6 +746,9 @@ exports.createClientManagerInvite = onRequest(
         status: "pending",
         inviteToken,
         tokenExpiresAt,
+        openedAt: reusablePendingInvite?.data?.openedAt || "",
+        lastOpenedAt: reusablePendingInvite?.data?.lastOpenedAt || "",
+        openedCount: Number(reusablePendingInvite?.data?.openedCount || 0),
         acceptedAt: "",
         acceptedBy: "",
         createdAt,
@@ -728,6 +759,7 @@ exports.createClientManagerInvite = onRequest(
         emailStatus: "pending",
         emailProvider: "gmail",
         providerMessageId: "",
+        resendEmailId: "",
         emailLastError: ""
       };
 
@@ -780,8 +812,8 @@ exports.sendClientManagerInviteEmail = onRequest(
       if (invite.agencyId !== agencyId) {
         throw createHttpError(403, "This invite does not belong to your agency.");
       }
-      if ((invite.status || "pending") !== "pending") {
-        throw createHttpError(409, "Only pending client manager invites can be emailed.");
+      if (!isPublicInviteStatus(invite.status)) {
+        throw createHttpError(409, "Only active client manager invites can be emailed.");
       }
 
       const scopedInvite = await resolveClientInviteScope(invite);
@@ -824,7 +856,9 @@ exports.sendClientManagerInviteEmail = onRequest(
       const resendEmailId = String(emailResult?.data?.id || emailResult?.id || "").trim();
 
       const emailSentAt = nowIso();
+      const nextStatus = nextInviteStatusAfterEmail(invite.status);
       await result.ref.set({
+        status: nextStatus,
         emailSentAt,
         emailSentBy: auth.uid,
         emailStatus: "sent",
@@ -837,6 +871,7 @@ exports.sendClientManagerInviteEmail = onRequest(
       const updatedInvite = {
         ...scopedInvite,
         inviteLink: inviteUrl,
+        status: nextStatus,
         emailSentAt,
         emailSentBy: auth.uid,
         emailStatus: "sent",
@@ -893,8 +928,8 @@ exports.sendClientManagerInviteEmailViaGmail = onRequest(
       if (invite.agencyId !== agencyId) {
         throw createHttpError(403, "This invite does not belong to your agency.");
       }
-      if ((invite.status || "pending") !== "pending") {
-        throw createHttpError(409, "Only pending client manager invites can be emailed.");
+      if (!isPublicInviteStatus(invite.status)) {
+        throw createHttpError(409, "Only active client manager invites can be emailed.");
       }
 
       const scopedInvite = await resolveClientInviteScope(invite);
@@ -936,7 +971,9 @@ exports.sendClientManagerInviteEmailViaGmail = onRequest(
       }
 
       const emailSentAt = nowIso();
+      const nextStatus = nextInviteStatusAfterEmail(invite.status);
       await result.ref.set({
+        status: nextStatus,
         emailSentAt,
         emailSentBy: auth.uid,
         emailStatus: "sent",
@@ -949,6 +986,7 @@ exports.sendClientManagerInviteEmailViaGmail = onRequest(
       const updatedInvite = {
         ...scopedInvite,
         inviteLink: inviteUrl,
+        status: nextStatus,
         emailSentAt,
         emailSentBy: auth.uid,
         emailStatus: "sent",
@@ -992,13 +1030,47 @@ exports.verifyClientManagerInvite = onRequest(
         throw createHttpError(404, "This Portaly invite could not be found.");
       }
 
-      if (result.invite.status === "revoked") {
+      const invite = result.invite;
+      if (invite.status === "revoked") {
         throw createHttpError(410, "This invite is no longer active. Ask the agency to send a new client manager invite.");
+      }
+
+      let verifiedInvite = invite;
+      if (isPublicInviteStatus(invite.status)) {
+        const openedAt = invite.openedAt || nowIso();
+        const lastOpenedAt = nowIso();
+        const openedCount = Math.max(1, Number(invite.openedCount || 0) + 1);
+        verifiedInvite = {
+          ...invite,
+          status: "opened",
+          openedAt,
+          lastOpenedAt,
+          openedCount,
+          updatedAt: lastOpenedAt
+        };
+        await result.ref.set({
+          status: "opened",
+          openedAt,
+          lastOpenedAt,
+          openedCount,
+          updatedAt: lastOpenedAt
+        }, { merge: true });
+        await writeInviteAuditLog({
+          agencyId: invite.agencyId,
+          action: "invite_opened",
+          entityId: invite.id,
+          newValue: {
+            status: "opened",
+            openedAt,
+            lastOpenedAt,
+            openedCount
+          }
+        });
       }
 
       responseJson(res, 200, {
         ok: true,
-        invite: await resolveClientInviteScope(result.invite)
+        invite: await resolveClientInviteScope(verifiedInvite)
       });
     } catch (error) {
       logger.error("verifyClientManagerInvite failed", error);
@@ -1045,6 +1117,9 @@ exports.acceptClientManagerInvite = onRequest(
       if (invite.status === "expired" || (invite.tokenExpiresAt && new Date(invite.tokenExpiresAt) < new Date())) {
         throw createHttpError(410, "This invite has expired. Ask the agency to send a new invite.");
       }
+      if (!isPublicInviteStatus(invite.status) && invite.status !== "accepted") {
+        throw createHttpError(409, "This invite is no longer pending. Ask the agency to send a fresh invite.");
+      }
 
       const userRef = admin.firestore().collection("users").doc(decoded.uid);
       const userSnap = await userRef.get();
@@ -1077,23 +1152,37 @@ exports.acceptClientManagerInvite = onRequest(
         updatedAt: nowIso()
       };
 
+      const acceptedAt = nowIso();
+      const acceptedInvite = {
+        ...invite,
+        status: "accepted",
+        acceptedAt,
+        acceptedBy: decoded.uid,
+        authAccountExists: true,
+        updatedAt: acceptedAt
+      };
+
       await userRef.set(userProfile, { merge: true });
       await result.ref.set({
         status: "accepted",
-        acceptedAt: nowIso(),
+        acceptedAt,
         acceptedBy: decoded.uid,
-        updatedAt: nowIso()
+        authAccountExists: true,
+        updatedAt: acceptedAt
       }, { merge: true });
+      await writeInviteAuditLog({
+        agencyId: invite.agencyId,
+        action: "invite_accepted",
+        entityId: invite.id,
+        actorId: decoded.uid,
+        actorRole: "clientManager",
+        oldValue: invite,
+        newValue: acceptedInvite
+      });
 
       responseJson(res, 200, {
         ok: true,
-        invite: await resolveClientInviteScope({
-          ...invite,
-          status: "accepted",
-          acceptedAt: nowIso(),
-          acceptedBy: decoded.uid,
-          updatedAt: nowIso()
-        }),
+        invite: await resolveClientInviteScope(acceptedInvite),
         user: userProfile
       });
     } catch (error) {

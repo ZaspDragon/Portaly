@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 const { onRequest } = require("firebase-functions/v2/https");
 const { defineSecret, defineString } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
+const { google } = require("googleapis");
 const { Resend } = require("resend");
 
 admin.initializeApp();
@@ -10,6 +11,9 @@ admin.initializeApp();
 const squareAccessToken = defineSecret("SQUARE_ACCESS_TOKEN");
 const squareWebhookSignatureKey = defineSecret("SQUARE_WEBHOOK_SIGNATURE_KEY");
 const resendApiKey = defineSecret("RESEND_API_KEY");
+const gmailOauthClientId = defineSecret("GMAIL_OAUTH_CLIENT_ID");
+const gmailOauthClientSecret = defineSecret("GMAIL_OAUTH_CLIENT_SECRET");
+const gmailOauthRefreshToken = defineSecret("GMAIL_OAUTH_REFRESH_TOKEN");
 const appUrl = defineString("APP_URL", {
   default: "https://zaspdragon.github.io/Portaly/"
 });
@@ -316,6 +320,103 @@ async function sendInviteEmailMessage({ to, subject, html, text }) {
   }
 
   return emailResult;
+}
+
+function isGmailInviteConfigured() {
+  return !!(gmailOauthClientId.value() && gmailOauthClientSecret.value() && gmailOauthRefreshToken.value());
+}
+
+function toBase64Url(value) {
+  return Buffer.from(String(value || ""), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function buildEncodedMimeSubject(subject) {
+  return `=?UTF-8?B?${Buffer.from(String(subject || ""), "utf8").toString("base64")}?=`;
+}
+
+function buildGmailInviteMimeMessage({ from, to, subject, text, html }) {
+  const boundary = `portaly_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return [
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${buildEncodedMimeSubject(subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary=\"${boundary}\"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=\"UTF-8\"",
+    "Content-Transfer-Encoding: 7bit",
+    "",
+    String(text || ""),
+    "",
+    `--${boundary}`,
+    "Content-Type: text/html; charset=\"UTF-8\"",
+    "Content-Transfer-Encoding: 7bit",
+    "",
+    String(html || ""),
+    "",
+    `--${boundary}--`,
+    ""
+  ].join("\r\n");
+}
+
+async function getGmailInviteClient() {
+  if (!isGmailInviteConfigured()) {
+    throw createHttpError(503, "Gmail API is not configured yet. Open Email Draft or copy the invite link and send it manually.");
+  }
+
+  const oauth2Client = new google.auth.OAuth2(
+    gmailOauthClientId.value(),
+    gmailOauthClientSecret.value()
+  );
+  oauth2Client.setCredentials({
+    refresh_token: gmailOauthRefreshToken.value()
+  });
+
+  const gmail = google.gmail({
+    version: "v1",
+    auth: oauth2Client
+  });
+  const profile = await gmail.users.getProfile({
+    userId: "me"
+  });
+  const senderEmail = String(profile?.data?.emailAddress || "").trim();
+  if (!senderEmail) {
+    throw createHttpError(503, "Gmail sender account could not be resolved. Open Email Draft or copy the invite link and send it manually.");
+  }
+
+  return {
+    gmail,
+    senderEmail
+  };
+}
+
+async function sendInviteEmailViaGmailMessage({ to, subject, html, text }) {
+  const { gmail, senderEmail } = await getGmailInviteClient();
+  const mimeMessage = buildGmailInviteMimeMessage({
+    from: `Portaly <${senderEmail}>`,
+    to,
+    subject,
+    text,
+    html
+  });
+  const gmailResult = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: {
+      raw: toBase64Url(mimeMessage)
+    }
+  });
+  console.log("Gmail API response", gmailResult?.data || gmailResult);
+  logger.info("Gmail API response", gmailResult?.data || {});
+
+  return {
+    id: String(gmailResult?.data?.id || "").trim(),
+    threadId: String(gmailResult?.data?.threadId || "").trim()
+  };
 }
 
 async function writeInviteAuditLog({ agencyId, action, entityId, actorId = "", actorRole = "system", oldValue = null, newValue = null, reason = "" }) {
@@ -625,8 +726,8 @@ exports.createClientManagerInvite = onRequest(
         inviteLink,
         authAccountExists: false,
         emailStatus: "pending",
-        emailProvider: "resend",
-        resendEmailId: "",
+        emailProvider: "gmail",
+        providerMessageId: "",
         emailLastError: ""
       };
 
@@ -753,6 +854,118 @@ exports.sendClientManagerInviteEmail = onRequest(
       logger.error("sendClientManagerInviteEmail failed", error);
       responseJson(res, error.status || 500, {
         error: error.message || "Unable to send the client manager invite email."
+      });
+    }
+  }
+);
+
+exports.sendClientManagerInviteEmailViaGmail = onRequest(
+  {
+    cors: inviteCorsOrigins,
+    secrets: [gmailOauthClientId, gmailOauthClientSecret, gmailOauthRefreshToken]
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
+      if (!canInviteClientManagers(auth.profile)) {
+        throw createHttpError(403, "Only agency leadership can send client manager invites.");
+      }
+
+      const inviteId = String(req.body.inviteId || "").trim();
+      const inviteToken = String(req.body.inviteToken || "").trim();
+      const requestedAgencyId = String(req.body.agencyId || "").trim();
+      if (!inviteToken && !inviteId) {
+        throw createHttpError(400, "Invite details are required.");
+      }
+
+      const agencyId = resolveAgencyId(auth.profile, requestedAgencyId);
+      const result = await markInviteExpired(await getInviteByIdOrToken(inviteId, inviteToken));
+      if (!result) {
+        throw createHttpError(404, "This client manager invite could not be found.");
+      }
+
+      const invite = result.invite;
+      if (invite.agencyId !== agencyId) {
+        throw createHttpError(403, "This invite does not belong to your agency.");
+      }
+      if ((invite.status || "pending") !== "pending") {
+        throw createHttpError(409, "Only pending client manager invites can be emailed.");
+      }
+
+      const scopedInvite = await resolveClientInviteScope(invite);
+      const email = String(req.body.email || invite.email || "").trim().toLowerCase();
+      if (!email || email !== String(invite.email || "").trim().toLowerCase()) {
+        throw createHttpError(400, "Invite email does not match the stored client manager invite.");
+      }
+
+      const { agency } = await getAgencyRefAndData(agencyId);
+      const inviteUrl = String(req.body.inviteUrl || scopedInvite.inviteLink || buildHashUrl(`accept-invite/${invite.inviteToken}`)).trim();
+      const emailContent = buildClientInviteEmailContent({
+        firstName: invite.firstName || req.body.firstName || "",
+        agencyName: agency.name || scopedInvite.agencyName || "Portaly Agency",
+        inviteUrl,
+        assignedClientNames: scopedInvite.assignedClientNames || [],
+        assignedSiteNames: scopedInvite.assignedSiteNames || []
+      });
+
+      let gmailResult;
+      try {
+        gmailResult = await sendInviteEmailViaGmailMessage({
+          to: email,
+          subject: emailContent.subject,
+          html: emailContent.html,
+          text: emailContent.text
+        });
+      } catch (error) {
+        const failedAt = nowIso();
+        await result.ref.set({
+          emailSentAt: "",
+          emailSentBy: auth.uid,
+          emailStatus: "failed",
+          emailProvider: "gmail",
+          providerMessageId: "",
+          emailLastError: error.message || "Invite email sending failed.",
+          updatedAt: failedAt
+        }, { merge: true });
+        throw error;
+      }
+
+      const emailSentAt = nowIso();
+      await result.ref.set({
+        emailSentAt,
+        emailSentBy: auth.uid,
+        emailStatus: "sent",
+        emailProvider: "gmail",
+        providerMessageId: gmailResult.id || "",
+        emailLastError: "",
+        updatedAt: emailSentAt
+      }, { merge: true });
+
+      const updatedInvite = {
+        ...scopedInvite,
+        inviteLink: inviteUrl,
+        emailSentAt,
+        emailSentBy: auth.uid,
+        emailStatus: "sent",
+        emailProvider: "gmail",
+        providerMessageId: gmailResult.id || "",
+        emailLastError: "",
+        updatedAt: emailSentAt
+      };
+
+      responseJson(res, 200, {
+        ok: true,
+        invite: updatedInvite
+      });
+    } catch (error) {
+      logger.error("sendClientManagerInviteEmailViaGmail failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to send the client manager invite email through Gmail."
       });
     }
   }

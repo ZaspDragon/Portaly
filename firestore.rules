@@ -115,6 +115,10 @@ service cloud.firestore {
       return get(invitePath(inviteToken)).data;
     }
 
+    function publicInviteStatus(status) {
+      return ['pending', 'sent', 'opened'].hasAny([status]);
+    }
+
     function selfCreatesClientManagerFromInvite() {
       return signedIn()
         && request.auth.uid == request.resource.data.id
@@ -123,7 +127,7 @@ service cloud.firestore {
         && request.resource.data.inviteToken is string
         && inviteExists(request.resource.data.inviteToken)
         && inviteRecord(request.resource.data.inviteToken).inviteToken == request.resource.data.inviteToken
-        && inviteRecord(request.resource.data.inviteToken).status == 'pending'
+        && publicInviteStatus(inviteRecord(request.resource.data.inviteToken).status)
         && inviteRecord(request.resource.data.inviteToken).role == 'clientManager'
         && inviteRecord(request.resource.data.inviteToken).agencyId == request.resource.data.agencyId
         && inviteRecord(request.resource.data.inviteToken).email == request.auth.token.email
@@ -264,7 +268,10 @@ service cloud.firestore {
     }
 
     match /clientInvites/{inviteId} {
-      allow get: if resource.data.status == 'pending';
+      allow get: if publicInviteStatus(resource.data.status) || (signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+      ));
 
       allow list: if signedIn() && (
         isPlatformOwner()

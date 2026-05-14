@@ -34,7 +34,8 @@
     demo: "portaly_demo_store_v6",
     session: "portaly_session_v6",
     routeNotice: "portaly_route_notice_v6",
-    pendingInvite: "portaly_pending_invite_v1"
+    pendingInvite: "portaly_pending_invite_v1",
+    offlinePunchQueue: "portaly_offline_punch_queue_v1"
   };
 
   const DEFAULT_BRAND = "#1f6fff";
@@ -153,6 +154,8 @@
     clockOut: "Clock Out"
   };
 
+  const PUBLIC_INVITE_STATUSES = new Set(["pending", "sent", "opened"]);
+
   const CLIENT_CORRECTION_REASONS = [
     "Missed clock in",
     "Missed clock out",
@@ -205,6 +208,12 @@
       billing: "",
       error: ""
     },
+    network: {
+      isOnline: navigator.onLine !== false,
+      syncingOfflineQueue: false,
+      lastOfflineAt: "",
+      lastOnlineAt: navigator.onLine !== false ? new Date().toISOString() : ""
+    },
     session: {
       mode: "public",
       role: null,
@@ -253,16 +262,63 @@
 
   window.addEventListener("unhandledrejection", event => {
     if (state.initialized) {
-      console.error(event.reason);
-      pushToast("Something went wrong. Please try again.", "danger");
+      reportRuntimeIssue("unhandledrejection", event.reason, {
+        toastMessage: "Something went wrong. Portaly kept the app open so you can keep working."
+      });
     }
   });
 
   window.addEventListener("error", event => {
     if (state.initialized && event.error) {
-      console.error(event.error);
+      reportRuntimeIssue("window.error", event.error, {
+        toastMessage: ""
+      });
     }
   });
+
+  function reportRuntimeIssue(context, error, options = {}) {
+    const details = {
+      context,
+      route: state.route,
+      session: {
+        mode: state.session.mode,
+        role: state.session.role,
+        agencyId: state.session.agencyId,
+        userId: state.session.userId
+      },
+      inviteFlow: {
+        token: state.inviteFlow.token,
+        loading: state.inviteFlow.loading,
+        hasDetails: !!state.inviteFlow.details,
+        error: state.inviteFlow.error
+      },
+      network: state.network,
+      errorCode: error?.code || "",
+      errorMessage: error?.message || String(error || "")
+    };
+    console.error(`[Portaly] ${context}`, details, error);
+    if (options.toastMessage) {
+      pushToast(options.toastMessage, options.toastType || "warning");
+    }
+    return details;
+  }
+
+  function isNetworkErrorLike(error) {
+    const code = String(error?.code || "").toLowerCase();
+    const message = String(error?.message || "").toLowerCase();
+    return [
+      "failed-precondition",
+      "permission-denied",
+      "network-error",
+      "unavailable",
+      "deadline-exceeded"
+    ].includes(code)
+      || message.includes("network")
+      || message.includes("offline")
+      || message.includes("failed to fetch")
+      || message.includes("timeout")
+      || message.includes("could not reach");
+  }
 
   async function initializeApp() {
     renderLoading();
@@ -281,17 +337,18 @@
 
       await applyEntryRoute();
       await refreshSessionData();
+      await flushOfflinePunchQueue({ silent: true });
+      if (state.session.mode === "cloud") {
+        await refreshSessionData();
+      }
       normalizeFilters();
       applyTheme();
       state.initialized = true;
       renderApp();
       startClock();
     } catch (error) {
-      console.error("[Portaly] initializeApp failed", error);
-      console.error("[Portaly] initializeApp state", {
-        route: state.route,
-        session: state.session,
-        inviteFlow: state.inviteFlow
+      reportRuntimeIssue("initializeApp failed", error, {
+        toastMessage: ""
       });
       try {
         normalizeFilters();
@@ -332,6 +389,14 @@
         return;
       }
       void handleInputChange(target);
+    });
+
+    window.addEventListener("online", () => {
+      void handleConnectivityChange(true);
+    });
+
+    window.addEventListener("offline", () => {
+      void handleConnectivityChange(false);
     });
   }
 
@@ -438,6 +503,150 @@
     return detail ? `${defaultMessage} ${detail}` : defaultMessage;
   }
 
+  function loadOfflinePunchQueue() {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEYS.offlinePunchQueue);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+    } catch (error) {
+      reportRuntimeIssue("loadOfflinePunchQueue", error, {
+        toastMessage: ""
+      });
+      return [];
+    }
+  }
+
+  function writeOfflinePunchQueue(queue) {
+    window.localStorage.setItem(STORAGE_KEYS.offlinePunchQueue, JSON.stringify(Array.isArray(queue) ? queue : []));
+  }
+
+  function getOfflinePunchQueueForAgency(agencyId) {
+    const normalizedAgencyId = String(agencyId || "").trim();
+    return loadOfflinePunchQueue()
+      .filter(item => !normalizedAgencyId || String(item?.agencyId || item?.punch?.agencyId || "").trim() === normalizedAgencyId)
+      .map(item => ({
+        ...(item?.punch || {}),
+        id: item?.id || item?.punch?.id || createId("queued"),
+        queuedOffline: true
+      }));
+  }
+
+  function queueOfflinePunch(recordId, punch, error = null) {
+    const queue = loadOfflinePunchQueue();
+    const nextRecord = {
+      id: recordId,
+      agencyId: punch?.agencyId || state.session.agencyId || state.session.agency?.id || "",
+      queuedAt: new Date().toISOString(),
+      retries: 0,
+      errorMessage: error?.message || "",
+      punch: {
+        ...punch,
+        id: recordId,
+        queuedOffline: true
+      }
+    };
+    const withoutExisting = queue.filter(item => item?.id !== recordId);
+    withoutExisting.push(nextRecord);
+    writeOfflinePunchQueue(withoutExisting);
+    return nextRecord;
+  }
+
+  async function flushOfflinePunchQueue(options = {}) {
+    if (state.network.syncingOfflineQueue || state.session.mode !== "cloud" || !state.firebase.ready || !state.firebase.db) {
+      return 0;
+    }
+    if (!state.network.isOnline) {
+      return 0;
+    }
+
+    const queue = loadOfflinePunchQueue();
+    if (!queue.length) {
+      return 0;
+    }
+
+    const sessionAgencyId = state.session.agencyId || state.session.agency?.id || "";
+    const eligible = queue.filter(item => {
+      const itemAgencyId = String(item?.agencyId || item?.punch?.agencyId || "").trim();
+      return !sessionAgencyId || itemAgencyId === sessionAgencyId;
+    });
+    if (!eligible.length) {
+      return 0;
+    }
+
+    state.network.syncingOfflineQueue = true;
+    let syncedCount = 0;
+    const remaining = [];
+
+    try {
+      for (const item of queue) {
+        const belongsToSession = eligible.some(candidate => candidate?.id === item?.id);
+        if (!belongsToSession) {
+          remaining.push(item);
+          continue;
+        }
+
+        try {
+          const savedPunch = await saveData("punches", item.id, {
+            ...(item.punch || {}),
+            queuedOffline: false,
+            syncedAt: new Date().toISOString()
+          });
+          await appendAuditLog("offline_punch_synced", "punches", savedPunch.id, null, savedPunch, {
+            actorId: state.session.userId,
+            actorRole: state.session.role,
+            reason: "offline_queue_flush"
+          });
+          syncedCount += 1;
+        } catch (error) {
+          remaining.push({
+            ...item,
+            retries: Number(item?.retries || 0) + 1,
+            errorMessage: error?.message || ""
+          });
+          reportRuntimeIssue("flushOfflinePunchQueue.item", error, {
+            toastMessage: ""
+          });
+        }
+      }
+
+      writeOfflinePunchQueue(remaining);
+      if (syncedCount && !options.silent) {
+        pushToast(`${syncedCount} queued punch${syncedCount === 1 ? "" : "es"} synced successfully.`, "success");
+      }
+      return syncedCount;
+    } finally {
+      state.network.syncingOfflineQueue = false;
+    }
+  }
+
+  async function handleConnectivityChange(isOnline) {
+    const now = new Date().toISOString();
+    state.network.isOnline = isOnline;
+    state.network.lastOnlineAt = isOnline ? now : state.network.lastOnlineAt;
+    state.network.lastOfflineAt = !isOnline ? now : state.network.lastOfflineAt;
+    if (state.initialized) {
+      pushToast(isOnline ? "Connection restored. Portaly is syncing live data again." : "You are offline. Portaly will keep the app open and queue supported actions.", isOnline ? "success" : "warning");
+      if (isOnline) {
+        try {
+          const syncedCount = await flushOfflinePunchQueue({ silent: true });
+          if (syncedCount) {
+            await refreshSessionData();
+            renderApp();
+            pushToast(`${syncedCount} queued punch${syncedCount === 1 ? "" : "es"} synced successfully.`, "success");
+          } else {
+            renderApp();
+          }
+        } catch (error) {
+          reportRuntimeIssue("handleConnectivityChange.online", error, {
+            toastMessage: "Connection returned, but Portaly could not sync everything yet."
+          });
+        }
+      } else {
+        renderApp();
+      }
+    }
+  }
+
   function renderLoading() {
     const root = document.getElementById("app");
     if (!root) {
@@ -449,6 +658,11 @@
           <p class="eyebrow">Portaly</p>
           <h2>Loading your staffing agency workspace</h2>
           <p>Preparing demo access, cloud auth, worker punch tools, and billing controls.</p>
+          <div class="loading-skeleton-stack" aria-hidden="true">
+            <span class="skeleton-line skeleton-line-lg"></span>
+            <span class="skeleton-line"></span>
+            <span class="skeleton-line skeleton-line-sm"></span>
+          </div>
         </div>
       </div>
     `;
@@ -467,9 +681,8 @@
       applyBodyState();
       renderApp();
     } catch (error) {
-      console.error("[Portaly] handleHashChange failed", {
-        route: state.route,
-        error
+      reportRuntimeIssue("handleHashChange failed", error, {
+        toastMessage: ""
       });
       state.route = "landing";
       state.mobileNavOpen = false;
@@ -863,22 +1076,21 @@
 
     const collections = collectionsForRole(state.session.role);
     const failedCollections = [];
+    const previousCache = state.cache || emptyStore();
     const results = await Promise.all(collections.map(async collection => {
       try {
         const rows = await getData(collection);
         return [collection, Array.isArray(rows) ? rows.filter(Boolean) : []];
       } catch (error) {
         failedCollections.push(collection);
-        console.error("[Portaly] refreshSessionData collection failed", {
-          collection,
-          session: {
-            mode: state.session.mode,
-            role: state.session.role,
-            agencyId: state.session.agencyId
-          },
-          error
+        reportRuntimeIssue("refreshSessionData collection failed", error, {
+          toastMessage: "",
         });
-        return [collection, []];
+        console.warn("[Portaly] refreshSessionData collection fallback", {
+          collection,
+          cachedRows: (previousCache[collection] || []).length
+        });
+        return [collection, Array.isArray(previousCache[collection]) ? deepClone(previousCache[collection]) : []];
       }
     }));
 
@@ -1867,6 +2079,7 @@
     }
     await establishCloudSession(result.user);
     await refreshSessionData();
+    await flushOfflinePunchQueue({ silent: true });
     persistSession();
 
     if (state.profileRepair) {
@@ -2061,6 +2274,7 @@
     console.log("[Portaly] Establishing cloud session");
     await establishCloudSession(authResult.user);
     await refreshSessionData();
+    await flushOfflinePunchQueue({ silent: true });
     navigate("trial-success", { replace: true });
     if (sampleDataError) {
       pushToast("Your free trial is ready, but sample data could not be loaded.", "warning");
@@ -2197,6 +2411,7 @@
     console.log("[Portaly] Establishing cloud session");
     await establishCloudSession(authUser);
     await refreshSessionData();
+    await flushOfflinePunchQueue({ silent: true });
     navigate("trial-success", { replace: true });
     if (sampleDataError) {
       pushToast("Your workspace is ready, but sample data could not be loaded.", "warning");
@@ -2379,6 +2594,9 @@
     const punchDate = values.punchDate || formatDateInput(existing?.timestamp || state.now);
     const punchTime = values.punchTime || formatTimeInput(existing?.timestamp || state.now);
     const timestamp = new Date(`${punchDate}T${punchTime}:00`).toISOString();
+    if (isDuplicatePunchAction(worker.id, values.action || existing?.action || "clockIn", timestamp, existing?.id || "")) {
+      throw new Error("This punch looks like a duplicate of another recent punch for the same worker.");
+    }
     const punch = {
       agencyId: worker.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
       workerId: worker.id,
@@ -2886,6 +3104,9 @@
     }
 
     const timestamp = new Date().toISOString();
+    if (isDuplicatePunchAction(worker.id, action, timestamp)) {
+      throw new Error("That punch was already captured a moment ago. Portaly skipped the duplicate.");
+    }
     const punch = {
       agencyId: worker.agencyId,
       workerId: worker.id,
@@ -2903,9 +3124,27 @@
       notes: ""
     };
 
-    const savedPunch = await saveData("punches", createId("punch"), punch);
-    await appendAuditLog("punch_captured", "punches", savedPunch.id, null, savedPunch);
-    await refreshSessionData();
+    const punchId = createId("punch");
+    let savedPunch;
+    try {
+      savedPunch = await saveData("punches", punchId, punch);
+      await appendAuditLog("punch_captured", "punches", savedPunch.id, null, savedPunch);
+      await refreshSessionData();
+      await flushOfflinePunchQueue({ silent: true });
+    } catch (error) {
+      if (state.session.mode === "cloud" && isNetworkErrorLike(error)) {
+        const queuedPunch = queueOfflinePunch(punchId, punch, error);
+        reportRuntimeIssue("capturePunch offlineQueue", error, {
+          toastMessage: ""
+        });
+        state.notice = `${getWorkerStatusMessage(action === "clockIn" ? "clocked-in" : action === "startLunch" ? "on-lunch" : action === "endLunch" ? "clocked-in" : "clocked-out")} at ${formatDateTime(timestamp)}. Portaly queued this punch and will sync it when the connection returns.`;
+        storeNotice(state.notice);
+        pushToast("Connection dropped. Portaly queued this punch and will sync it automatically.", "warning");
+        renderApp();
+        return queuedPunch;
+      }
+      throw error;
+    }
 
     const messageMap = {
       clockIn: "You are clocked in",
@@ -3160,7 +3399,8 @@
                 <span class="helper-copy">${escapeHtml(invite.email || "-")} - ${escapeHtml(formatStatusLabel(invite.status || "pending"))}</span>
                 <div class="table-actions" style="margin-top: 10px;">
                   <button class="button button-ghost" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" type="button">Copy Invite Link</button>
-                  ${canInviteClientManagers() && (invite.status || "pending") === "pending" ? `<button class="button button-danger" data-action="revoke-client-invite" data-invite-id="${escapeHtml(invite.id)}" type="button">Revoke Invite</button>` : ""}
+                  ${canInviteClientManagers() && PUBLIC_INVITE_STATUSES.has(String(invite.status || "pending").toLowerCase()) ? `<button class="button button-secondary" data-action="send-client-invite-email" ${buildInviteEmailActionAttributes(invite)} type="button">${escapeHtml(getInviteEmailButtonLabel(invite))}</button>` : ""}
+                  ${canInviteClientManagers() && PUBLIC_INVITE_STATUSES.has(String(invite.status || "pending").toLowerCase()) ? `<button class="button button-danger" data-action="revoke-client-invite" data-invite-id="${escapeHtml(invite.id)}" type="button">Revoke Invite</button>` : ""}
                 </div>
               </li>
             `).join("")}
@@ -4334,7 +4574,11 @@
       body: data
     });
     if (!response.ok) {
-      throw new Error(data.error || options.errorMessage || "Portaly could not complete this secure request.");
+      const backendError = new Error(data.error || options.errorMessage || "Portaly could not complete this secure request.");
+      backendError.status = response.status;
+      backendError.body = data;
+      backendError.requestUrl = requestUrl;
+      throw backendError;
     }
     return data;
   }
@@ -4418,6 +4662,13 @@
     return {
       ...invite,
       source,
+      status: String(invite.status || "pending").trim().toLowerCase() || "pending",
+      emailStatus: String(invite.emailStatus || "pending").trim().toLowerCase() || "pending",
+      providerMessageId: invite.providerMessageId || "",
+      resendEmailId: invite.resendEmailId || "",
+      openedCount: Number(invite.openedCount || 0),
+      openedAt: invite.openedAt || "",
+      lastOpenedAt: invite.lastOpenedAt || "",
       inviteLink: invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || invite.id),
       agencyName: invite.agencyName || getAgencyName(invite.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
       assignedClientNames: invite.assignedClientNames || clientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
@@ -4460,6 +4711,51 @@
     return "This invite link is invalid, expired, or no longer available.";
   }
 
+  async function loadInviteFromBackend(token, options = {}) {
+    if (!hasSecureBackend()) {
+      return null;
+    }
+
+    try {
+      const result = await callSecureFunction("verifyClientManagerInvite", {
+        token
+      }, {
+        requireAuth: false,
+        errorMessage: "Portaly could not verify this invite.",
+        networkErrorMessage: "Portaly could not verify this invite."
+      });
+      return buildCloudInviteDetails(result?.invite || null, "cloud-backend");
+    } catch (error) {
+      if (!options.silent) {
+        reportRuntimeIssue("loadInviteFromBackend failed", error, {
+          toastMessage: ""
+        });
+      }
+      return null;
+    }
+  }
+
+  function shouldTrackInviteOpen(invite) {
+    return PUBLIC_INVITE_STATUSES.has(String(invite?.status || "").trim().toLowerCase());
+  }
+
+  async function trackInviteOpened(inviteToken, invite) {
+    if (!inviteToken || !shouldTrackInviteOpen(invite) || !hasSecureBackend()) {
+      return;
+    }
+
+    const refreshedInvite = await loadInviteFromBackend(inviteToken, { silent: true });
+    if (!refreshedInvite) {
+      return;
+    }
+
+    if (state.inviteFlow.token === inviteToken) {
+      state.inviteFlow.details = refreshedInvite;
+      state.inviteFlow.error = "";
+      renderApp();
+    }
+  }
+
   async function createCloudClientManagerInvite(payload) {
     if (!state.firebase.ready || !state.firebase.db) {
       throw new Error("Cloud invite links are not available until Firebase is fully connected.");
@@ -4481,6 +4777,9 @@
       status: "pending",
       inviteToken,
       tokenExpiresAt: addDays(new Date(createdAt), getInviteExpiryDays()).toISOString(),
+      openedAt: "",
+      lastOpenedAt: "",
+      openedCount: 0,
       acceptedAt: "",
       acceptedBy: "",
       createdBy: state.session.userId,
@@ -4489,6 +4788,7 @@
       emailStatus: "pending",
       emailProvider: "gmail",
       providerMessageId: "",
+      resendEmailId: "",
       emailLastError: "",
       agencyName: getAgencyName(payload.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
       assignedClientNames: payload.assignedClientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
@@ -4529,10 +4829,16 @@
         token,
         documentPath,
         exists: snapshot.exists,
+        status: snapshot.exists ? (snapshotData?.status || "") : "",
         inviteId: snapshot.id || "",
         inviteData: snapshotData
       });
       if (!snapshot.exists) {
+        const backendInvite = await loadInviteFromBackend(token, { silent: true });
+        if (backendInvite) {
+          void trackInviteOpened(token, backendInvite);
+          return backendInvite;
+        }
         throw new Error(getMissingInviteMessage());
       }
       if (snapshot.id !== token) {
@@ -4551,8 +4857,15 @@
         throw new Error(getRevokedInviteMessage());
       }
       const invite = buildCloudInviteDetails({ id: snapshot.id, ...snapshotData }, "cloud-frontend");
+      void trackInviteOpened(token, invite);
       return invite;
     } catch (error) {
+      if ((String(error?.code || "").toLowerCase() === "permission-denied" || isNetworkErrorLike(error)) && hasSecureBackend()) {
+        const backendInvite = await loadInviteFromBackend(token, { silent: true });
+        if (backendInvite) {
+          return backendInvite;
+        }
+      }
       console.error("[Portaly] loadFrontendCloudInvite failed", {
         token,
         documentPath,
@@ -4567,13 +4880,27 @@
         errorMessage: error?.message || "",
         error
       });
-      throw new Error(getPublicInviteErrorMessage(error));
+      const publicError = getPublicInviteErrorMessage(error);
+      if (String(error?.code || "").toLowerCase() === "permission-denied") {
+        throw new Error("This invite could not be opened because it is missing pending status or rules were not published.");
+      }
+      throw new Error(publicError);
     }
   }
 
   async function acceptFrontendCloudInvite(invite, authUser) {
     if (!state.firebase.ready || !state.firebase.db) {
       throw new Error("Cloud invite acceptance is not available until Firebase is fully connected.");
+    }
+    const inviteStatus = String(invite?.status || "").trim().toLowerCase();
+    if (inviteStatus === "revoked") {
+      throw new Error(getRevokedInviteMessage());
+    }
+    if (inviteStatus === "expired") {
+      throw new Error("This invite has expired. Ask the agency to send a new invite.");
+    }
+    if (!PUBLIC_INVITE_STATUSES.has(inviteStatus) && inviteStatus !== "accepted") {
+      throw new Error("This invite is no longer pending. Ask your staffing agency for a fresh link.");
     }
 
     const existingProfile = await loadCloudUserProfile(authUser.uid);
@@ -4830,6 +5157,9 @@
       status: "pending",
       inviteToken,
       tokenExpiresAt,
+      openedAt: "",
+      lastOpenedAt: "",
+      openedCount: 0,
       acceptedAt: "",
       acceptedBy: "",
       createdAt,
@@ -4840,6 +5170,7 @@
       emailStatus: "pending",
       emailProvider: "gmail",
       providerMessageId: "",
+      resendEmailId: "",
       emailLastError: "",
       userId
     };
@@ -4860,6 +5191,15 @@
       data-last-name="${escapeAttribute(invite?.lastName || "")}"
       data-link="${escapeAttribute(inviteLink)}"
     `.replace(/\s+/g, " ").trim();
+  }
+
+  function getInviteEmailButtonLabel(invite) {
+    const status = String(invite?.status || "").trim().toLowerCase();
+    const emailStatus = String(invite?.emailStatus || "").trim().toLowerCase();
+    if (emailStatus === "sent" || status === "sent" || status === "opened") {
+      return "Resend Invite";
+    }
+    return "Send Invite Email";
   }
 
   function openInviteSuccessModal(invite) {
@@ -4886,7 +5226,7 @@
         </div>
         <div class="approval-action-row" style="margin-top: 18px;">
           <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(inviteLink)}" data-copy-success="${escapeAttribute("Invite link copied successfully. Send this link to the client manager.")}" type="button">Copy Invite Link</button>
-          <button class="button button-secondary" data-action="send-client-invite-email" ${inviteEmailAttrs} type="button">Send Invite Email</button>
+          <button class="button button-secondary" data-action="send-client-invite-email" ${inviteEmailAttrs} type="button">${escapeHtml(getInviteEmailButtonLabel(invite))}</button>
           <button class="button button-ghost" data-action="open-invite-email-draft" ${inviteEmailAttrs} type="button">Open Email Draft</button>
           <button class="button button-ghost" data-action="magic-link-placeholder" type="button">Magic Link Login</button>
         </div>
@@ -5075,7 +5415,7 @@
           }
           invite = result.invite;
         } catch (error) {
-          if (allowFrontendInviteLinks && error.code === "network-error") {
+          if (allowFrontendInviteLinks && (error.code === "network-error" || [404, 500, 503].includes(Number(error.status || 0)))) {
             console.warn("[Portaly] submitClientManagerInvite falling back to frontend invite links", error);
             invite = await createCloudClientManagerInvite(payload);
           } else {
@@ -5311,8 +5651,8 @@
     if (!invite) {
       throw new Error("That client manager invite could not be found.");
     }
-    if ((invite.status || "pending") !== "pending") {
-      throw new Error("Only pending client manager invites can be revoked.");
+    if (!PUBLIC_INVITE_STATUSES.has(String(invite.status || "pending").toLowerCase())) {
+      throw new Error("Only active client manager invites can be revoked.");
     }
 
     const label = `${invite.firstName || ""} ${invite.lastName || ""}`.trim() || invite.email || "this invite";
@@ -6432,7 +6772,7 @@
     const emailMatches = !!authEmail && !!inviteEmail && authEmail === inviteEmail;
     const signedInReady = !!authUser && emailMatches;
     const wrongAccount = !!authUser && !!inviteEmail && authEmail !== inviteEmail;
-    const inviteExpired = !!invite?.tokenExpiresAt && compareDates(invite.tokenExpiresAt, new Date().toISOString()) < 0;
+    const inviteExpired = inviteStatus === "expired" || (!!invite?.tokenExpiresAt && compareDates(invite.tokenExpiresAt, new Date().toISOString()) < 0);
     const inviteMalformed = !inviteStatus;
     const inviteUnavailable = inviteExpired || inviteMalformed || inviteStatus === "revoked";
     const assignedClients = (invite?.assignedClientNames || []).filter(Boolean);
@@ -6446,6 +6786,11 @@
               <p class="eyebrow">Portaly Invite</p>
               <h3>Loading invite details</h3>
               <p>Checking the assigned client, site, and access details for this approval invite.</p>
+              <div class="loading-skeleton-stack" aria-hidden="true" style="margin-top: 18px;">
+                <span class="skeleton-line skeleton-line-lg"></span>
+                <span class="skeleton-line"></span>
+                <span class="skeleton-line skeleton-line-sm"></span>
+              </div>
             </div>
           </div>
         </main>
@@ -6466,7 +6811,7 @@
             <div class="auth-card onboarding-card">
               <p class="eyebrow">Portaly Invite</p>
               <h3>We could not open this invite</h3>
-              <p>${escapeHtml(state.inviteFlow.error || "This invite could not be found or is no longer available.")}</p>
+                <p>${escapeHtml(state.inviteFlow.error || "This invite could not be found or is no longer available.")}</p>
               <div class="page-actions" style="margin-top: 18px;">
                 <button class="button button-secondary" data-action="go-route" data-route="login" type="button">Login</button>
                 <button class="button button-ghost" data-action="go-route" data-route="demo" type="button">View Demo</button>
@@ -6527,6 +6872,17 @@
               </div>
             </div>
           `
+          : inviteStatus === "accepted"
+            ? `
+              <div class="support-card onboarding-support-card">
+                <p class="eyebrow">Invite Accepted</p>
+                <h3>This invite has already been accepted</h3>
+                <p>Sign in with <strong>${escapeHtml(invite.email || "")}</strong> to continue to the client approvals workspace.</p>
+                <div class="page-actions" style="margin-top: 16px;">
+                  <button class="button button-primary button-block" data-action="go-route" data-route="login" type="button">Login</button>
+                </div>
+              </div>
+            `
           : invite.authAccountExists
             ? `
               <div class="support-card onboarding-support-card">
@@ -8271,8 +8627,8 @@
                       <td>
                         <div class="table-actions">
                           <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(invite.inviteLink || buildClientManagerInviteLink(invite.inviteToken || ""))}" data-copy-success="${escapeAttribute("Invite link copied successfully. Send this link to the client manager.")}" type="button">Copy Invite Link</button>
-                          <button class="button button-ghost" data-action="send-client-invite-email" ${buildInviteEmailActionAttributes(invite)} type="button">Send Invite Email</button>
-                          ${canInviteClientManagers() && (invite.status || "pending") === "pending" ? `<button class="button button-danger" data-action="revoke-client-invite" data-invite-id="${escapeHtml(invite.id)}" type="button">Revoke Invite</button>` : ""}
+                          ${PUBLIC_INVITE_STATUSES.has(String(invite.status || "pending").toLowerCase()) ? `<button class="button button-ghost" data-action="send-client-invite-email" ${buildInviteEmailActionAttributes(invite)} type="button">${escapeHtml(getInviteEmailButtonLabel(invite))}</button>` : ""}
+                          ${canInviteClientManagers() && PUBLIC_INVITE_STATUSES.has(String(invite.status || "pending").toLowerCase()) ? `<button class="button button-danger" data-action="revoke-client-invite" data-invite-id="${escapeHtml(invite.id)}" type="button">Revoke Invite</button>` : ""}
                         </div>
                       </td>
                     </tr>
@@ -9284,8 +9640,32 @@
   }
 
   function renderModeWarnings() {
+    const queuedPunches = state.session.mode === "cloud"
+      ? getOfflinePunchQueueForAgency(state.session.agencyId || state.session.agency?.id || "")
+      : [];
+    const connectivityBanner = !state.network.isOnline
+      ? `
+        <div class="notice-card warning">
+          <div>
+            <strong>You are offline.</strong>
+            <p>Portaly will keep the current page open and queue supported worker punches in this browser until the connection returns.</p>
+          </div>
+        </div>
+      `
+      : queuedPunches.length
+        ? `
+          <div class="notice-card">
+            <div>
+              <strong>${queuedPunches.length} queued punch${queuedPunches.length === 1 ? "" : "es"} waiting to sync</strong>
+              <p>Portaly saved worker punch activity locally and will push it to Cloud Mode automatically when the connection is stable.</p>
+            </div>
+          </div>
+        `
+        : "";
+
     if (state.session.mode === "demo") {
       return `
+        ${connectivityBanner}
         <div class="notice-card warning">
           <div>
             <strong>Demo Mode: data only saves in this browser</strong>
@@ -9310,6 +9690,7 @@
         : "";
 
       return `
+        ${connectivityBanner}
         ${trialNotice}
         <div class="notice-card">
           <div>
@@ -9320,7 +9701,7 @@
       `;
     }
 
-    return "";
+    return connectivityBanner;
   }
 
   function buildAgencyDashboardMetrics(scoped) {
@@ -9550,6 +9931,14 @@
       settings: filterAgency(source.settings)
     };
 
+    if (state.session.mode === "cloud") {
+      const queuedPunches = getOfflinePunchQueueForAgency(agencyId);
+      if (queuedPunches.length) {
+        const existingPunchIds = new Set((scoped.punches || []).map(row => row.id));
+        scoped.punches = [...(scoped.punches || []), ...queuedPunches.filter(row => !existingPunchIds.has(row.id))];
+      }
+    }
+
     if (state.session.role === "worker") {
       return {
         ...scoped,
@@ -9722,6 +10111,20 @@
   function getWorkerLatestPunch(workerId, punches) {
     const todayPunches = getWorkerPunchesForToday(workerId, punches);
     return todayPunches[todayPunches.length - 1] || null;
+  }
+
+  function isDuplicatePunchAction(workerId, action, timestamp, ignorePunchId = "") {
+    const targetTime = new Date(timestamp).getTime();
+    if (!workerId || !action || !Number.isFinite(targetTime)) {
+      return false;
+    }
+    return getWorkerPunches(workerId, getScopedData().punches).some(punch => {
+      if (!punch || punch.id === ignorePunchId || punch.action !== action) {
+        return false;
+      }
+      const punchTime = new Date(punch.timestamp).getTime();
+      return Number.isFinite(punchTime) && Math.abs(punchTime - targetTime) <= 90 * 1000;
+    });
   }
 
   function getWorkerPunches(workerId, punches) {

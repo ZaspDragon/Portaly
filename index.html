@@ -27,6 +27,8 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
     import {
       getAuth,
+      setPersistence,
+      browserLocalPersistence,
       onAuthStateChanged,
       signInWithEmailAndPassword,
       createUserWithEmailAndPassword,
@@ -190,6 +192,11 @@
       } else {
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
+        try {
+          await setPersistence(auth, browserLocalPersistence);
+        } catch (persistenceError) {
+          console.warn("[Portaly] Firebase auth persistence fallback", persistenceError);
+        }
         const db = getFirestore(app);
         let analytics = null;
         let getAnalytics = () => null;

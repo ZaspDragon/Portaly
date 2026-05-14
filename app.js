@@ -1597,6 +1597,17 @@
             inviteUrl: trigger.dataset.link || ""
           });
           break;
+        case "open-invite-email-draft":
+          openInviteEmailDraft({
+            inviteId: trigger.dataset.inviteId || "",
+            inviteToken: trigger.dataset.inviteToken || "",
+            agencyId: trigger.dataset.agencyId || "",
+            email: trigger.dataset.email || "",
+            firstName: trigger.dataset.firstName || "",
+            lastName: trigger.dataset.lastName || "",
+            inviteUrl: trigger.dataset.link || ""
+          });
+          break;
         case "magic-link-placeholder":
           pushToast("Passwordless email link sign-in is the next step. For now, use the invite link to set up email and password access.", "warning");
           break;
@@ -4476,8 +4487,8 @@
       createdAt,
       updatedAt: createdAt,
       emailStatus: "pending",
-      emailProvider: "resend",
-      resendEmailId: "",
+      emailProvider: "gmail",
+      providerMessageId: "",
       emailLastError: "",
       agencyName: getAgencyName(payload.agencyId) || getCurrentAgency()?.name || "Portaly Agency",
       assignedClientNames: payload.assignedClientIds.map(id => getClientName(id)).filter(name => name && name !== "Unknown Client"),
@@ -4827,8 +4838,8 @@
       inviteLink: buildClientManagerInviteLink(inviteToken),
       authAccountExists: false,
       emailStatus: "pending",
-      emailProvider: "resend",
-      resendEmailId: "",
+      emailProvider: "gmail",
+      providerMessageId: "",
       emailLastError: "",
       userId
     };
@@ -4876,6 +4887,7 @@
         <div class="approval-action-row" style="margin-top: 18px;">
           <button class="button button-primary" data-action="copy-link" data-copy="${escapeAttribute(inviteLink)}" data-copy-success="${escapeAttribute("Invite link copied successfully. Send this link to the client manager.")}" type="button">Copy Invite Link</button>
           <button class="button button-secondary" data-action="send-client-invite-email" ${inviteEmailAttrs} type="button">Send Invite Email</button>
+          <button class="button button-ghost" data-action="open-invite-email-draft" ${inviteEmailAttrs} type="button">Open Email Draft</button>
           <button class="button button-ghost" data-action="magic-link-placeholder" type="button">Magic Link Login</button>
         </div>
         <p class="helper-copy" style="margin-top: 16px;">You've been invited to Portaly to review and approve timecards for your assigned site.</p>
@@ -4886,11 +4898,6 @@
       cancelLabel: "Close",
       size: "small"
     });
-  }
-
-  function openInviteEmailPlaceholder(link, email) {
-    console.log("[Portaly] client manager invite email fallback", { link, email });
-    pushToast("Email sending is coming soon. For now, copy the invite link and send it by email or text.", "warning");
   }
 
   function normalizeInviteEmailPayload(values = {}) {
@@ -4909,6 +4916,44 @@
     };
   }
 
+  function buildInviteEmailDraft(values = {}) {
+    const payload = normalizeInviteEmailPayload(values);
+    const inviteRecord = payload.inviteId ? findRecord("clientInvites", payload.inviteId) : null;
+    const agencyName = inviteRecord?.agencyName || getAgencyName(payload.agencyId) || getCurrentAgency()?.name || "Portaly Agency";
+    const subject = "You've been invited to approve timecards in Portaly";
+    const body = [
+      `Hi ${payload.firstName || "there"},`,
+      "",
+      `${agencyName} has invited you to Portaly to review and approve assigned site timecards.`,
+      "",
+      "Use this secure invite link to set up access:",
+      payload.inviteUrl,
+      "",
+      "If the link does not open, copy and paste it into your browser."
+    ].join("\n");
+    const gmailComposeUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(payload.email)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    return {
+      payload,
+      subject,
+      body,
+      gmailComposeUrl
+    };
+  }
+
+  function openInviteEmailDraft(values = {}, toastMessage = "A Gmail draft was opened so you can send the invite manually.") {
+    const draft = buildInviteEmailDraft(values);
+    console.log("[Portaly] openInviteEmailDraft", {
+      email: draft.payload.email,
+      inviteToken: draft.payload.inviteToken,
+      inviteUrl: draft.payload.inviteUrl,
+      gmailComposeUrl: draft.gmailComposeUrl
+    });
+    window.open(draft.gmailComposeUrl, "_blank", "noopener");
+    if (toastMessage) {
+      pushToast(toastMessage, "warning");
+    }
+  }
+
   async function sendClientManagerInviteEmail(values = {}) {
     const payload = normalizeInviteEmailPayload(values);
     if (!payload.inviteToken || !payload.email) {
@@ -4921,7 +4966,7 @@
     console.log("[Portaly] sendClientManagerInviteEmail inviteUrl", payload.inviteUrl);
 
     if (!functionsBaseUrl) {
-      openInviteEmailPlaceholder(payload.inviteUrl, payload.email);
+      openInviteEmailDraft(payload, "Gmail API is not connected yet. A draft was opened so you can send the invite manually.");
       return;
     }
 
@@ -4930,7 +4975,7 @@
       throw new Error("Sign in to your cloud agency before sending invite emails.");
     }
     const idToken = await authUser.getIdToken();
-    const requestUrl = `${functionsBaseUrl}/sendClientManagerInviteEmail`;
+    const requestUrl = `${functionsBaseUrl}/sendClientManagerInviteEmailViaGmail`;
     console.log("[Portaly] sendClientManagerInviteEmail requestUrl", requestUrl);
 
     let response;
@@ -4948,7 +4993,7 @@
       });
     } catch (error) {
       console.error("[Portaly] sendClientManagerInviteEmail fetchError", error);
-      pushToast("Could not reach invite email backend. Invite link was still created. Copy the link manually.", "warning");
+      openInviteEmailDraft(payload, "Could not reach the Gmail invite backend. A draft was opened so you can send the invite manually.");
       return;
     }
 
@@ -4974,7 +5019,12 @@
       } catch (refreshError) {
         console.error("[Portaly] sendClientManagerInviteEmail refreshAfterErrorFailed", refreshError);
       }
-      throw new Error(result.error || result.message || "Portaly could not send this invite email.");
+      const backendMessage = result.error || result.message || "Portaly could not send this invite email.";
+      if (response.status === 503 || /gmail api/i.test(backendMessage) || /gmail invite email/i.test(backendMessage)) {
+        openInviteEmailDraft(payload, "Gmail API is not configured yet. A draft was opened so you can send the invite manually.");
+        return;
+      }
+      throw new Error(backendMessage);
     }
 
     await refreshSessionData();

@@ -26,6 +26,10 @@ window.PORTALY_FIREBASE_CONFIG = {
   // Firebase Functions
   functionsBaseUrl: "https://us-central1-portaly-d6617.cloudfunctions.net",
 
+  // Optional custom invite backend.
+  // Leave blank to let Portaly save pending client manager invites directly in Firestore from GitHub Pages.
+  inviteBackendUrl: "",
+
   // Firebase Web SDK Config
   apiKey: "AIzaSyDfF4mmLeI4IbOl3TsWJnCfMg_nsSfqTp0",
   authDomain: "portaly-d6617.firebaseapp.com",

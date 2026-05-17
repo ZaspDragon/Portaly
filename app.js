@@ -498,6 +498,32 @@
     return normalized;
   }
 
+  function hasConfiguredFirebaseCloudMode() {
+    const config = state.firebase.config || normalizeFirebaseConfig(window.PORTALY_FIREBASE_CONFIG || {});
+    const firebaseConfig = config.firebaseConfig || {};
+    return !!(
+      config.enabled
+      && firebaseConfig.apiKey
+      && firebaseConfig.authDomain
+      && firebaseConfig.projectId
+      && firebaseConfig.appId
+    );
+  }
+
+  function renderFirebaseSetupNotice(options = {}) {
+    const margin = options.margin || "18px 0";
+    const title = options.title || "Cloud setup is not complete yet.";
+    const body = options.body || "Portaly can still run from GitHub Pages without a custom domain. Add your Firebase web config and make sure https://zaspdragon.github.io and localhost are listed in Firebase Authentication authorized domains when you are ready to turn on Cloud Mode.";
+    return `
+      <div class="notice-card warning" style="margin: ${escapeAttribute(margin)};">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(body)}</p>
+        </div>
+      </div>
+    `;
+  }
+
   function getFirebaseUnavailableMessage(defaultMessage) {
     const detail = String(state.firebase.error || "").trim();
     return detail ? `${defaultMessage} ${detail}` : defaultMessage;
@@ -1617,6 +1643,9 @@
         case "go-route":
           navigate(trigger.dataset.route || getHomeRoute());
           break;
+        case "reload-app":
+          window.location.reload();
+          break;
         case "logout":
           await handleLogout();
           break;
@@ -1916,6 +1945,7 @@
   async function handleFormSubmit(form) {
     const formName = form.dataset.form;
     const values = readFormValues(form);
+    setFormBusyState(form, true);
 
     try {
       switch (formName) {
@@ -1982,9 +2012,25 @@
           break;
       }
     } catch (error) {
-      console.error(error);
+      reportRuntimeIssue(`handleFormSubmit:${formName || "unknown"}`, error, {
+        toastMessage: ""
+      });
       pushToast(error.message || "We could not save that change.", "danger");
+    } finally {
+      setFormBusyState(form, false);
     }
+  }
+
+  function setFormBusyState(form, isBusy) {
+    if (!form) {
+      return;
+    }
+    form.dataset.busy = isBusy ? "true" : "false";
+    form.setAttribute("aria-busy", isBusy ? "true" : "false");
+    const submitControls = form.querySelectorAll('button[type="submit"], input[type="submit"]');
+    submitControls.forEach(control => {
+      control.disabled = !!isBusy;
+    });
   }
 
   async function handleInputChange(target) {
@@ -4501,12 +4547,38 @@
     renderApp();
   }
 
-  function getFunctionsBaseUrl() {
-    return String(BILLING_CONFIG.functionsBaseUrl || state.firebase.config.functionsBaseUrl || "").trim().replace(/\/$/, "");
+  function normalizeConfigUrl(value) {
+    return String(value || "").trim().replace(/\/$/, "");
   }
 
-  function hasSecureBackend() {
-    return !!getFunctionsBaseUrl();
+  function resolveEndpointUrl(baseOrEndpoint, endpoint) {
+    const normalized = normalizeConfigUrl(baseOrEndpoint);
+    if (!normalized) {
+      return "";
+    }
+    const suffix = `/${String(endpoint || "").trim().replace(/^\//, "")}`;
+    if (!suffix || suffix === "/") {
+      return normalized;
+    }
+    return normalized.toLowerCase().endsWith(suffix.toLowerCase())
+      ? normalized
+      : `${normalized}${suffix}`;
+  }
+
+  function getFunctionsBaseUrl() {
+    return normalizeConfigUrl(BILLING_CONFIG.functionsBaseUrl || state.firebase.config.functionsBaseUrl || "");
+  }
+
+  function getInviteBackendUrl() {
+    return normalizeConfigUrl(state.firebase.config.inviteBackendUrl || window.PORTALY_FIREBASE_CONFIG?.inviteBackendUrl || "");
+  }
+
+  function hasSecureBackend(baseUrl = "") {
+    return !!normalizeConfigUrl(baseUrl || getFunctionsBaseUrl());
+  }
+
+  function hasInviteBackend() {
+    return !!getInviteBackendUrl();
   }
 
   function getBillingFunctionsBaseUrl() {
@@ -4519,8 +4591,9 @@
 
   async function callSecureFunction(endpoint, payload = {}, options = {}) {
     const requireAuth = options.requireAuth !== false;
+    const requestBaseUrl = normalizeConfigUrl(options.baseUrl || getFunctionsBaseUrl());
 
-    if (!hasSecureBackend()) {
+    if (!requestBaseUrl) {
       if (typeof options.onNoBackend === "function") {
         options.onNoBackend();
         return null;
@@ -4539,7 +4612,7 @@
       headers.Authorization = `Bearer ${await state.firebase.auth.currentUser.getIdToken()}`;
     }
 
-    const requestUrl = `${getFunctionsBaseUrl()}/${endpoint}`;
+    const requestUrl = resolveEndpointUrl(requestBaseUrl, endpoint);
     console.log("[Portaly] callSecureFunction requestUrl", requestUrl);
     let response;
     try {
@@ -4712,7 +4785,8 @@
   }
 
   async function loadInviteFromBackend(token, options = {}) {
-    if (!hasSecureBackend()) {
+    const inviteBackendUrl = getInviteBackendUrl();
+    if (!inviteBackendUrl) {
       return null;
     }
 
@@ -4720,6 +4794,7 @@
       const result = await callSecureFunction("verifyClientManagerInvite", {
         token
       }, {
+        baseUrl: inviteBackendUrl,
         requireAuth: false,
         errorMessage: "Portaly could not verify this invite.",
         networkErrorMessage: "Portaly could not verify this invite."
@@ -4740,7 +4815,7 @@
   }
 
   async function trackInviteOpened(inviteToken, invite) {
-    if (!inviteToken || !shouldTrackInviteOpen(invite) || !hasSecureBackend()) {
+    if (!inviteToken || !shouldTrackInviteOpen(invite) || !hasInviteBackend()) {
       return;
     }
 
@@ -4756,7 +4831,7 @@
     }
   }
 
-  async function createCloudClientManagerInvite(payload) {
+  async function createCloudClientManagerInvite(payload, options = {}) {
     if (!state.firebase.ready || !state.firebase.db) {
       throw new Error("Cloud invite links are not available until Firebase is fully connected.");
     }
@@ -4775,6 +4850,7 @@
       assignedClientIds: payload.assignedClientIds,
       assignedSiteIds: payload.assignedSiteIds,
       status: "pending",
+      inviteMode: options.inviteMode || payload.inviteMode || "firestoreFallback",
       inviteToken,
       tokenExpiresAt: addDays(new Date(createdAt), getInviteExpiryDays()).toISOString(),
       openedAt: "",
@@ -4786,7 +4862,7 @@
       createdAt,
       updatedAt: createdAt,
       emailStatus: "pending",
-      emailProvider: "gmail",
+      emailProvider: options.emailProvider || payload.emailProvider || "manual",
       providerMessageId: "",
       resendEmailId: "",
       emailLastError: "",
@@ -4860,7 +4936,7 @@
       void trackInviteOpened(token, invite);
       return invite;
     } catch (error) {
-      if ((String(error?.code || "").toLowerCase() === "permission-denied" || isNetworkErrorLike(error)) && hasSecureBackend()) {
+      if ((String(error?.code || "").toLowerCase() === "permission-denied" || isNetworkErrorLike(error)) && hasInviteBackend()) {
         const backendInvite = await loadInviteFromBackend(token, { silent: true });
         if (backendInvite) {
           return backendInvite;
@@ -5083,7 +5159,7 @@
       <div class="notice-card">
         <div>
           <strong>Invite a client manager to review and approve timecards.</strong>
-          <p>Portaly will keep their access limited to the assigned client and site only.</p>
+          <p>Portaly will keep their access limited to the assigned client and site only. If automated email is not connected yet, the invite will still be saved as pending so you can copy the link or activate the manager manually.</p>
         </div>
       </div>
       <div class="form-row two">
@@ -5155,6 +5231,7 @@
       assignedClientIds: payload.assignedClientIds,
       assignedSiteIds: payload.assignedSiteIds,
       status: "pending",
+      inviteMode: "demoFallback",
       inviteToken,
       tokenExpiresAt,
       openedAt: "",
@@ -5168,7 +5245,7 @@
       inviteLink: buildClientManagerInviteLink(inviteToken),
       authAccountExists: false,
       emailStatus: "pending",
-      emailProvider: "gmail",
+      emailProvider: "manual",
       providerMessageId: "",
       resendEmailId: "",
       emailLastError: "",
@@ -5213,11 +5290,22 @@
       ...invite,
       inviteLink
     });
+    const fallbackInviteMessage = invite.inviteMode === "firestoreFallback"
+      ? `
+        <div class="notice-card" style="margin: 0 0 16px;">
+          <div>
+            <strong>Invite saved as pending.</strong>
+            <p>Email sending is not connected yet, but the manager can be activated manually.</p>
+          </div>
+        </div>
+      `
+      : "";
     openModal("Client Manager Invite Ready", `
       <div class="approval-review-card">
         <p class="eyebrow">Invite ready</p>
         <h3>Copy this secure invite link and send it to the client manager.</h3>
         <p>The client manager will use this invite to set up access and approve assigned site timecards in Portaly.</p>
+        ${fallbackInviteMessage}
         <div class="detail-grid" style="margin-top: 18px;">
           ${renderDetailBox("Email", invite.email || "-")}
           ${renderDetailBox("Status", formatStatusLabel(invite.status || "pending"))}
@@ -5391,20 +5479,23 @@
       phone: values.phone || "",
       assignedClientIds,
       assignedSiteIds,
-      agencyId
+      agencyId,
+      inviteMode: "firestoreFallback"
     };
 
-    const functionsBaseUrl = getFunctionsBaseUrl();
+    const inviteBackendUrl = getInviteBackendUrl();
     const allowFrontendInviteLinks = window.PORTALY_FIREBASE_CONFIG?.inviteConfig?.allowFrontendInviteLinks === true || canUseFrontendInviteLinks();
-    console.log("[Portaly] submitClientManagerInvite functionsBaseUrl", functionsBaseUrl || "(empty)");
+    console.log("[Portaly] submitClientManagerInvite inviteBackendUrl", inviteBackendUrl || "(empty)");
     console.log("[Portaly] submitClientManagerInvite allowFrontendInviteLinks", allowFrontendInviteLinks);
     console.log("[Portaly] submitClientManagerInvite payload", payload);
 
     let invite;
+    let usedFallbackInviteMode = false;
     if (state.session.mode === "cloud") {
-      if (functionsBaseUrl) {
+      if (inviteBackendUrl) {
         try {
           const result = await callSecureFunction("createClientManagerInvite", payload, {
+            baseUrl: inviteBackendUrl,
             requireAuth: true,
             authMessage: "Sign in to your cloud agency before inviting client managers.",
             errorMessage: "Portaly could not create this client manager invite.",
@@ -5413,19 +5504,27 @@
           if (!result?.invite) {
             return;
           }
-          invite = result.invite;
+          invite = buildCloudInviteDetails(result.invite, "cloud-backend") || result.invite;
         } catch (error) {
-          if (allowFrontendInviteLinks && (error.code === "network-error" || [404, 500, 503].includes(Number(error.status || 0)))) {
-            console.warn("[Portaly] submitClientManagerInvite falling back to frontend invite links", error);
-            invite = await createCloudClientManagerInvite(payload);
+          if (allowFrontendInviteLinks) {
+            console.warn("[Portaly] submitClientManagerInvite falling back to Firestore invite storage", error);
+            invite = await createCloudClientManagerInvite(payload, {
+              inviteMode: "firestoreFallback",
+              emailProvider: "manual"
+            });
+            usedFallbackInviteMode = true;
           } else {
             throw error;
           }
         }
       } else if (allowFrontendInviteLinks) {
-        invite = await createCloudClientManagerInvite(payload);
+        invite = await createCloudClientManagerInvite(payload, {
+          inviteMode: "firestoreFallback",
+          emailProvider: "manual"
+        });
+        usedFallbackInviteMode = true;
       } else {
-        throw new Error("Client manager invites need the secure backend URL before Cloud Mode can send them.");
+        throw new Error("Client manager invites are not connected yet. Turn on frontend invite links or add an invite backend URL.");
       }
     } else {
       invite = await createDemoClientManagerInvite(payload);
@@ -5439,6 +5538,9 @@
     });
     state.modal = null;
     await refreshCurrentView();
+    if (usedFallbackInviteMode) {
+      pushToast("Invite saved as pending. Email sending is not connected yet, but the manager can be activated manually.", "success");
+    }
     const inviteLink = invite?.inviteLink || buildClientManagerInviteLink(invite?.inviteToken || invite?.id || "");
     if (inviteLink) {
       try {
@@ -5582,16 +5684,17 @@
           errorMessage: error?.message || "",
           error
         });
-        if (!hasSecureBackend()) {
+        if (!hasInviteBackend()) {
           throw error;
         }
       }
     }
-    if (!result && hasSecureBackend()) {
+    if (!result && hasInviteBackend()) {
       try {
         result = await callSecureFunction("acceptClientManagerInvite", {
           token: invite.inviteToken || state.inviteFlow.token
         }, {
+          baseUrl: getInviteBackendUrl(),
           requireAuth: true,
           authMessage: "Sign in with the invited email before continuing.",
           errorMessage: "Portaly could not finish accepting this invite.",
@@ -6694,6 +6797,22 @@
   }
 
   function renderLoginPage() {
+    const cloudConfigured = hasConfiguredFirebaseCloudMode();
+    const cloudStatusNotice = !cloudConfigured
+      ? renderFirebaseSetupNotice({
+        margin: "0 0 18px",
+        body: "Portaly can still run from GitHub Pages without a custom domain. Add your Firebase web config and make sure https://zaspdragon.github.io and localhost are listed in Firebase Authentication authorized domains when you are ready to turn on Cloud Mode."
+      })
+      : (!state.firebase.ready && state.firebase.error
+        ? `
+          <div class="notice-card warning" style="margin: 0 0 18px;">
+            <div>
+              <strong>Cloud login is still connecting.</strong>
+              <p>${escapeHtml(state.firebase.error)}</p>
+            </div>
+          </div>
+        `
+        : "");
     const localPreviewWarning = isLocalFilePreview()
       ? `
         <div class="notice-card warning" style="margin: 0 0 18px;">
@@ -6722,6 +6841,7 @@
             <p class="eyebrow">Cloud Mode</p>
             <h3>Login</h3>
             <p>Real users sign in with Firebase Authentication. Workers go straight to the punch screen. Client managers land in Approvals. Owners and admins land in the command center.</p>
+            ${cloudStatusNotice}
             ${localPreviewWarning}
             ${pendingInviteNotice}
             <form class="form-grid" data-form="login">
@@ -6734,7 +6854,7 @@
                 <input id="login-password" name="password" type="password" placeholder="Enter your password" />
               </div>
               <div class="page-actions">
-                <button class="button button-primary button-block" type="submit">Login</button>
+                <button class="button button-primary button-block" type="submit" ${cloudConfigured ? "" : "disabled"}>Login</button>
               </div>
             </form>
             <div class="auth-link-row">
@@ -7074,6 +7194,7 @@
   }
 
   function renderTrialPage() {
+    const cloudConfigured = hasConfiguredFirebaseCloudMode();
     const configReady = !!state.firebase.ready;
     const localPreviewWarning = isLocalFilePreview()
       ? `
@@ -7093,14 +7214,19 @@
             <h3>Create your agency account</h3>
             <p>Start a real ${Number((state.firebase.config && state.firebase.config.trialDays) || 14)}-day free trial. We create the agency record, owner profile, and trial status automatically.</p>
             ${localPreviewWarning}
-            ${configReady ? "" : `
-              <div class="notice-card warning" style="margin: 18px 0;">
-                <div>
-                  <strong>Cloud Mode is not configured yet.</strong>
-                  <p>${escapeHtml(state.firebase.error || "Paste your Firebase config into firebase-config.js before using real sign-up.")}</p>
+            ${cloudConfigured
+              ? (configReady ? "" : `
+                <div class="notice-card warning" style="margin: 18px 0;">
+                  <div>
+                    <strong>Cloud Mode is still connecting.</strong>
+                    <p>${escapeHtml(state.firebase.error || "Portaly is still waiting for Firebase to finish loading.")}</p>
+                  </div>
                 </div>
-              </div>
-            `}
+              `)
+              : renderFirebaseSetupNotice({
+                margin: "18px 0",
+                body: "Portaly can still run from GitHub Pages without a custom domain. Add your Firebase web config and make sure https://zaspdragon.github.io and localhost are listed in Firebase Authentication authorized domains before using real agency sign-up."
+              })}
             <form class="form-grid" data-form="trial">
               <div class="field-group">
                 <label for="trial-agency-name">Agency name</label>
@@ -7150,7 +7276,7 @@
                 <span>Load sample clients, sites, workers, timesheets, and punches into the new agency.</span>
               </label>
               <div class="page-actions">
-                <button class="button button-primary button-block" type="submit">Start Free Trial</button>
+                <button class="button button-primary button-block" type="submit" ${cloudConfigured ? "" : "disabled"}>Start Free Trial</button>
               </div>
             </form>
           </div>
@@ -11584,6 +11710,11 @@
           <p class="eyebrow">Portaly</p>
           <h2>Something failed while starting the app</h2>
           <p>${escapeHtml(error.message || "Unknown startup error")}</p>
+          <p class="helper-copy" style="margin-top: 10px;">Portaly logged the full error in the console and kept a recovery screen visible so the page does not go blank.</p>
+          <div class="page-actions" style="margin-top: 18px;">
+            <button class="button button-primary" data-action="reload-app" type="button">Reload Portaly</button>
+            <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Open Demo Mode</button>
+          </div>
         </div>
       </div>
     `;

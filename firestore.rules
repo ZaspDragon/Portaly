@@ -219,6 +219,71 @@ service cloud.firestore {
       ]);
     }
 
+    function sitePunchDirectoryPath(siteId) {
+      return /databases/$(database)/documents/sitePunchDirectories/$(siteId);
+    }
+
+    function sitePunchDirectoryExists(siteId) {
+      return siteId is string && exists(sitePunchDirectoryPath(siteId));
+    }
+
+    function sitePunchDirectoryRecord(siteId) {
+      return get(sitePunchDirectoryPath(siteId)).data;
+    }
+
+    function publicPunchAction(action) {
+      return ['clockIn', 'startLunch', 'endLunch', 'clockOut'].hasAny([action]);
+    }
+
+    function publicSitePunchCreate() {
+      return request.resource.data.id == request.resource.id
+        && request.resource.data.keys().hasOnly([
+          'id',
+          'agencyId',
+          'companyId',
+          'companyName',
+          'clientId',
+          'clientName',
+          'siteId',
+          'siteName',
+          'workerId',
+          'workerName',
+          'workerMatched',
+          'action',
+          'timestamp',
+          'localDate',
+          'source',
+          'createdAt',
+          'deviceInfo'
+        ])
+        && request.resource.data.source == 'siteQR'
+        && request.resource.data.agencyId is string
+        && request.resource.data.companyId is string
+        && request.resource.data.companyName is string
+        && request.resource.data.clientId is string
+        && request.resource.data.clientName is string
+        && request.resource.data.siteId is string
+        && request.resource.data.siteName is string
+        && request.resource.data.workerName is string
+        && request.resource.data.workerMatched is bool
+        && publicPunchAction(request.resource.data.action)
+        && request.resource.data.timestamp is string
+        && request.resource.data.localDate is string
+        && request.resource.data.createdAt is string
+        && request.resource.data.deviceInfo is string
+        && (request.resource.data.workerId == null || request.resource.data.workerId is string)
+        && sitePunchDirectoryExists(request.resource.data.siteId)
+        && sitePunchDirectoryRecord(request.resource.data.siteId).status == 'active'
+        && sitePunchDirectoryRecord(request.resource.data.siteId).qrEnabled == true
+        && sitePunchDirectoryRecord(request.resource.data.siteId).agencyId == request.resource.data.agencyId
+        && sitePunchDirectoryRecord(request.resource.data.siteId).companyId == request.resource.data.companyId
+        && sitePunchDirectoryRecord(request.resource.data.siteId).companyName == request.resource.data.companyName
+        && request.resource.data.clientId == request.resource.data.companyId
+        && request.resource.data.clientName == request.resource.data.companyName
+        && sitePunchDirectoryRecord(request.resource.data.siteId).siteId == request.resource.data.siteId
+        && sitePunchDirectoryRecord(request.resource.data.siteId).siteName == request.resource.data.siteName;
+    }
+
     match /agencies/{agencyDocId} {
       allow read: if signedIn() && (
         isPlatformOwner()
@@ -299,6 +364,18 @@ service cloud.firestore {
       );
     }
 
+    match /sitePunchDirectories/{siteId} {
+      allow read: if true;
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyRequest())
+      );
+      allow update, delete: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+      );
+    }
+
     match /clients/{clientId} {
       allow read: if signedIn() && (
         isPlatformOwner()
@@ -344,22 +421,24 @@ service cloud.firestore {
         || (workerOwnsRecord(resource.data.workerId) && sameAgencyResource())
       );
 
-      allow create: if signedIn() && (
-        isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyRequest())
-        || (
-          isClientManager()
-          && sameAgencyRequest()
-          && (assignedClient(request.resource.data.clientId) || assignedSite(request.resource.data.siteId))
-          && request.resource.data.edited == true
-          && request.resource.data.editedBy == request.auth.uid
-          && request.resource.data.editedByRole == 'clientManager'
-        )
-        || (
-          isWorker()
-          && sameAgencyRequest()
-          && request.resource.data.workerId == workerId()
-          && request.resource.data.createdBy == request.auth.uid
+      allow create: if publicSitePunchCreate() || (
+        signedIn() && (
+          isPlatformOwner()
+          || (isAgencyStaff() && sameAgencyRequest())
+          || (
+            isClientManager()
+            && sameAgencyRequest()
+            && (assignedClient(request.resource.data.clientId) || assignedSite(request.resource.data.siteId))
+            && request.resource.data.edited == true
+            && request.resource.data.editedBy == request.auth.uid
+            && request.resource.data.editedByRole == 'clientManager'
+          )
+          || (
+            isWorker()
+            && sameAgencyRequest()
+            && request.resource.data.workerId == workerId()
+            && request.resource.data.createdBy == request.auth.uid
+          )
         )
       );
 

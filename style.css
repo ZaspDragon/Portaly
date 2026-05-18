@@ -1682,9 +1682,48 @@ tr:last-child td {
   padding: 22px;
   border-radius: 22px;
   background:
-    linear-gradient(180deg, rgba(var(--brand-rgb), 0.08), rgba(var(--brand-rgb), 0.03)),
-    repeating-linear-gradient(45deg, rgba(var(--brand-rgb), 0.06) 0, rgba(var(--brand-rgb), 0.06) 10px, transparent 10px, transparent 20px);
+      linear-gradient(180deg, rgba(var(--brand-rgb), 0.08), rgba(var(--brand-rgb), 0.03)),
+      repeating-linear-gradient(45deg, rgba(var(--brand-rgb), 0.06) 0, rgba(var(--brand-rgb), 0.06) 10px, transparent 10px, transparent 20px);
   border: 1px dashed rgba(var(--brand-rgb), 0.22);
+}
+
+.qr-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.qr-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.qr-canvas-shell {
+  width: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.qr-canvas {
+  width: min(220px, 100%);
+  height: auto;
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.qr-placeholder-copy {
+  max-width: 220px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.qr-link-text {
+  word-break: break-word;
+}
+
+.qr-actions .button {
+  flex: 1 1 160px;
 }
 
 .qr-box {

@@ -74,6 +74,20 @@ service cloud.firestore {
       return sameAgency(request.resource.data.agencyId);
     }
 
+    function agencyStaffOwnsResource() {
+      return signedIn()
+        && isAgencyStaff()
+        && resource.data.agencyId is string
+        && resource.data.agencyId == agencyId();
+    }
+
+    function agencyStaffOwnsRequest() {
+      return signedIn()
+        && isAgencyStaff()
+        && request.resource.data.agencyId is string
+        && request.resource.data.agencyId == agencyId();
+    }
+
     function assignedClient(clientId) {
       return clientId != null && assignedClientIds().hasAny([clientId]);
     }
@@ -423,55 +437,69 @@ service cloud.firestore {
       allow read: if true;
       allow create: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyRequest())
+        || agencyStaffOwnsRequest()
       );
       allow update, delete: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+        || agencyStaffOwnsResource()
+        || agencyStaffOwnsRequest()
       );
     }
 
     match /clients/{clientId} {
       allow read: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyResource())
+        || agencyStaffOwnsResource()
         || (isClientManager() && sameAgencyResource() && assignedClient(clientId))
         || (isWorker() && sameAgencyResource() && assignedClient(clientId))
       );
-      allow create, update, delete: if signedIn() && (isPlatformOwner() || (isAgencyStaff() && sameAgencyRequest()));
+      allow create, update, delete: if signedIn() && (
+        isPlatformOwner()
+        || agencyStaffOwnsRequest()
+      );
     }
 
     match /sites/{siteId} {
       allow read: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyResource())
+        || agencyStaffOwnsResource()
         || (isClientManager() && sameAgencyResource() && assignedSite(siteId))
         || (isWorker() && sameAgencyResource() && assignedSite(siteId))
       );
-      allow create, update, delete: if signedIn() && (isPlatformOwner() || (isAgencyStaff() && sameAgencyRequest()));
+      allow create, update, delete: if signedIn() && (
+        isPlatformOwner()
+        || agencyStaffOwnsRequest()
+      );
     }
 
     match /workers/{workerDocId} {
       allow read: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyResource())
+        || agencyStaffOwnsResource()
         || (isClientManager() && sameAgencyResource() && (assignedClient(resource.data.assignedClientId) || assignedSite(resource.data.assignedSiteId)))
         || (workerOwnsRecord(workerDocId) && sameAgencyResource())
       );
-      allow create, update, delete: if signedIn() && (isPlatformOwner() || (isAgencyStaff() && sameAgencyRequest()));
+      allow create, update, delete: if signedIn() && (
+        isPlatformOwner()
+        || agencyStaffOwnsRequest()
+      );
     }
 
     match /assignments/{assignmentId} {
-      allow read, create, update, delete: if signedIn() && (
+      allow read, delete: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+        || agencyStaffOwnsResource()
+      );
+      allow create, update: if signedIn() && (
+        isPlatformOwner()
+        || agencyStaffOwnsRequest()
       );
     }
 
     match /punches/{punchId} {
       allow read: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyResource())
+        || agencyStaffOwnsResource()
         || (isClientManager() && sameAgencyResource() && (assignedClient(resource.data.clientId) || assignedSite(resource.data.siteId)))
         || (workerOwnsRecord(resource.data.workerId) && sameAgencyResource())
       );
@@ -479,7 +507,7 @@ service cloud.firestore {
       allow create: if publicSitePunchCreate() || (
         signedIn() && (
           isPlatformOwner()
-          || (isAgencyStaff() && sameAgencyRequest())
+          || agencyStaffOwnsRequest()
           || (
             isClientManager()
             && sameAgencyRequest()
@@ -499,21 +527,22 @@ service cloud.firestore {
 
       allow update, delete: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+        || agencyStaffOwnsResource()
+        || agencyStaffOwnsRequest()
       );
     }
 
     match /punchRequests/{requestId} {
       allow read: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyResource())
+        || agencyStaffOwnsResource()
         || (isClientManager() && sameAgencyResource() && (assignedClient(resource.data.clientId) || assignedSite(resource.data.siteId)))
       );
 
       allow create: if publicPunchRequestCreate() || (
         signedIn() && (
           isPlatformOwner()
-          || (isAgencyStaff() && sameAgencyRequest())
+          || agencyStaffOwnsRequest()
           || (
             isClientManager()
             && sameAgencyRequest()
@@ -524,7 +553,8 @@ service cloud.firestore {
 
       allow update: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && (sameAgencyResource() || sameAgencyRequest()))
+        || agencyStaffOwnsResource()
+        || agencyStaffOwnsRequest()
         || (
           isClientManager()
           && sameAgencyResource()
@@ -541,7 +571,7 @@ service cloud.firestore {
 
       allow delete: if signedIn() && (
         isPlatformOwner()
-        || (isAgencyStaff() && sameAgencyResource())
+        || agencyStaffOwnsResource()
       );
     }
 

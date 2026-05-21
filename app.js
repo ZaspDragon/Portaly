@@ -2595,13 +2595,15 @@
 
     const uid = authUser.uid;
     const email = authUser.email || values.email || "";
+    const existingAgency = await findAgencyOwnedBy(uid);
     const trialDays = Number((state.firebase.config && state.firebase.config.trialDays) || 14);
-    const now = new Date();
-    const trialStartIso = now.toISOString();
-    const trialEndIso = addDays(new Date(trialStartIso), trialDays).toISOString();
-    const createdAt = now.toISOString();
-    const updatedAt = now.toISOString();
-    const agencyId = state.profileRepair?.agencyId || createId("agency");
+    const nowIso = new Date().toISOString();
+    const trialStartIso = existingAgency?.trialStart || nowIso;
+    const trialEndIso = existingAgency?.trialEnd || addDays(new Date(trialStartIso), trialDays).toISOString();
+    const userCreatedAt = nowIso;
+    const agencyCreatedAt = existingAgency?.createdAt || nowIso;
+    const updatedAt = nowIso;
+    const agencyId = state.profileRepair?.agencyId || existingAgency?.id || createId("agency");
     const agencySettings = buildAgencySettings({
       agencyName: values.agencyName,
       logoInitials: initials(values.agencyName),
@@ -2611,6 +2613,8 @@
       payrollContact: email,
       defaultPayPeriod: "Weekly"
     });
+    const existingSettings = await findAgencyScopedRecord("settings", agencyId);
+    const existingSubscription = await findAgencyScopedRecord("subscriptions", agencyId);
 
     const userDoc = {
       id: uid,
@@ -2624,7 +2628,7 @@
       assignedClientIds: [],
       assignedSiteIds: [],
       workerId: "",
-      createdAt,
+      createdAt: userCreatedAt,
       updatedAt
     };
 
@@ -2637,34 +2641,34 @@
       trialStart: trialStartIso,
       trialEnd: trialEndIso,
       billingProvider: "square",
-      squareCustomerId: "",
-      squareSubscriptionId: "",
-      createdAt,
+      squareCustomerId: existingAgency?.squareCustomerId || "",
+      squareSubscriptionId: existingAgency?.squareSubscriptionId || "",
+      createdAt: agencyCreatedAt,
       updatedAt,
       settings: agencySettings
     };
 
     const settingDoc = {
-      id: createId("setting"),
+      id: existingSettings?.id || createId("setting"),
       agencyId,
       ...agencySettings,
-      createdAt,
+      createdAt: existingSettings?.createdAt || agencyCreatedAt,
       updatedAt
     };
 
     const subscriptionDoc = {
-      id: createId("subscription"),
+      id: existingSubscription?.id || createId("subscription"),
       agencyId,
       billingProvider: "square",
-      squareCustomerId: "",
-      squareSubscriptionId: "",
+      squareCustomerId: existingSubscription?.squareCustomerId || "",
+      squareSubscriptionId: existingSubscription?.squareSubscriptionId || "",
       planId: values.selectedPlan,
       status: "trialing",
-      currentPeriodStart: "",
-      currentPeriodEnd: "",
+      currentPeriodStart: existingSubscription?.currentPeriodStart || "",
+      currentPeriodEnd: existingSubscription?.currentPeriodEnd || "",
       trialStart: trialStartIso,
       trialEnd: trialEndIso,
-      createdAt,
+      createdAt: existingSubscription?.createdAt || agencyCreatedAt,
       updatedAt
     };
 
@@ -2685,8 +2689,13 @@
         userId: uid
       });
     } catch (error) {
-      console.error("[Portaly] Complete profile failed", error);
-      throw new Error("We could not finish your workspace setup. Please try again.");
+      console.error("[Portaly] Complete profile failed", {
+        error,
+        agencyId,
+        userId: uid,
+        existingAgencyId: existingAgency?.id || ""
+      });
+      throw new Error(`We could not finish your workspace setup. ${formatSignupFirestoreError(error)}`);
     }
 
     let sampleDataError = null;
@@ -2714,6 +2723,41 @@
       userId: uid
     });
     pushToast("Your agency workspace is ready.", "success");
+  }
+
+  async function findAgencyOwnedBy(ownerUserId) {
+    if (!state.firebase.ready || !ownerUserId) {
+      return null;
+    }
+    try {
+      const snapshot = await state.firebase.db.collection("agencies").where("ownerUserId", "==", ownerUserId).limit(1).get();
+      const record = snapshot.docs && snapshot.docs[0];
+      return record ? { id: record.id, ...record.data() } : null;
+    } catch (error) {
+      console.error("[Portaly] findAgencyOwnedBy failed", {
+        ownerUserId,
+        error
+      });
+      return null;
+    }
+  }
+
+  async function findAgencyScopedRecord(collectionName, agencyId) {
+    if (!state.firebase.ready || !agencyId) {
+      return null;
+    }
+    try {
+      const snapshot = await state.firebase.db.collection(collectionName).where("agencyId", "==", agencyId).limit(1).get();
+      const record = snapshot.docs && snapshot.docs[0];
+      return record ? { id: record.id, ...record.data() } : null;
+    } catch (error) {
+      console.error("[Portaly] findAgencyScopedRecord failed", {
+        collectionName,
+        agencyId,
+        error
+      });
+      return null;
+    }
   }
 
   async function loadSampleDataIntoCloud(agencyId, ownerUserId, agencyName, planId) {

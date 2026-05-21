@@ -1426,6 +1426,14 @@ tr:last-child td {
   gap: 16px;
 }
 
+.public-punch-topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .button-text {
   min-height: auto;
   padding: 8px 10px;
@@ -1937,6 +1945,7 @@ tr:last-child td {
   .marketing-actions,
   .marketing-footer-links,
   .marketing-trust-row,
+  .public-punch-topbar-actions,
   .hero-link-row,
   .topbar-actions,
   .page-actions,

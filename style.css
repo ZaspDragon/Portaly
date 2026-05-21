@@ -1401,6 +1401,79 @@ tr:last-child td {
   margin: 0 auto;
 }
 
+.public-punch-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+}
+
+.punch-center-shell {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.minimal-punch-card {
+  width: min(640px, 100%);
+  margin: 0 auto;
+  box-shadow: 0 26px 60px rgba(15, 31, 49, 0.12);
+}
+
+.public-punch-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.button-text {
+  min-height: auto;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-strong);
+  box-shadow: none;
+}
+
+.button-text:hover {
+  color: var(--brand);
+  background: rgba(var(--brand-rgb), 0.08);
+}
+
+.punch-minimal-form {
+  margin-top: 18px;
+}
+
+.punch-station-lockup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.punch-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--surface-soft);
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+}
+
+.public-punch-footer {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.public-punch-context {
+  margin-top: 10px;
+}
+
 .worker-card.primary {
   padding: 28px;
 }

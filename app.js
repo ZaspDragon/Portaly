@@ -211,7 +211,9 @@
       agencyName: "",
       companyId: "",
       siteId: "",
+      saving: false,
       requestHelpMessage: "",
+      requestDraft: null,
       lastMessage: "",
       lastAction: "",
       lastSavedAt: "",
@@ -771,9 +773,7 @@
     }
 
     if (mode === "site" && siteId) {
-      state.notice = "Site QR links work in demo today. For live agencies, pair them with worker sign-in.";
-      storeNotice(state.notice);
-      navigate("demo", { replace: true });
+      navigatePublicPunchRoute("", "", siteId, { replace: true });
       return;
     }
 
@@ -2014,13 +2014,37 @@
           try {
             await savePublicSitePunch(trigger.dataset.punch || "");
           } catch (error) {
+            const requestedAction = String(trigger.dataset.punch || "").trim();
+            const requestedAt = new Date();
             state.publicPunch = {
               ...(state.publicPunch || {}),
-              requestHelpMessage: "Punch didn't go through? Submit a punch request."
+              saving: false,
+              requestHelpMessage: "Punch didn't go through? Submit a punch request.",
+              requestDraft: {
+                requestedAction,
+                requestedDate: formatDateInput(requestedAt),
+                requestedTime: formatTimeInput(requestedAt)
+              }
             };
             renderApp();
+            const context = getPublicPunchContext();
+            if (context.agencyId && context.companyId && context.siteId) {
+              openPunchRequestModal();
+              throw new Error("Punch could not be saved. Submit a punch request instead.");
+            }
             throw error;
           }
+          break;
+        case "refresh-public-punch":
+          state.publicPunch = {
+            ...(state.publicPunch || {}),
+            loading: true,
+            error: ""
+          };
+          renderApp();
+          await loadPublicPunchState();
+          renderApp();
+          pushToast("Punch stations refreshed.", "success");
           break;
         case "open-punch-request":
           openPunchRequestModal();
@@ -3572,8 +3596,13 @@
     };
   }
 
+  function shouldUsePublicPunchPreviewFallback() {
+    return window.location.protocol === "file:" && !!state.publicPunch?.fallbackNotice;
+  }
+
   function openPunchRequestModal() {
     const context = getPublicPunchContext();
+    const requestDraft = state.publicPunch?.requestDraft || null;
     const workerField = document.getElementById("public-punch-worker");
     const manualField = document.getElementById("public-punch-worker-name");
     const matchedWorker = (context.directory?.publicWorkerOptions || []).find(option => option.id === String(workerField?.value || "").trim()) || null;
@@ -3597,18 +3626,18 @@
           <div class="field-group">
             <label for="punch-request-action">Requested punch type</label>
             <select id="punch-request-action" name="requestedAction">
-              ${Object.keys(PUNCH_LABELS).map(entry => `<option value="${escapeAttribute(entry)}">${escapeHtml(PUNCH_LABELS[entry])}</option>`).join("")}
+              ${Object.keys(PUNCH_LABELS).map(entry => `<option value="${escapeAttribute(entry)}" ${requestDraft?.requestedAction === entry ? "selected" : ""}>${escapeHtml(PUNCH_LABELS[entry])}</option>`).join("")}
             </select>
           </div>
           <div class="field-group">
             <label for="punch-request-date">Requested punch date</label>
-            <input id="punch-request-date" name="requestedDate" type="date" value="${escapeAttribute(formatDateInput(state.now))}" />
+            <input id="punch-request-date" name="requestedDate" type="date" value="${escapeAttribute(requestDraft?.requestedDate || formatDateInput(state.now))}" />
           </div>
         </div>
         <div class="form-row two">
           <div class="field-group">
             <label for="punch-request-time">Requested punch time</label>
-            <input id="punch-request-time" name="requestedTime" type="time" value="${escapeAttribute(formatTimeInput(state.now))}" />
+            <input id="punch-request-time" name="requestedTime" type="time" value="${escapeAttribute(requestDraft?.requestedTime || formatTimeInput(state.now))}" />
           </div>
           <div class="field-group">
             <label for="punch-request-reason">Reason / note</label>
@@ -3657,15 +3686,39 @@
       deviceInfo: String(navigator.userAgent || "").slice(0, 500)
     };
 
-    if (state.firebase.ready && state.firebase.db) {
-      await state.firebase.db.collection("punches").doc(punchId).set(punch, { merge: false });
-    } else {
-      await saveData("punches", punchId, punch);
+    state.publicPunch = {
+      ...state.publicPunch,
+      saving: true,
+      requestHelpMessage: "",
+      requestDraft: null,
+      lastAction: action,
+      lastWorkerName: worker.workerName
+    };
+    renderApp();
+
+    try {
+      if (state.firebase.ready && state.firebase.db && !shouldUsePublicPunchPreviewFallback()) {
+        await state.firebase.db.collection("punches").doc(punchId).set(punch, { merge: false });
+      } else {
+        await saveData("punches", punchId, punch);
+      }
+    } catch (error) {
+      console.error("[Portaly] savePublicSitePunch failed", {
+        action,
+        agencyId,
+        companyId,
+        siteId,
+        workerName: worker.workerName,
+        error
+      });
+      throw error;
     }
 
     state.publicPunch = {
       ...state.publicPunch,
+      saving: false,
       requestHelpMessage: "",
+      requestDraft: null,
       lastAction: action,
       lastSavedAt: timestamp,
       lastStatus: getPunchStatusLabelFromAction(action),
@@ -3737,7 +3790,7 @@
       deviceInfo: String(navigator.userAgent || "").slice(0, 500)
     };
 
-    if (state.firebase.ready && state.firebase.db) {
+    if (state.firebase.ready && state.firebase.db && !shouldUsePublicPunchPreviewFallback()) {
       await state.firebase.db.collection("punchRequests").doc(requestId).set(requestRecord, { merge: false });
     } else {
       await saveData("punchRequests", requestId, requestRecord);
@@ -3745,7 +3798,8 @@
 
     state.publicPunch = {
       ...(state.publicPunch || {}),
-      requestHelpMessage: ""
+      requestHelpMessage: "",
+      requestDraft: null
     };
     closeModal();
     pushToast("Punch request submitted. A manager can review it shortly.", "success");
@@ -3859,6 +3913,7 @@
       payRate: Number(assignment.payRate || worker.payRate || 0)
     };
     await updateData("workers", worker.id, updatedWorker);
+    await syncPunchDirectoriesForWorker({ ...worker, ...updatedWorker }, worker);
     if (worker.userId) {
       await syncLinkedUserFromWorker(worker.userId, { ...worker, ...updatedWorker });
     }
@@ -6909,12 +6964,20 @@
     ).values()].filter(option => option.id);
     const siteOptions = directories.filter(directory => (!punchState.agencyId || directory.agencyId === punchState.agencyId) && (!punchState.companyId || directory.companyId === punchState.companyId));
     const workerOptions = Array.isArray(selectedDirectory?.publicWorkerOptions) ? selectedDirectory.publicWorkerOptions : [];
-    const punchDisabled = selectedDirectory ? "" : "disabled";
+    const punchDisabled = selectedDirectory && !punchState.saving ? "" : "disabled";
     const currentStatus = punchState.lastStatus || getPunchStatusLabelFromAction(punchState.lastAction);
     const currentWorker = punchState.lastWorkerName || "Worker";
     const isQrStation = state.route === "punch" && !!punchState.siteId;
     const showSelectors = !isQrStation;
+    const topTitle = isQrStation ? (selectedDirectory?.siteName || "Punch Station") : "Worker Punch Clock";
+    const topCopy = isQrStation
+      ? "Select or type your name, then tap the punch you need."
+      : "Choose your staffing agency, company, site, and name. Then tap the punch you need.";
     const contextLine = [selectedDirectory?.agencyName || punchState.agencyName || "", selectedDirectory?.companyName || "", selectedDirectory?.siteName || ""].filter(Boolean).join(" · ");
+    const workerInputHelp = workerOptions.length
+      ? "Select your name from the list or type it manually if you do not see it yet."
+      : "Type the worker name exactly as it should appear on the timecard.";
+    const savingMessage = punchState.saving ? "Saving punch..." : "";
 
     if (punchState.loading) {
       return `
@@ -6923,7 +6986,10 @@
             <div class="worker-card primary minimal-punch-card">
               <div class="public-punch-topbar">
                 <p class="eyebrow">Portaly Punch Clock</p>
-                <button class="button button-ghost button-text" data-action="go-route" data-route="login" type="button">Admin Login</button>
+                <div class="public-punch-topbar-actions">
+                  <button class="button button-ghost button-text" data-action="refresh-public-punch" type="button">Refresh</button>
+                  <button class="button button-ghost button-text" data-action="go-route" data-route="login" type="button">Admin Login</button>
+                </div>
               </div>
               <h2>Loading punch station</h2>
               <p class="helper-copy">Preparing the worker punch screen.</p>
@@ -6944,9 +7010,13 @@
           <div class="worker-card primary minimal-punch-card">
             <div class="public-punch-topbar">
               <p class="eyebrow">Portaly Punch Clock</p>
-              <button class="button button-ghost button-text" data-action="go-route" data-route="login" type="button">Admin Login</button>
+              <div class="public-punch-topbar-actions">
+                <button class="button button-ghost button-text" data-action="refresh-public-punch" type="button">Refresh</button>
+                <button class="button button-ghost button-text" data-action="go-route" data-route="login" type="button">Admin Login</button>
+              </div>
             </div>
-            <h2>${escapeHtml(isQrStation ? (selectedDirectory?.siteName || "Punch Station") : "Clock In / Start Lunch / End Lunch / Clock Out")}</h2>
+            <h2>${escapeHtml(topTitle)}</h2>
+            <p class="helper-copy">${escapeHtml(topCopy)}</p>
             ${contextLine ? `<p class="helper-copy public-punch-context">${escapeHtml(contextLine)}</p>` : ""}
             ${punchState.error ? `
               <div class="notice-card danger" style="margin-top: 16px;">
@@ -6955,11 +7025,18 @@
                   <p>${escapeHtml(punchState.error)}</p>
                 </div>
               </div>
+            ` : punchState.fallbackNotice ? `
+              <div class="notice-card warning" style="margin-top: 16px;">
+                <div>
+                  <strong>Demo punch stations loaded</strong>
+                  <p>${escapeHtml(punchState.fallbackNotice)}</p>
+                </div>
+              </div>
             ` : !directories.length ? `
               <div class="notice-card warning" style="margin-top: 16px;">
                 <div>
-                  <strong>No punch station is ready yet</strong>
-                  <p>${escapeHtml(state.firebase.ready ? "Ask the staffing agency admin to publish a site QR code." : "Firebase is not configured yet, so Portaly is using demo punch data for now.")}</p>
+                  <strong>No punch stations are ready yet</strong>
+                  <p>${escapeHtml(state.firebase.ready ? "Ask the staffing agency admin to add a client, site, worker assignment, and generate a site QR." : "Firebase is not configured yet, so Portaly is using demo punch data for now.")}</p>
                 </div>
               </div>
             ` : ""}
@@ -6975,7 +7052,7 @@
                 </div>
                 <div class="form-row two">
                   <div class="field-group">
-                    <label for="public-punch-company">Company</label>
+                    <label for="public-punch-company">Company / Client</label>
                     <select id="public-punch-company" name="publicPunchCompanyId">
                       <option value="">Select company</option>
                       ${companyOptions.map(company => `<option value="${escapeHtml(company.id)}" ${punchState.companyId === company.id ? "selected" : ""}>${escapeHtml(company.name)}</option>`).join("")}
@@ -7008,6 +7085,7 @@
               <div class="field-group">
                 <label for="public-punch-worker-name">Worker name</label>
                 <input id="public-punch-worker-name" name="publicPunchWorkerName" type="text" placeholder="${escapeAttribute(workerOptions.length ? "Select the worker or type the name here" : "Type the worker name")}" />
+                <p class="helper-copy">${escapeHtml(workerInputHelp)}</p>
               </div>
             </div>
 
@@ -7022,6 +7100,8 @@
               <button class="button button-secondary button-large" data-action="public-punch-action" data-punch="endLunch" type="button" ${punchDisabled}>End Lunch</button>
               <button class="button button-ghost button-large" data-action="public-punch-action" data-punch="clockOut" type="button" ${punchDisabled}>Clock Out</button>
             </div>
+
+            ${savingMessage ? `<p class="helper-copy" style="margin-top: 12px;">${escapeHtml(savingMessage)}</p>` : ""}
 
             ${punchState.lastMessage ? `
               <div class="worker-confirmation">
@@ -8475,6 +8555,7 @@
                 <button class="button button-primary" data-action="open-worker-form" type="button">Add Worker</button>
                 <button class="button button-secondary" data-action="open-client-form" type="button">Add Client</button>
                 <button class="button button-secondary" data-action="open-site-form" type="button">Add Site</button>
+                <button class="button button-secondary" data-action="open-assignment-form" type="button">Assign Worker</button>
                 <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate QR</button>
                 <button class="button button-ghost" data-action="go-route" data-route="live-punches" type="button">Review Punch Requests</button>
                 <button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Approvals</button>
@@ -10151,23 +10232,29 @@
 
   function renderCustomModal() {
     const sizeClass = state.modal.size ? ` ${escapeHtml(state.modal.size)}` : "";
+    const formId = escapeAttribute(state.modal.formId || `${state.modal.formName || "custom-modal-save"}-form`);
+    const hasInlineForm = !state.modal.readOnly && /<form\b/i.test(String(state.modal.html || ""));
     const saveActions = state.modal.readOnly ? `
       <div class="modal-actions">
         <button class="button button-ghost" data-action="close-modal" type="button">${escapeHtml(state.modal.cancelLabel || "Close")}</button>
       </div>
     ` : `
       <div class="modal-actions">
-        <button class="button ${escapeHtml(state.modal.saveTone || "button-primary")}" type="submit">${escapeHtml(state.modal.saveLabel || "Save")}</button>
+        <button class="button ${escapeHtml(state.modal.saveTone || "button-primary")}" type="submit" form="${formId}">${escapeHtml(state.modal.saveLabel || "Save")}</button>
         <button class="button button-ghost" data-action="close-modal" type="button">${escapeHtml(state.modal.cancelLabel || "Cancel")}</button>
       </div>
     `;
 
-    const body = state.modal.readOnly ? state.modal.html : `
-      <form class="form-grid" data-form="${escapeAttribute(state.modal.formName || "custom-modal-save")}">
-        ${state.modal.html}
-        ${saveActions}
-      </form>
-    `;
+    const body = state.modal.readOnly
+      ? state.modal.html
+      : hasInlineForm
+        ? `${String(state.modal.html || "").replace(/<form\b([^>]*)>/i, (match, attrs) => (/id\s*=/.test(attrs) ? match : `<form id="${formId}"${attrs}>`))}${saveActions}`
+        : `
+          <form id="${formId}" class="form-grid" data-form="${escapeAttribute(state.modal.formName || "custom-modal-save")}">
+            ${state.modal.html}
+            ${saveActions}
+          </form>
+        `;
 
     return `
       <div class="modal">
@@ -11667,7 +11754,15 @@
   }
 
   function shouldShowEmptyWorkspaceOnboarding(scoped) {
-    return !scoped.clients.length && !scoped.sites.length && !scoped.workers.length && !scoped.assignments.length;
+    if (!["agencyOwner", "agencyAdmin"].includes(state.session.role)) {
+      return !scoped.clients.length && !scoped.sites.length && !scoped.workers.length && !scoped.assignments.length;
+    }
+    const hasClient = scoped.clients.some(client => client.status !== "inactive");
+    const hasSite = scoped.sites.some(site => site.status !== "inactive");
+    const hasWorker = scoped.workers.some(worker => worker.status !== "inactive");
+    const hasAssignment = scoped.assignments.some(assignment => assignment.status !== "ended");
+    const hasQrReadySite = scoped.sites.some(site => site.status !== "inactive" && site.clientId && site.qrEnabled !== false);
+    return !(hasClient && hasSite && hasWorker && hasAssignment && hasQrReadySite);
   }
 
   function renderEmptyWorkspaceOnboarding() {
@@ -11683,7 +11778,7 @@
         <div class="feature-grid" style="margin-top: 18px;">
           <div class="feature-card">
             <p class="eyebrow">Step 1</p>
-            <h3>Add first client</h3>
+            <h3>Add company client</h3>
             <p>Create the company record that workers, sites, approvals, and payroll will tie back to.</p>
             <div class="page-actions" style="margin-top: 16px;">
               <button class="button button-primary" data-action="open-client-form" type="button">Add Client</button>
@@ -11707,10 +11802,18 @@
           </div>
           <div class="feature-card">
             <p class="eyebrow">Step 4</p>
-            <h3>Create QR code</h3>
-            <p>Generate a worker or site punch link once the first live record is ready.</p>
+            <h3>Assign worker to site</h3>
+            <p>Connect the worker to the client and site so the public punch page shows the right names.</p>
             <div class="page-actions" style="margin-top: 16px;">
-              <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Create QR Code</button>
+              <button class="button button-secondary" data-action="open-assignment-form" type="button">Assign Worker</button>
+            </div>
+          </div>
+          <div class="feature-card">
+            <p class="eyebrow">Step 5</p>
+            <h3>Generate site QR</h3>
+            <p>Create the public site QR so workers can scan, pick their name, and punch without logging in.</p>
+            <div class="page-actions" style="margin-top: 16px;">
+              <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate Site QR</button>
             </div>
           </div>
         </div>
@@ -12231,7 +12334,10 @@
         agencyName: "",
         companyId: "",
         siteId: "",
+        saving: false,
+        fallbackNotice: "",
         requestHelpMessage: "",
+        requestDraft: null,
         lastMessage: "",
         lastAction: "",
         lastSavedAt: "",
@@ -12265,6 +12371,19 @@
       const directory = autoSiteId
         ? directories.find(item => item.siteId === autoSiteId && (!autoAgencyId || item.agencyId === autoAgencyId) && (!autoCompanyId || item.companyId === autoCompanyId)) || null
         : null;
+      const workerCount = directories.reduce((total, item) => total + (Array.isArray(item.publicWorkerOptions) ? item.publicWorkerOptions.length : 0), 0);
+      console.log("[Portaly] public punch options loaded", {
+        agencyCount: agencyIds.length,
+        clientCount: companyIds.length,
+        siteCount: directories.length,
+        workerCount,
+        requestedAgencyId: punchHash.agencyId,
+        requestedClientId: punchHash.companyId,
+        requestedSiteId: punchHash.siteId,
+        resolvedAgencyId: directory?.agencyId || autoAgencyId || "",
+        resolvedClientId: directory?.companyId || autoCompanyId || "",
+        resolvedSiteId: directory?.siteId || autoSiteId || ""
+      });
 
       state.publicPunch = {
         ...state.publicPunch,
@@ -12275,10 +12394,56 @@
         agencyId: directory?.agencyId || autoAgencyId || "",
         agencyName: directory?.agencyName || directories.find(item => item.agencyId === (autoAgencyId || ""))?.agencyName || "",
         companyId: directory?.companyId || autoCompanyId || "",
-        siteId: directory?.siteId || autoSiteId || ""
+        siteId: directory?.siteId || autoSiteId || "",
+        saving: false,
+        fallbackNotice: ""
       };
       return state.publicPunch;
     } catch (error) {
+      const canUsePreviewFallback = window.location.protocol === "file:";
+      if (canUsePreviewFallback) {
+        console.warn("[Portaly] loadPublicPunchState preview fallback", {
+          requestedAgencyId: punchHash.agencyId,
+          requestedClientId: punchHash.companyId,
+          requestedSiteId: punchHash.siteId,
+          errorCode: error?.code || "",
+          errorMessage: error?.message || String(error || "")
+        });
+        const directories = buildDemoSitePunchDirectories().filter(directory => {
+          if (punchHash.agencyId && directory.agencyId !== punchHash.agencyId) {
+            return false;
+          }
+          if (punchHash.companyId && directory.companyId !== punchHash.companyId) {
+            return false;
+          }
+          if (punchHash.siteId && directory.siteId !== punchHash.siteId) {
+            return false;
+          }
+          return true;
+        });
+        const directory = punchHash.siteId
+          ? directories.find(item => item.siteId === punchHash.siteId && (!punchHash.agencyId || item.agencyId === punchHash.agencyId) && (!punchHash.companyId || item.companyId === punchHash.companyId)) || null
+          : (directories.length === 1 ? directories[0] : null);
+        const agencyIds = [...new Set(directories.map(item => item.agencyId).filter(Boolean))];
+        const companyIds = [...new Set(directories
+          .filter(item => !punchHash.agencyId || item.agencyId === punchHash.agencyId)
+          .map(item => item.companyId)
+          .filter(Boolean))];
+        state.publicPunch = {
+          ...state.publicPunch,
+          loading: false,
+          error: "",
+          directories,
+          directory,
+          agencyId: directory?.agencyId || punchHash.agencyId || (agencyIds.length === 1 ? agencyIds[0] : ""),
+          agencyName: directory?.agencyName || "",
+          companyId: directory?.companyId || punchHash.companyId || (companyIds.length === 1 ? companyIds[0] : ""),
+          siteId: directory?.siteId || punchHash.siteId || "",
+          saving: false,
+          fallbackNotice: "Live punch stations could not load in this local preview. Demo punch stations are shown below so you can still test the worker flow."
+        };
+        return state.publicPunch;
+      }
       reportRuntimeIssue("loadPublicPunchState", error, {
         toastMessage: ""
       });
@@ -12287,6 +12452,8 @@
         loading: false,
         directories: [],
         directory: null,
+        saving: false,
+        fallbackNotice: "",
         error: "Portaly could not load this punch station right now. Check the link or try again in a moment."
       };
       return null;

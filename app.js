@@ -1416,8 +1416,16 @@
       }
     }
 
+    if (collection === "workers") {
+      delete payload.loginEmail;
+      if (!payload.userId) {
+        delete payload.userId;
+      }
+    }
+
     if (state.session.mode === "cloud") {
       await state.firebase.db.collection(collection).doc(recordId).set(payload, { merge: false });
+      state.cache[collection] = [...(state.cache[collection] || []).filter(row => row.id !== recordId), payload];
     } else {
       const store = loadDemoStore();
       const rows = (store[collection] || []).filter(row => row.id !== recordId);
@@ -1425,6 +1433,7 @@
       store[collection] = rows;
       writeDemoStore(store);
       state.demoStore = store;
+      state.cache[collection] = rows;
     }
 
     return payload;
@@ -1441,6 +1450,7 @@
   async function deleteData(collection, id) {
     if (state.session.mode === "cloud") {
       await state.firebase.db.collection(collection).doc(id).delete();
+      state.cache[collection] = (state.cache[collection] || []).filter(row => row.id !== id);
       return;
     }
 
@@ -1448,6 +1458,7 @@
     store[collection] = (store[collection] || []).filter(row => row.id !== id);
     writeDemoStore(store);
     state.demoStore = store;
+    state.cache[collection] = store[collection];
   }
 
   function isFirebaseReady() {
@@ -2809,10 +2820,16 @@
     const workerId = values.id || createId("worker");
     const existing = findRecord("workers", workerId);
     const willBeActive = values.status !== "inactive";
+    const now = new Date().toISOString();
+    const agencyId = values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || "";
     enforcePlanLimit("worker", willBeActive, existing);
 
+    if (!agencyId) {
+      throw new Error("Your agency workspace is not loaded. Please log out and log back in.");
+    }
+
     const worker = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
+      agencyId,
       firstName: values.firstName || "",
       lastName: values.lastName || "",
       phone: values.phone || "",
@@ -2821,17 +2838,17 @@
       status: values.status || "active",
       assignedClientId: values.assignedClientId || "",
       assignedSiteId: values.assignedSiteId || "",
-      userId: existing?.userId || values.userId || "",
-      loginEmail: values.loginEmail || values.email || "",
       workerNoteType: normalizeWorkerNoteType(values.workerNoteType || existing?.workerNoteType || ""),
       notes: values.notes || "",
-      terminationReason: values.terminationReason || ""
+      terminationReason: values.terminationReason || "",
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
     };
 
     await saveData("workers", workerId, worker);
     await syncTimesheetPayRates(workerId, worker.payRate);
-    if (worker.userId) {
-      await syncLinkedUserFromWorker(worker.userId, worker);
+    if (existing?.userId) {
+      await syncLinkedUserFromWorker(existing.userId, { ...existing, ...worker });
     }
     await syncPunchDirectoriesForWorker({ id: workerId, ...worker }, existing);
     await appendAuditLog("worker_saved", "workers", workerId, existing, worker);
@@ -2886,10 +2903,16 @@
     const siteId = values.id || createId("site");
     const existing = findRecord("sites", siteId);
     const willBeActive = values.status !== "inactive";
+    const now = new Date().toISOString();
+    const agencyId = values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || "";
     enforcePlanLimit("site", willBeActive, existing);
 
+    if (!agencyId) {
+      throw new Error("Your agency workspace is not loaded. Please log out and log back in.");
+    }
+
     const site = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
+      agencyId,
       clientId: values.clientId || "",
       name: values.name || "",
       address: values.address || "",
@@ -2903,7 +2926,9 @@
       qrExpiresAt: values.qrExpiresAt || existing?.qrExpiresAt || "",
       qrNotes: values.qrNotes || existing?.qrNotes || "",
       notes: values.notes || "",
-      status: values.status || "active"
+      status: values.status || "active",
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
     };
     await saveData("sites", siteId, site);
     await saveSitePunchDirectory({ id: siteId, ...site });
@@ -2917,8 +2942,15 @@
     requirePermission(canManageAssignments(), "Only agency owners, admins, or platform owners can edit assignments.");
     const assignmentId = values.id || createId("assignment");
     const existing = findRecord("assignments", assignmentId);
+    const now = new Date().toISOString();
+    const agencyId = values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || "";
+
+    if (!agencyId) {
+      throw new Error("Your agency workspace is not loaded. Please log out and log back in.");
+    }
+
     const assignment = {
-      agencyId: values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id,
+      agencyId,
       workerId: values.workerId || "",
       clientId: values.clientId || "",
       siteId: values.siteId || "",
@@ -2928,7 +2960,9 @@
       billRate: Number(values.billRate || 0),
       status: values.status || "active",
       shiftSchedule: values.shiftSchedule || "",
-      notes: values.notes || ""
+      notes: values.notes || "",
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
     };
     await saveData("assignments", assignmentId, assignment);
     await syncWorkerFromAssignment(assignment);
@@ -10334,13 +10368,9 @@
                 <input id="worker-phone" name="phone" type="text" value="${escapeAttribute(worker?.phone || "")}" />
               </div>
               <div class="field-group">
-                <label for="worker-email">Email</label>
-                <input id="worker-email" name="email" type="email" value="${escapeAttribute(worker?.email || "")}" />
+                <label for="worker-email">Email (optional)</label>
+                <input id="worker-email" name="email" type="email" value="${escapeAttribute(worker?.email || "")}" placeholder="Optional contact email" />
               </div>
-            </div>
-            <div class="field-group">
-              <label for="worker-login-email">Worker login email</label>
-              <input id="worker-login-email" name="loginEmail" type="email" value="${escapeAttribute(worker?.loginEmail || worker?.email || "")}" />
             </div>
             <div class="form-row two">
               <div class="field-group">

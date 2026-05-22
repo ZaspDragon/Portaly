@@ -202,16 +202,25 @@
       details: null,
       error: ""
     },
-      publicPunch: {
-        loading: false,
-        error: "",
-        directories: [],
+    publicPunch: {
+      loading: false,
+      error: "",
+      directories: [],
+      agencies: [],
+      clients: [],
+      sites: [],
+      workers: [],
+      assignments: [],
+      siteWorkers: [],
       directory: null,
       agencyId: "",
       agencyName: "",
       companyId: "",
+      companyName: "",
       siteId: "",
+      siteName: "",
       saving: false,
+      emptyMessage: "",
       requestHelpMessage: "",
       requestDraft: null,
       lastMessage: "",
@@ -219,7 +228,7 @@
       lastSavedAt: "",
       lastStatus: "",
       lastWorkerName: ""
-      },
+    },
     profileRepair: null,
     approvalViewLogKey: "",
     filters: {
@@ -1097,8 +1106,10 @@
     console.log("[Portaly] Establishing cloud session");
     console.log("[Portaly] auth uid", authUser?.uid || "");
     state.authUser = authUser;
-    const profile = await loadCloudUserProfile(authUser.uid);
+    let profile = await loadCloudUserProfile(authUser.uid);
     console.log("[Portaly] loaded user profile", profile);
+    profile = await repairOwnerProfileIfNeeded(authUser, profile);
+    console.log("[Portaly] repaired user profile", profile);
 
     if (!profile) {
       const pendingInviteToken = parseInviteHash() || getStoredPendingInviteToken();
@@ -1162,6 +1173,67 @@
       return null;
     }
     return { id: snapshot.id, ...snapshot.data() };
+  }
+
+  async function repairOwnerProfileIfNeeded(authUser, profile) {
+    if (!state.firebase.ready || !state.firebase.db || !authUser?.uid) {
+      return profile;
+    }
+
+    const ownedAgency = await findAgencyOwnedBy(authUser.uid);
+    if (!ownedAgency?.id) {
+      return profile;
+    }
+
+    const expectedAgencyId = String(ownedAgency.id || "").trim();
+    const currentRole = String(profile?.role || "").trim();
+    const currentAgencyId = String(profile?.agencyId || "").trim();
+    const needsRepair = !profile || currentRole !== "agencyOwner" || currentAgencyId !== expectedAgencyId;
+
+    console.log("[Portaly] owner profile check", {
+      uid: authUser.uid,
+      currentRole,
+      currentAgencyId,
+      expectedAgencyId,
+      needsRepair
+    });
+
+    if (!needsRepair) {
+      return profile;
+    }
+
+    const nowIso = new Date().toISOString();
+    const repairedProfile = {
+      id: authUser.uid,
+      agencyId: expectedAgencyId,
+      role: "agencyOwner",
+      firstName: profile?.firstName || state.profileRepair?.prefill?.ownerFirstName || "",
+      lastName: profile?.lastName || state.profileRepair?.prefill?.ownerLastName || "",
+      email: authUser.email || profile?.email || "",
+      phone: profile?.phone || ownedAgency?.settings?.supportPhone || "",
+      status: profile?.status || "active",
+      assignedClientIds: Array.isArray(profile?.assignedClientIds) ? profile.assignedClientIds : [],
+      assignedSiteIds: Array.isArray(profile?.assignedSiteIds) ? profile.assignedSiteIds : [],
+      workerId: profile?.workerId || "",
+      createdAt: profile?.createdAt || ownedAgency?.createdAt || nowIso,
+      updatedAt: nowIso
+    };
+
+    try {
+      await state.firebase.db.collection("users").doc(authUser.uid).set(repairedProfile, { merge: true });
+      console.log("[Portaly] owner profile repaired", {
+        uid: authUser.uid,
+        agencyId: expectedAgencyId
+      });
+      return await loadCloudUserProfile(authUser.uid);
+    } catch (error) {
+      console.error("[Portaly] owner profile repair failed", {
+        uid: authUser.uid,
+        expectedAgencyId,
+        error
+      });
+      return profile;
+    }
   }
 
   function buildSessionFromUser(user, mode) {
@@ -1970,6 +2042,12 @@
             siteId: trigger.dataset.siteId || ""
           });
           break;
+        case "open-publish-punch-page":
+          openPublishPunchPageModal(trigger.dataset.siteId || "");
+          break;
+        case "publish-site-to-punch-page":
+          await publishSiteToPunchPage(trigger.dataset.siteId || "");
+          break;
         case "deactivate-qr-link":
           await deactivateQrLink(trigger.dataset.qrType || "", trigger.dataset.recordId || "");
           break;
@@ -2292,19 +2370,13 @@
 
     if (target.name === "publicPunchAgencyId") {
       const nextAgencyId = String(target.value || "").trim();
-      const nextCompanyId = state.publicPunch.companyId && state.publicPunch.directories.some(directory => directory.agencyId === nextAgencyId && directory.companyId === state.publicPunch.companyId)
-        ? state.publicPunch.companyId
-        : "";
-      const nextSiteId = state.publicPunch.siteId && state.publicPunch.directories.some(directory => directory.agencyId === nextAgencyId && directory.siteId === state.publicPunch.siteId)
-        ? state.publicPunch.siteId
-        : "";
-      navigatePublicPunchRoute(nextAgencyId, nextCompanyId, nextSiteId, { replace: true });
+      navigatePublicPunchRoute(nextAgencyId, "", "", { replace: true });
       return;
     }
 
     if (target.name === "publicPunchCompanyId") {
       const nextCompanyId = String(target.value || "").trim();
-      const nextSiteId = state.publicPunch.siteId && state.publicPunch.directories.some(directory => directory.agencyId === (state.publicPunch.agencyId || directory.agencyId) && directory.companyId === nextCompanyId && directory.siteId === state.publicPunch.siteId)
+      const nextSiteId = state.publicPunch.siteId && (state.publicPunch.sites || []).some(site => site.id === state.publicPunch.siteId && site.clientId === nextCompanyId)
         ? state.publicPunch.siteId
         : "";
       navigatePublicPunchRoute(state.publicPunch.agencyId || "", nextCompanyId, nextSiteId, { replace: true });
@@ -2314,9 +2386,10 @@
     if (target.name === "publicPunchSiteId") {
       const nextSiteId = String(target.value || "").trim();
       const matchedDirectory = state.publicPunch.directories.find(directory => directory.siteId === nextSiteId) || null;
+      const matchedSite = (state.publicPunch.sites || []).find(site => site.id === nextSiteId) || null;
       navigatePublicPunchRoute(
-        matchedDirectory?.agencyId || state.publicPunch.agencyId || "",
-        matchedDirectory?.companyId || state.publicPunch.companyId || "",
+        matchedDirectory?.agencyId || matchedSite?.agencyId || state.publicPunch.agencyId || "",
+        matchedDirectory?.companyId || matchedSite?.clientId || state.publicPunch.companyId || "",
         nextSiteId,
         { replace: true }
       );
@@ -2325,7 +2398,7 @@
 
     if (target.name === "publicPunchWorkerId") {
       const workerId = String(target.value || "").trim();
-      const worker = (state.publicPunch.directory?.publicWorkerOptions || []).find(option => option.id === workerId);
+      const worker = (state.publicPunch.siteWorkers || state.publicPunch.directory?.publicWorkerOptions || []).find(option => option.id === workerId);
       const manualField = document.getElementById("public-punch-worker-name");
       if (worker && manualField instanceof HTMLInputElement) {
         manualField.value = worker.name;
@@ -3564,8 +3637,15 @@
     const agencyId = String(agencyField?.value || state.publicPunch.agencyId || state.publicPunch.directory?.agencyId || "").trim();
     const companyId = String(companyField?.value || state.publicPunch.companyId || state.publicPunch.directory?.companyId || "").trim();
     const siteId = String(siteField?.value || state.publicPunch.siteId || state.publicPunch.directory?.siteId || "").trim();
+    const selectedSite = (state.publicPunch.sites || []).find(site => String(site.id || site.siteId || "").trim() === siteId) || null;
     const directory = (state.publicPunch.directories || []).find(item => item.siteId === siteId && (!agencyId || item.agencyId === agencyId) && (!companyId || item.companyId === companyId))
-      || (state.publicPunch.directory && state.publicPunch.directory.siteId === siteId ? state.publicPunch.directory : null);
+      || (state.publicPunch.directory && state.publicPunch.directory.siteId === siteId ? state.publicPunch.directory : null)
+      || (selectedSite ? buildSitePunchDirectory(selectedSite, {
+        agencies: state.publicPunch.agencies || [],
+        clients: state.publicPunch.clients || [],
+        workers: state.publicPunch.workers || [],
+        assignments: state.publicPunch.assignments || []
+      }) : null);
     return {
       agencyId,
       companyId,
@@ -3617,15 +3697,17 @@
 
   function getPublicPunchContext() {
     const { agencyId, companyId, siteId, directory } = getSelectedPublicPunchDirectory();
+    const client = (state.publicPunch.clients || []).find(item => item.id === companyId) || null;
+    const site = (state.publicPunch.sites || []).find(item => item.id === siteId) || null;
     return {
       agencyId,
-      agencyName: directory?.agencyName || state.publicPunch?.agencyName || "",
+      agencyName: directory?.agencyName || state.publicPunch?.agencyName || getAgencyName(agencyId) || "",
       companyId,
-      companyName: directory?.companyName || "",
+      companyName: directory?.companyName || state.publicPunch?.companyName || client?.name || "",
       clientId: companyId,
-      clientName: directory?.companyName || "",
+      clientName: directory?.companyName || state.publicPunch?.companyName || client?.name || "",
       siteId,
-      siteName: directory?.siteName || "",
+      siteName: directory?.siteName || state.publicPunch?.siteName || site?.name || "",
       directory
     };
   }
@@ -3639,7 +3721,8 @@
     const requestDraft = state.publicPunch?.requestDraft || null;
     const workerField = document.getElementById("public-punch-worker");
     const manualField = document.getElementById("public-punch-worker-name");
-    const matchedWorker = (context.directory?.publicWorkerOptions || []).find(option => option.id === String(workerField?.value || "").trim()) || null;
+    const availableWorkers = context.directory?.publicWorkerOptions || state.publicPunch?.siteWorkers || [];
+    const matchedWorker = availableWorkers.find(option => option.id === String(workerField?.value || "").trim()) || null;
     const workerName = String(manualField?.value || matchedWorker?.name || state.publicPunch?.lastWorkerName || "").trim();
 
     openModal("Submit Punch Request", `
@@ -3692,23 +3775,24 @@
     }
 
     const { agencyId, companyId, siteId, directory } = getSelectedPublicPunchDirectory();
-    if (!agencyId || !companyId || !siteId || !directory) {
+    const context = getPublicPunchContext();
+    if (!agencyId || !companyId || !siteId) {
       throw new Error("Choose the staffing agency, company, and site before saving a punch.");
     }
 
-    const worker = resolvePublicPunchWorker(directory);
+    const worker = resolvePublicPunchWorker(directory || { publicWorkerOptions: state.publicPunch?.siteWorkers || [] });
     const now = new Date();
     const timestamp = now.toISOString();
     const punchId = createId("punch");
     const punch = {
       id: punchId,
-      agencyId: directory.agencyId || "",
+      agencyId: agencyId,
       companyId,
-      companyName: directory.companyName,
+      companyName: context.companyName || directory?.companyName || getClientName(companyId),
       clientId: companyId,
-      clientName: directory.companyName,
+      clientName: context.companyName || directory?.companyName || getClientName(companyId),
       siteId,
-      siteName: directory.siteName,
+      siteName: context.siteName || directory?.siteName || getSiteName(siteId),
       workerId: worker.workerId,
       workerName: worker.workerName,
       workerMatched: worker.workerMatched,
@@ -3799,7 +3883,7 @@
     const requestId = createId("punchRequest");
     const now = new Date().toISOString();
     const matchedWorker = workerId
-      ? (context.directory?.publicWorkerOptions || []).find(option => option.id === workerId) || null
+      ? ((context.directory?.publicWorkerOptions || state.publicPunch?.siteWorkers || []).find(option => option.id === workerId) || null)
       : null;
     const requestRecord = {
       id: requestId,
@@ -4990,6 +5074,102 @@
       formName: "qr-save",
       saveLabel: "Save Site QR"
     });
+  }
+
+  function openPublishPunchPageModal(initialSiteId = "") {
+    requirePermission(canManageSites(), "Only agency owners, admins, or platform owners can publish a site to the punch page.");
+    const scoped = getScopedData();
+    const activeSites = (scoped.sites || [])
+      .filter(site => site && !isInactiveStatus(site.status) && site.clientId)
+      .slice()
+      .sort((left, right) => `${getClientName(left.clientId)} ${left.name}`.localeCompare(`${getClientName(right.clientId)} ${right.name}`));
+    openModal("Publish to Punch Page", `
+      <div class="notice-card">
+        <div>
+          <strong>Publish one live site punch station.</strong>
+          <p>Portaly will confirm the site is active, refresh the worker list for that site, and generate the QR-ready punch link.</p>
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="publish-punch-site">Site / location</label>
+        <select id="publish-punch-site" name="siteId">
+          ${renderSelectOptions(activeSites, initialSiteId || activeSites[0]?.id || "", "Select site", "name")}
+        </select>
+      </div>
+      <p class="helper-copy">Workers will open the punch page from this QR and can still type their name manually if they are not assigned yet.</p>
+    `, async values => {
+      await publishSiteToPunchPage(values.siteId || "");
+    }, {
+      saveLabel: "Publish to Punch Page",
+      saveTone: "button-primary"
+    });
+  }
+
+  async function publishSiteToPunchPage(siteId) {
+    requirePermission(canManageSites(), "Only agency owners, admins, or platform owners can publish a site to the punch page.");
+    const site = findRecord("sites", siteId);
+    if (!site) {
+      throw new Error("Choose a site before publishing the punch page.");
+    }
+    if (isInactiveStatus(site.status)) {
+      throw new Error("Reactivate this site before publishing it to the punch page.");
+    }
+    if (!site.clientId) {
+      throw new Error("Assign the site to a company/client before publishing it to the punch page.");
+    }
+    const scoped = getScopedData();
+    const link = buildSiteLink(site.id);
+    const sitePatch = site.qrEnabled === false || !String(site.qrCodeUrl || "").trim()
+      ? {
+        qrEnabled: true,
+        qrCodeUrl: link,
+        updatedAt: new Date().toISOString()
+      }
+      : null;
+    const siteForPublish = sitePatch ? { ...site, ...sitePatch } : site;
+    if (sitePatch) {
+      await updateData("sites", site.id, sitePatch);
+    }
+    const siteWorkers = getSitePunchWorkers(siteForPublish, scoped.workers || [], scoped.assignments || []);
+    const directory = await saveSitePunchDirectory(siteForPublish);
+    const companyName = getClientName(site.clientId);
+    const qrKey = `publish-${site.id}`;
+    const fileName = `portaly-qr-${slugifyFilename(companyName)}-${slugifyFilename(site.name)}.png`;
+    const workerNote = siteWorkers.length
+      ? `${siteWorkers.length} assigned worker${siteWorkers.length === 1 ? "" : "s"} will appear in the punch dropdown.`
+      : "No assigned workers were found yet. Workers can still type their name manually on the punch page.";
+
+    state.modal = null;
+    renderApp();
+    openModal("Punch Page Published", `
+      <div class="detail-grid">
+        ${renderDetailBox("Company", companyName)}
+        ${renderDetailBox("Site", site.name || "Site")}
+        ${renderDetailBox("Assigned Workers", String(siteWorkers.length))}
+      </div>
+      <div class="qr-preview" style="margin-top: 18px;">
+        ${renderQrCanvas(link, qrKey, `${companyName} ${site.name} Punch QR`)}
+      </div>
+      <p class="helper-copy" style="margin-top: 16px;">${escapeHtml(workerNote)}</p>
+      <p class="helper-copy qr-link-text">${escapeHtml(link)}</p>
+      <div class="table-actions qr-actions" style="margin-top: 16px;">
+        <button class="button button-secondary" data-action="copy-link" data-copy="${escapeAttribute(link)}" data-copy-success="${escapeAttribute("Punch link copied.")}" type="button">Copy Link</button>
+        <button class="button button-ghost" data-action="download-qr-png" data-qr-key="${escapeAttribute(qrKey)}" data-link="${escapeAttribute(link)}" data-file-name="${escapeAttribute(fileName)}" type="button">Download PNG</button>
+        <button class="button button-ghost" data-action="print-qr-card" data-qr-key="${escapeAttribute(qrKey)}" data-link="${escapeAttribute(link)}" data-company-name="${escapeAttribute(companyName)}" data-site-name="${escapeAttribute(site.name || "Site")}" type="button">Print QR</button>
+      </div>
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
+    });
+    await appendAuditLog("punch_page_published", "sitePunchDirectories", directory?.id || site.id, null, {
+      siteId: site.id,
+      agencyId: site.agencyId,
+      clientId: site.clientId,
+      link,
+      workerCount: siteWorkers.length
+    });
+    pushToast("Punch page published successfully.", "success");
   }
 
   async function deactivateQrLink(qrType, recordId) {
@@ -6984,34 +7164,74 @@
     const selectedDirectory = punchState.directory
       || directories.find(item => item.siteId === punchState.siteId && (!punchState.agencyId || item.agencyId === punchState.agencyId) && (!punchState.companyId || item.companyId === punchState.companyId))
       || null;
-    const agencyOptions = [...new Map(directories.map(directory => [directory.agencyId, {
-      id: directory.agencyId,
-      name: directory.agencyName
-    }])).values()].filter(option => option.id);
-    const companyOptions = [...new Map(
-      directories
-        .filter(directory => !punchState.agencyId || directory.agencyId === punchState.agencyId)
-        .map(directory => [directory.companyId, {
-          id: directory.companyId,
-          name: directory.companyName
-        }])
-    ).values()].filter(option => option.id);
-    const siteOptions = directories.filter(directory => (!punchState.agencyId || directory.agencyId === punchState.agencyId) && (!punchState.companyId || directory.companyId === punchState.companyId));
-    const workerOptions = Array.isArray(selectedDirectory?.publicWorkerOptions) ? selectedDirectory.publicWorkerOptions : [];
-    const punchDisabled = selectedDirectory && !punchState.saving ? "" : "disabled";
+    const agencyOptions = Array.isArray(punchState.agencies) && punchState.agencies.length
+      ? punchState.agencies.filter(agency => agency && agency.id).map(agency => ({
+        id: agency.id,
+        name: agency.name || agency.agencyName || getAgencyName(agency.id)
+      }))
+      : [...new Map(directories.map(directory => [directory.agencyId, {
+        id: directory.agencyId,
+        name: directory.agencyName
+      }])).values()].filter(option => option.id);
+    const companyOptions = Array.isArray(punchState.clients) && punchState.clients.length
+      ? punchState.clients
+        .filter(client => client && client.id)
+        .filter(client => !punchState.agencyId || !client.agencyId || client.agencyId === punchState.agencyId)
+        .map(client => ({
+          id: client.id,
+          name: client.name
+        }))
+      : [...new Map(
+        directories
+          .filter(directory => !punchState.agencyId || directory.agencyId === punchState.agencyId)
+          .map(directory => [directory.companyId, {
+            id: directory.companyId,
+            name: directory.companyName
+          }])
+      ).values()].filter(option => option.id);
+    const siteOptions = Array.isArray(punchState.sites) && punchState.sites.length
+      ? punchState.sites
+        .filter(site => site && site.id)
+        .filter(site => (!punchState.agencyId || !site.agencyId || site.agencyId === punchState.agencyId) && (!punchState.companyId || site.clientId === punchState.companyId))
+        .map(site => ({
+          siteId: site.id,
+          siteName: site.name,
+          companyId: site.clientId || '',
+          agencyId: site.agencyId || ''
+        }))
+      : directories.filter(directory => (!punchState.agencyId || directory.agencyId === punchState.agencyId) && (!punchState.companyId || directory.companyId === punchState.companyId));
+    const workerOptions = Array.isArray(punchState.siteWorkers) && punchState.siteWorkers.length
+      ? punchState.siteWorkers
+      : (Array.isArray(selectedDirectory?.publicWorkerOptions) ? selectedDirectory.publicWorkerOptions : []);
+    const selectedSite = (punchState.sites || []).find(site => site.id === punchState.siteId) || null;
+    const resolvedAgencyName = selectedDirectory?.agencyName || punchState.agencyName || agencyOptions.find(agency => agency.id === punchState.agencyId)?.name || '';
+    const resolvedCompanyName = selectedDirectory?.companyName || punchState.companyName || companyOptions.find(company => company.id === punchState.companyId)?.name || '';
+    const resolvedSiteName = selectedDirectory?.siteName || punchState.siteName || selectedSite?.name || siteOptions.find(site => site.siteId === punchState.siteId)?.siteName || '';
+    const punchReady = !!(punchState.agencyId && punchState.companyId && punchState.siteId && (selectedDirectory || selectedSite || siteOptions.some(site => site.siteId === punchState.siteId)));
+    const punchDisabled = punchReady && !punchState.saving ? '' : 'disabled';
     const currentStatus = punchState.lastStatus || getPunchStatusLabelFromAction(punchState.lastAction);
-    const currentWorker = punchState.lastWorkerName || "Worker";
-    const isQrStation = state.route === "punch" && !!punchState.siteId;
+    const currentWorker = punchState.lastWorkerName || 'Worker';
+    const isQrStation = state.route === 'punch' && !!punchState.siteId;
     const showSelectors = !isQrStation;
-    const topTitle = isQrStation ? (selectedDirectory?.siteName || "Punch Station") : "Worker Punch Clock";
+    const topTitle = isQrStation ? (resolvedSiteName || 'Punch Station') : 'Worker Punch Clock';
     const topCopy = isQrStation
-      ? "Select or type your name, then tap the punch you need."
-      : "Choose your staffing agency, company, site, and name. Then tap the punch you need.";
-    const contextLine = [selectedDirectory?.agencyName || punchState.agencyName || "", selectedDirectory?.companyName || "", selectedDirectory?.siteName || ""].filter(Boolean).join(" · ");
+      ? 'Select or type your name, then tap the punch you need.'
+      : 'Choose your staffing agency, company, site, and name. Then tap the punch you need.';
+    const contextLine = [resolvedAgencyName, resolvedCompanyName, resolvedSiteName].filter(Boolean).join(' � ');
     const workerInputHelp = workerOptions.length
-      ? "Select your name from the list or type it manually if you do not see it yet."
-      : "Type the worker name exactly as it should appear on the timecard.";
-    const savingMessage = punchState.saving ? "Saving punch..." : "";
+      ? 'Select your name from the list or type it manually if you do not see it yet.'
+      : (punchState.siteId ? 'No assigned workers are loaded for this site yet. Type the worker name manually.' : 'Type the worker name exactly as it should appear on the timecard.');
+    const savingMessage = punchState.saving ? 'Saving punch...' : '';
+    const emptyMessage = punchState.emptyMessage
+      || (!companyOptions.length
+        ? 'Add a company/client first.'
+        : !siteOptions.length
+          ? 'Add a worksite under a client.'
+          : !(Array.isArray(punchState.workers) && punchState.workers.length)
+            ? 'Add workers or allow typed worker names.'
+            : '');
+    const adminRoute = state.session.mode !== 'public' && state.session.role ? getHomeRoute() : 'login';
+    const adminLabel = state.session.mode !== 'public' && state.session.role ? 'Dashboard' : 'Admin Login';
 
     if (punchState.loading) {
       return `
@@ -7022,7 +7242,7 @@
                 <p class="eyebrow">Portaly Punch Clock</p>
                 <div class="public-punch-topbar-actions">
                   <button class="button button-ghost button-text" data-action="refresh-public-punch" type="button">Refresh</button>
-                  <button class="button button-ghost button-text" data-action="go-route" data-route="login" type="button">Admin Login</button>
+                  <button class="button button-ghost button-text" data-action="go-route" data-route="${escapeHtml(adminRoute)}" type="button">${escapeHtml(adminLabel)}</button>
                 </div>
               </div>
               <h2>Loading punch station</h2>
@@ -7046,12 +7266,12 @@
               <p class="eyebrow">Portaly Punch Clock</p>
               <div class="public-punch-topbar-actions">
                 <button class="button button-ghost button-text" data-action="refresh-public-punch" type="button">Refresh</button>
-                <button class="button button-ghost button-text" data-action="go-route" data-route="login" type="button">Admin Login</button>
+                <button class="button button-ghost button-text" data-action="go-route" data-route="${escapeHtml(adminRoute)}" type="button">${escapeHtml(adminLabel)}</button>
               </div>
             </div>
             <h2>${escapeHtml(topTitle)}</h2>
             <p class="helper-copy">${escapeHtml(topCopy)}</p>
-            ${contextLine ? `<p class="helper-copy public-punch-context">${escapeHtml(contextLine)}</p>` : ""}
+            ${contextLine ? `<p class="helper-copy public-punch-context">${escapeHtml(contextLine)}</p>` : ''}
             ${punchState.error ? `
               <div class="notice-card danger" style="margin-top: 16px;">
                 <div>
@@ -7066,14 +7286,21 @@
                   <p>${escapeHtml(punchState.fallbackNotice)}</p>
                 </div>
               </div>
+            ` : emptyMessage ? `
+              <div class="notice-card warning" style="margin-top: 16px;">
+                <div>
+                  <strong>Punch page setup needed</strong>
+                  <p>${escapeHtml(emptyMessage)}</p>
+                </div>
+              </div>
             ` : !directories.length ? `
               <div class="notice-card warning" style="margin-top: 16px;">
                 <div>
                   <strong>No punch stations are ready yet</strong>
-                  <p>${escapeHtml(state.firebase.ready ? "Ask the staffing agency admin to add a client, site, worker assignment, and generate a site QR." : "Firebase is not configured yet, so Portaly is using demo punch data for now.")}</p>
+                  <p>${escapeHtml(state.firebase.ready ? 'Ask the staffing agency admin to add a client, site, worker assignment, and generate a site QR.' : 'Firebase is not configured yet, so Portaly is using demo punch data for now.')}</p>
                 </div>
               </div>
-            ` : ""}
+            ` : ''}
 
             <div class="form-grid punch-minimal-form" data-public-punch-form="true">
               ${showSelectors ? `
@@ -7081,7 +7308,7 @@
                   <label for="public-punch-agency">Staffing Agency</label>
                   <select id="public-punch-agency" name="publicPunchAgencyId">
                     <option value="">Select staffing agency</option>
-                    ${agencyOptions.map(agency => `<option value="${escapeHtml(agency.id)}" ${punchState.agencyId === agency.id ? "selected" : ""}>${escapeHtml(agency.name)}</option>`).join("")}
+                    ${agencyOptions.map(agency => `<option value="${escapeHtml(agency.id)}" ${punchState.agencyId === agency.id ? 'selected' : ''}>${escapeHtml(agency.name)}</option>`).join('')}
                   </select>
                 </div>
                 <div class="form-row two">
@@ -7089,22 +7316,22 @@
                     <label for="public-punch-company">Company / Client</label>
                     <select id="public-punch-company" name="publicPunchCompanyId">
                       <option value="">Select company</option>
-                      ${companyOptions.map(company => `<option value="${escapeHtml(company.id)}" ${punchState.companyId === company.id ? "selected" : ""}>${escapeHtml(company.name)}</option>`).join("")}
+                      ${companyOptions.map(company => `<option value="${escapeHtml(company.id)}" ${punchState.companyId === company.id ? 'selected' : ''}>${escapeHtml(company.name)}</option>`).join('')}
                     </select>
                   </div>
                   <div class="field-group">
                     <label for="public-punch-site">Site</label>
                     <select id="public-punch-site" name="publicPunchSiteId">
                       <option value="">Select site</option>
-                      ${siteOptions.map(site => `<option value="${escapeHtml(site.siteId)}" ${punchState.siteId === site.siteId ? "selected" : ""}>${escapeHtml(site.siteName)}</option>`).join("")}
+                      ${siteOptions.map(site => `<option value="${escapeHtml(site.siteId)}" ${punchState.siteId === site.siteId ? 'selected' : ''}>${escapeHtml(site.siteName)}</option>`).join('')}
                     </select>
                   </div>
                 </div>
               ` : `
                 <div class="punch-station-lockup">
-                  <span class="status-badge status-info">${escapeHtml(selectedDirectory?.agencyName || "Staffing Agency")}</span>
-                  <span class="status-badge status-info">${escapeHtml(selectedDirectory?.companyName || "Company")}</span>
-                  <span class="status-badge status-success">${escapeHtml(selectedDirectory?.siteName || "Site")}</span>
+                  <span class="status-badge status-info">${escapeHtml(resolvedAgencyName || 'Staffing Agency')}</span>
+                  <span class="status-badge status-info">${escapeHtml(resolvedCompanyName || 'Company')}</span>
+                  <span class="status-badge status-success">${escapeHtml(resolvedSiteName || 'Site')}</span>
                 </div>
               `}
               ${workerOptions.length ? `
@@ -7112,20 +7339,20 @@
                   <label for="public-punch-worker">Worker</label>
                   <select id="public-punch-worker" name="publicPunchWorkerId">
                     <option value="">Type the worker name instead</option>
-                    ${workerOptions.map(worker => `<option value="${escapeHtml(worker.id)}">${escapeHtml(worker.name)}</option>`).join("")}
+                    ${workerOptions.map(worker => `<option value="${escapeHtml(worker.id)}">${escapeHtml(worker.name)}</option>`).join('')}
                   </select>
                 </div>
-              ` : ""}
+              ` : ''}
               <div class="field-group">
                 <label for="public-punch-worker-name">Worker name</label>
-                <input id="public-punch-worker-name" name="publicPunchWorkerName" type="text" placeholder="${escapeAttribute(workerOptions.length ? "Select the worker or type the name here" : "Type the worker name")}" />
+                <input id="public-punch-worker-name" name="publicPunchWorkerName" type="text" placeholder="${escapeAttribute(workerOptions.length ? 'Select the worker or type the name here' : 'Type the worker name')}" />
                 <p class="helper-copy">${escapeHtml(workerInputHelp)}</p>
               </div>
             </div>
 
             <div class="punch-status-strip">
-              <span><strong>Status:</strong> ${escapeHtml(currentStatus || "Ready")}</span>
-              <span><strong>Last punch:</strong> ${escapeHtml(punchState.lastAction ? PUNCH_LABELS[punchState.lastAction] : "No punch yet")}</span>
+              <span><strong>Status:</strong> ${escapeHtml(currentStatus || 'Ready')}</span>
+              <span><strong>Last punch:</strong> ${escapeHtml(punchState.lastAction ? PUNCH_LABELS[punchState.lastAction] : 'No punch yet')}</span>
             </div>
 
             <div class="worker-buttons">
@@ -7135,18 +7362,18 @@
               <button class="button button-ghost button-large" data-action="public-punch-action" data-punch="clockOut" type="button" ${punchDisabled}>Clock Out</button>
             </div>
 
-            ${savingMessage ? `<p class="helper-copy" style="margin-top: 12px;">${escapeHtml(savingMessage)}</p>` : ""}
+            ${savingMessage ? `<p class="helper-copy" style="margin-top: 12px;">${escapeHtml(savingMessage)}</p>` : ''}
 
             ${punchState.lastMessage ? `
               <div class="worker-confirmation">
-                <strong>${escapeHtml(PUNCH_LABELS[punchState.lastAction] || "Punch saved")} for ${escapeHtml(currentWorker)}</strong>
+                <strong>${escapeHtml(PUNCH_LABELS[punchState.lastAction] || 'Punch saved')} for ${escapeHtml(currentWorker)}</strong>
                 <p>${escapeHtml(punchState.lastMessage)}</p>
               </div>
-            ` : ""}
+            ` : ''}
 
             <div class="public-punch-footer">
               <button class="button button-ghost button-text" data-action="open-punch-request" type="button">Need help? Submit punch request</button>
-              ${punchState.requestHelpMessage ? `<p class="helper-copy">${escapeHtml(punchState.requestHelpMessage)}</p>` : ""}
+              ${punchState.requestHelpMessage ? `<p class="helper-copy">${escapeHtml(punchState.requestHelpMessage)}</p>` : ''}
             </div>
           </div>
         </div>
@@ -8590,6 +8817,7 @@
                 <button class="button button-secondary" data-action="open-client-form" type="button">Add Client</button>
                 <button class="button button-secondary" data-action="open-site-form" type="button">Add Site</button>
                 <button class="button button-secondary" data-action="open-assignment-form" type="button">Assign Worker</button>
+                <button class="button button-secondary" data-action="open-publish-punch-page" type="button">Publish to Punch Page</button>
                 <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate QR</button>
                 <button class="button button-ghost" data-action="go-route" data-route="live-punches" type="button">Review Punch Requests</button>
                 <button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Approvals</button>
@@ -9721,6 +9949,7 @@
             <h2 class="page-heading">Generate site punch QR codes</h2>
           </div>
           <div class="page-actions">
+            <button class="button button-secondary" data-action="open-publish-punch-page" type="button">Publish to Punch Page</button>
             <button class="button button-primary" data-action="open-qr-form" data-qr-type="site" type="button">Generate Site QR</button>
           </div>
         </div>
@@ -9750,6 +9979,7 @@
                       <p class="helper-copy">Scan to open the shared punch page for this site.</p>
                       <p class="helper-copy qr-link-text">${escapeHtml(link || "Link deactivated")}</p>
                       <div class="table-actions qr-actions">
+                        <button class="button button-primary" data-action="publish-site-to-punch-page" data-site-id="${escapeAttribute(site.id)}" type="button">Publish</button>
                         <button class="button button-secondary" data-action="copy-link" data-copy="${escapeAttribute(link)}" data-copy-success="${escapeAttribute("Punch link copied.")}" type="button" ${link ? "" : "disabled"}>Copy Link</button>
                         <button class="button button-ghost" data-action="download-qr-png" data-qr-key="${escapeAttribute(site.id)}" data-link="${escapeAttribute(link)}" data-file-name="${escapeAttribute(fileName)}" type="button" ${link ? "" : "disabled"}>Download PNG</button>
                         <button class="button button-ghost" data-action="print-qr-card" data-qr-key="${escapeAttribute(site.id)}" data-link="${escapeAttribute(link)}" data-company-name="${escapeAttribute(companyName)}" data-site-name="${escapeAttribute(site.name)}" type="button" ${link ? "" : "disabled"}>Print QR</button>
@@ -11840,10 +12070,10 @@
           </div>
           <div class="feature-card">
             <p class="eyebrow">Step 5</p>
-            <h3>Generate site QR</h3>
-            <p>Create the public site QR so workers can scan, pick their name, and punch without logging in.</p>
+            <h3>Publish to punch page</h3>
+            <p>Confirm the live site, refresh the worker list, and generate the QR link workers will scan without logging in.</p>
             <div class="page-actions" style="margin-top: 16px;">
-              <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate Site QR</button>
+              <button class="button button-ghost" data-action="open-publish-punch-page" type="button">Publish to Punch Page</button>
             </div>
           </div>
         </div>
@@ -12171,19 +12401,33 @@
     };
   }
 
-  function getSitePunchWorkers(site, workers = []) {
+  function isInactiveStatus(value) {
+    return String(value || "").trim().toLowerCase() === "inactive";
+  }
+
+  function isActiveAssignmentStatus(value) {
+    const normalized = String(value || "active").trim().toLowerCase();
+    return normalized !== "inactive" && normalized !== "ended";
+  }
+
+  function getSitePunchWorkers(site, workers = [], assignments = []) {
     if (!site) {
       return [];
     }
-    const clientId = String(site.clientId || "").trim();
     const siteId = String(site.id || site.siteId || "").trim();
+    const assignedWorkerIds = new Set(
+      (assignments || [])
+        .filter(assignment => assignment && isActiveAssignmentStatus(assignment.status))
+        .filter(assignment => String(assignment.siteId || "").trim() === siteId)
+        .map(assignment => String(assignment.workerId || "").trim())
+        .filter(Boolean)
+    );
     const seen = new Set();
     return (workers || [])
-      .filter(worker => worker && worker.status !== "inactive")
+      .filter(worker => worker && !isInactiveStatus(worker.status))
       .filter(worker => {
         const assignedSiteId = String(worker.assignedSiteId || "").trim();
-        const assignedClientId = String(worker.assignedClientId || "").trim();
-        return assignedSiteId === siteId || (!assignedSiteId && assignedClientId === clientId);
+        return assignedSiteId === siteId || assignedWorkerIds.has(String(worker.id || "").trim());
       })
       .map(worker => ({
         id: worker.id,
@@ -12206,6 +12450,7 @@
     const agencies = options.agencies || [];
     const clients = options.clients || [];
     const workers = options.workers || [];
+    const assignments = options.assignments || [];
     const agencyName = (agencies.find(agency => agency.id === site.agencyId) || {}).name || getAgencyName(site.agencyId) || "Staffing Agency";
     const clientName = getClientNameFromStore(site.clientId, clients) || getClientName(site.clientId);
     const directory = normalizeSitePunchDirectory({
@@ -12221,7 +12466,7 @@
       qrEnabled: site.qrEnabled !== false,
       status: site.status || "active",
       punchUrl: buildSitePunchLink(site.agencyId || state.session.agencyId || state.session.agency?.id || "", site.clientId || "", site.id),
-      publicWorkerOptions: getSitePunchWorkers(site, workers),
+      publicWorkerOptions: getSitePunchWorkers(site, workers, assignments),
       updatedAt: new Date().toISOString()
     });
     return directory;
@@ -12234,9 +12479,175 @@
       .map(site => buildSitePunchDirectory(site, {
         agencies: store.agencies || [],
         clients: store.clients || [],
-        workers: store.workers || []
+        workers: store.workers || [],
+        assignments: store.assignments || []
       }))
       .filter(Boolean);
+  }
+
+  function buildPublicPunchStateFromRecords(query = {}, source = {}) {
+    const requestedAgencyId = String(query.agencyId || "").trim();
+    const requestedCompanyId = String(query.companyId || "").trim();
+    const requestedSiteId = String(query.siteId || "").trim();
+    const sessionAgencyId = String(state.session.agencyId || state.session.agency?.id || "").trim();
+    const scopedAgencyId = requestedAgencyId || sessionAgencyId;
+    const agenciesSource = state.session.role === "platformOwner"
+      ? (state.cache.agencies || [])
+      : ((source.agencies || []).length ? (source.agencies || []) : (scopedAgencyId ? (state.cache.agencies || []).filter(agency => agency.id === scopedAgencyId) : []));
+    const agencies = (agenciesSource || []).filter(Boolean).filter(agency => !scopedAgencyId || agency.id === scopedAgencyId);
+    const clients = (source.clients || []).filter(client => client && !isInactiveStatus(client.status)).filter(client => !scopedAgencyId || client.agencyId === scopedAgencyId);
+    const sites = (source.sites || []).filter(site => site && site.clientId && !isInactiveStatus(site.status)).filter(site => !scopedAgencyId || site.agencyId === scopedAgencyId);
+    const workers = (source.workers || []).filter(worker => worker && !isInactiveStatus(worker.status)).filter(worker => !scopedAgencyId || worker.agencyId === scopedAgencyId);
+    const assignments = (source.assignments || []).filter(assignment => assignment && isActiveAssignmentStatus(assignment.status)).filter(assignment => !scopedAgencyId || assignment.agencyId === scopedAgencyId);
+    const requestedSite = requestedSiteId ? sites.find(site => site.id === requestedSiteId) || null : null;
+    const resolvedAgencyId = requestedSite?.agencyId || scopedAgencyId || (agencies.length === 1 ? agencies[0].id : "");
+    const agencyClients = clients.filter(client => !resolvedAgencyId || client.agencyId === resolvedAgencyId);
+    const resolvedCompanyId = requestedSite?.clientId
+      || (requestedCompanyId && agencyClients.some(client => client.id === requestedCompanyId) ? requestedCompanyId : "")
+      || (agencyClients.length === 1 ? agencyClients[0].id : "");
+    const agencySites = sites.filter(site => !resolvedAgencyId || site.agencyId === resolvedAgencyId);
+    const clientSites = agencySites.filter(site => !resolvedCompanyId || site.clientId === resolvedCompanyId);
+    const resolvedSiteId = requestedSite?.id
+      || (requestedSiteId && clientSites.some(site => site.id === requestedSiteId) ? requestedSiteId : "")
+      || (clientSites.length === 1 ? clientSites[0].id : "");
+    const selectedSite = clientSites.find(site => site.id === resolvedSiteId) || null;
+    const directories = agencySites
+      .map(site => buildSitePunchDirectory(site, {
+        agencies: agenciesSource,
+        clients,
+        workers,
+        assignments
+      }))
+      .filter(Boolean);
+    const directory = selectedSite
+      ? buildSitePunchDirectory(selectedSite, {
+        agencies: agenciesSource,
+        clients,
+        workers,
+        assignments
+      })
+      : null;
+    const siteWorkers = selectedSite ? getSitePunchWorkers(selectedSite, workers, assignments) : [];
+    const agencyName = directory?.agencyName || agencies.find(agency => agency.id === resolvedAgencyId)?.name || getAgencyName(resolvedAgencyId) || "";
+    const companyName = directory?.companyName || agencyClients.find(client => client.id === resolvedCompanyId)?.name || "";
+    const siteName = directory?.siteName || selectedSite?.name || "";
+    const emptyMessage = !agencyClients.length
+      ? "Add a company/client first."
+      : !agencySites.length
+        ? "Add a worksite under a client."
+        : !workers.length
+          ? "Add workers or allow typed worker names."
+          : "";
+
+    console.log("Current agencyId", resolvedAgencyId || sessionAgencyId || "");
+    console.log("Loaded clients", agencyClients.length);
+    console.log("Loaded sites", agencySites.length);
+    console.log("Loaded workers", workers.length);
+    console.log("Selected site workers", siteWorkers.length);
+
+    return {
+      directories,
+      agencies,
+      clients: agencyClients,
+      sites: agencySites,
+      workers,
+      assignments,
+      siteWorkers,
+      directory,
+      agencyId: resolvedAgencyId || "",
+      agencyName,
+      companyId: directory?.companyId || resolvedCompanyId || "",
+      companyName,
+      siteId: directory?.siteId || resolvedSiteId || "",
+      siteName,
+      error: requestedSiteId && !selectedSite ? "This punch station could not be found. Ask your staffing agency to refresh the QR code." : "",
+      emptyMessage
+    };
+  }
+
+  function buildPublicPunchStateFromDirectories(query = {}, directories = []) {
+    const normalizedDirectories = (directories || []).map(normalizeSitePunchDirectory).filter(Boolean);
+    const agencyOptions = [...new Map(
+      normalizedDirectories
+        .map(directory => [directory.agencyId, { id: directory.agencyId, name: directory.agencyName }])
+    ).values()].filter(option => option.id);
+    const requestedAgencyId = String(query.agencyId || "").trim();
+    const requestedCompanyId = String(query.companyId || "").trim();
+    const requestedSiteId = String(query.siteId || "").trim();
+    const resolvedAgencyId = requestedAgencyId && agencyOptions.some(option => option.id === requestedAgencyId)
+      ? requestedAgencyId
+      : (agencyOptions.length === 1 ? agencyOptions[0].id : "");
+    const clientOptions = [...new Map(
+      normalizedDirectories
+        .filter(directory => !resolvedAgencyId || directory.agencyId === resolvedAgencyId)
+        .map(directory => [directory.companyId, {
+          id: directory.companyId,
+          name: directory.companyName,
+          agencyId: directory.agencyId
+        }])
+    ).values()].filter(option => option.id);
+    const requestedDirectory = requestedSiteId
+      ? normalizedDirectories.find(directory => directory.siteId === requestedSiteId && (!requestedAgencyId || directory.agencyId === requestedAgencyId) && (!requestedCompanyId || directory.companyId === requestedCompanyId)) || null
+      : null;
+    const resolvedCompanyId = requestedDirectory?.companyId
+      || (requestedCompanyId && clientOptions.some(option => option.id === requestedCompanyId) ? requestedCompanyId : "")
+      || (clientOptions.length === 1 ? clientOptions[0].id : "");
+    const siteOptions = [...new Map(
+      normalizedDirectories
+        .filter(directory => (!resolvedAgencyId || directory.agencyId === resolvedAgencyId) && (!resolvedCompanyId || directory.companyId === resolvedCompanyId))
+        .map(directory => [directory.siteId, {
+          id: directory.siteId,
+          siteId: directory.siteId,
+          name: directory.siteName,
+          siteName: directory.siteName,
+          clientId: directory.companyId,
+          companyId: directory.companyId,
+          agencyId: directory.agencyId
+        }])
+    ).values()].filter(Boolean);
+    const resolvedSiteId = requestedDirectory?.siteId
+      || (requestedSiteId && siteOptions.some(option => option.siteId === requestedSiteId) ? requestedSiteId : "")
+      || (siteOptions.length === 1 ? siteOptions[0].siteId : "");
+    const directory = resolvedSiteId
+      ? normalizedDirectories.find(item => item.siteId === resolvedSiteId && (!resolvedAgencyId || item.agencyId === resolvedAgencyId) && (!resolvedCompanyId || item.companyId === resolvedCompanyId)) || requestedDirectory || null
+      : null;
+    const allWorkers = [...new Map(
+      normalizedDirectories
+        .flatMap(item => item.publicWorkerOptions || [])
+        .map(worker => [worker.id || worker.name.toLowerCase(), worker])
+    ).values()];
+    const siteWorkers = directory?.publicWorkerOptions || [];
+
+    console.log("Current agencyId", directory?.agencyId || resolvedAgencyId || "");
+    console.log("Loaded clients", clientOptions.length);
+    console.log("Loaded sites", siteOptions.length);
+    console.log("Loaded workers", allWorkers.length);
+    console.log("Selected site workers", siteWorkers.length);
+
+    return {
+      directories: normalizedDirectories,
+      agencies: agencyOptions,
+      clients: clientOptions,
+      sites: siteOptions,
+      workers: allWorkers,
+      assignments: [],
+      siteWorkers,
+      directory,
+      agencyId: directory?.agencyId || resolvedAgencyId || "",
+      agencyName: directory?.agencyName || agencyOptions.find(option => option.id === resolvedAgencyId)?.name || "",
+      companyId: directory?.companyId || resolvedCompanyId || "",
+      companyName: directory?.companyName || clientOptions.find(option => option.id === resolvedCompanyId)?.name || "",
+      siteId: directory?.siteId || resolvedSiteId || "",
+      siteName: directory?.siteName || siteOptions.find(option => option.siteId === resolvedSiteId)?.siteName || "",
+      error: requestedSiteId && !directory ? "This punch station could not be found. Ask your staffing agency to refresh the QR code." : "",
+      emptyMessage: !clientOptions.length
+        ? "Add a company/client first."
+        : !siteOptions.length
+          ? "Add a worksite under a client."
+          : !allWorkers.length
+            ? "Add workers or allow typed worker names."
+            : ""
+    };
   }
 
   async function saveSitePunchDirectory(siteLike, options = {}) {
@@ -12262,7 +12673,8 @@
     const directory = buildSitePunchDirectory(site, {
       agencies: storeSource.agencies || [],
       clients: storeSource.clients || [],
-      workers: storeSource.workers || []
+      workers: storeSource.workers || [],
+      assignments: storeSource.assignments || []
     });
     if (!directory) {
       return null;
@@ -12359,13 +12771,22 @@
         loading: false,
         error: "",
         directories: [],
+        agencies: [],
+        clients: [],
+        sites: [],
+        workers: [],
+        assignments: [],
+        siteWorkers: [],
         directory: null,
         agencyId: "",
         agencyName: "",
         companyId: "",
+        companyName: "",
         siteId: "",
+        siteName: "",
         saving: false,
         fallbackNotice: "",
+        emptyMessage: "",
         requestHelpMessage: "",
         requestDraft: null,
         lastMessage: "",
@@ -12384,47 +12805,22 @@
       error: "",
       agencyId: punchHash.agencyId,
       companyId: punchHash.companyId,
-      siteId: punchHash.siteId
+      siteId: punchHash.siteId,
+      companyName: "",
+      siteName: "",
+      emptyMessage: ""
     };
 
     try {
-      const directories = await loadPublicPunchDirectories(punchHash);
-      const agencyIds = [...new Set(directories.map(item => item.agencyId).filter(Boolean))];
-      const autoAgencyId = punchHash.agencyId || (agencyIds.length === 1 ? agencyIds[0] : "");
-      const companyIds = [...new Set(directories
-        .filter(item => !autoAgencyId || item.agencyId === autoAgencyId)
-        .map(item => item.companyId)
-        .filter(Boolean))];
-      const autoCompanyId = punchHash.companyId || (companyIds.length === 1 ? companyIds[0] : "");
-      const candidateSites = directories.filter(item => (!autoAgencyId || item.agencyId === autoAgencyId) && (!autoCompanyId || item.companyId === autoCompanyId));
-      const autoSiteId = punchHash.siteId || (candidateSites.length === 1 ? candidateSites[0].siteId : "");
-      const directory = autoSiteId
-        ? directories.find(item => item.siteId === autoSiteId && (!autoAgencyId || item.agencyId === autoAgencyId) && (!autoCompanyId || item.companyId === autoCompanyId)) || null
-        : null;
-      const workerCount = directories.reduce((total, item) => total + (Array.isArray(item.publicWorkerOptions) ? item.publicWorkerOptions.length : 0), 0);
-      console.log("[Portaly] public punch options loaded", {
-        agencyCount: agencyIds.length,
-        clientCount: companyIds.length,
-        siteCount: directories.length,
-        workerCount,
-        requestedAgencyId: punchHash.agencyId,
-        requestedClientId: punchHash.companyId,
-        requestedSiteId: punchHash.siteId,
-        resolvedAgencyId: directory?.agencyId || autoAgencyId || "",
-        resolvedClientId: directory?.companyId || autoCompanyId || "",
-        resolvedSiteId: directory?.siteId || autoSiteId || ""
-      });
+      const shouldUseSessionSource = state.session.mode !== "public" && !!state.session.role && state.session.role !== "worker";
+      const nextState = shouldUseSessionSource
+        ? buildPublicPunchStateFromRecords(punchHash, getScopedData())
+        : buildPublicPunchStateFromDirectories(punchHash, await loadPublicPunchDirectories(punchHash));
 
       state.publicPunch = {
         ...state.publicPunch,
+        ...nextState,
         loading: false,
-        error: punchHash.siteId && !directory ? "This punch station could not be found. Ask your staffing agency to refresh the QR code." : "",
-        directories,
-        directory,
-        agencyId: directory?.agencyId || autoAgencyId || "",
-        agencyName: directory?.agencyName || directories.find(item => item.agencyId === (autoAgencyId || ""))?.agencyName || "",
-        companyId: directory?.companyId || autoCompanyId || "",
-        siteId: directory?.siteId || autoSiteId || "",
         saving: false,
         fallbackNotice: ""
       };
@@ -12451,24 +12847,12 @@
           }
           return true;
         });
-        const directory = punchHash.siteId
-          ? directories.find(item => item.siteId === punchHash.siteId && (!punchHash.agencyId || item.agencyId === punchHash.agencyId) && (!punchHash.companyId || item.companyId === punchHash.companyId)) || null
-          : (directories.length === 1 ? directories[0] : null);
-        const agencyIds = [...new Set(directories.map(item => item.agencyId).filter(Boolean))];
-        const companyIds = [...new Set(directories
-          .filter(item => !punchHash.agencyId || item.agencyId === punchHash.agencyId)
-          .map(item => item.companyId)
-          .filter(Boolean))];
+        const fallbackState = buildPublicPunchStateFromDirectories(punchHash, directories);
         state.publicPunch = {
           ...state.publicPunch,
+          ...fallbackState,
           loading: false,
           error: "",
-          directories,
-          directory,
-          agencyId: directory?.agencyId || punchHash.agencyId || (agencyIds.length === 1 ? agencyIds[0] : ""),
-          agencyName: directory?.agencyName || "",
-          companyId: directory?.companyId || punchHash.companyId || (companyIds.length === 1 ? companyIds[0] : ""),
-          siteId: directory?.siteId || punchHash.siteId || "",
           saving: false,
           fallbackNotice: "Live punch stations could not load in this local preview. Demo punch stations are shown below so you can still test the worker flow."
         };
@@ -12481,9 +12865,16 @@
         ...state.publicPunch,
         loading: false,
         directories: [],
+        agencies: [],
+        clients: [],
+        sites: [],
+        workers: [],
+        assignments: [],
+        siteWorkers: [],
         directory: null,
         saving: false,
         fallbackNotice: "",
+        emptyMessage: "",
         error: "Portaly could not load this punch station right now. Check the link or try again in a moment."
       };
       return null;

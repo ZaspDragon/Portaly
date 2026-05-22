@@ -356,6 +356,7 @@ service cloud.firestore {
     match /agencies/{agencyDocId} {
       allow read: if signedIn() && (
         isPlatformOwner()
+        || resource.data.ownerUserId == request.auth.uid
         || ((isAgencyStaff() || isClientManager() || isWorker()) && agencyId() == agencyDocId)
       );
       allow create: if signedIn()

@@ -1188,12 +1188,17 @@
     const expectedAgencyId = String(ownedAgency.id || "").trim();
     const currentRole = String(profile?.role || "").trim();
     const currentAgencyId = String(profile?.agencyId || "").trim();
-    const needsRepair = !profile || currentRole !== "agencyOwner" || currentAgencyId !== expectedAgencyId;
+    const currentStatus = String(profile?.status || "").trim();
+    const needsRepair = !profile
+      || currentRole !== "agencyOwner"
+      || currentAgencyId !== expectedAgencyId
+      || currentStatus !== "active";
 
     console.log("[Portaly] owner profile check", {
       uid: authUser.uid,
       currentRole,
       currentAgencyId,
+      currentStatus,
       expectedAgencyId,
       needsRepair
     });
@@ -2994,7 +2999,10 @@
       zip: values.zip || "",
       siteContact: values.siteContact || "",
       sitePhone: values.sitePhone || "",
-      qrCodeUrl: values.qrCodeUrl || existing?.qrCodeUrl || buildSiteLink(siteId),
+      qrCodeUrl: values.qrCodeUrl || existing?.qrCodeUrl || buildSiteLink(siteId, {
+        agencyId,
+        clientId: values.clientId || existing?.clientId || ""
+      }),
       qrEnabled: values.qrEnabled ? values.qrEnabled === "true" || values.qrEnabled === "on" : existing?.qrEnabled !== false,
       qrExpiresAt: values.qrExpiresAt || existing?.qrExpiresAt || "",
       qrNotes: values.qrNotes || existing?.qrNotes || "",
@@ -3236,7 +3244,10 @@
     }
     const next = {
       clientId: values.clientId || site.clientId || "",
-      qrCodeUrl: buildSiteLink(site.id),
+      qrCodeUrl: buildSiteLink(site.id, {
+        agencyId: site.agencyId || state.session.agencyId || state.session.agency?.id || "",
+        clientId: values.clientId || site.clientId || ""
+      }),
       qrEnabled: true,
       qrExpiresAt: values.qrExpiresAt ? new Date(values.qrExpiresAt).toISOString() : "",
       qrNotes: values.qrNotes || ""
@@ -10881,7 +10892,10 @@
               </div>
               <div class="field-group">
                 <label for="site-qr-url">QR link override</label>
-                <input id="site-qr-url" name="qrCodeUrl" type="text" value="${escapeAttribute(site?.qrCodeUrl || "")}" placeholder="${escapeAttribute(buildSiteLink(site?.id || "site_example"))}" />
+                <input id="site-qr-url" name="qrCodeUrl" type="text" value="${escapeAttribute(site?.qrCodeUrl || "")}" placeholder="${escapeAttribute(buildSiteLink(site?.id || "site_example", {
+                  agencyId: site?.agencyId || state.session.agencyId || state.session.agency?.id || "",
+                  clientId: site?.clientId || ""
+                }))}" />
               </div>
             </div>
             <div class="field-group">
@@ -12038,7 +12052,7 @@
         <div class="feature-grid" style="margin-top: 18px;">
           <div class="feature-card">
             <p class="eyebrow">Step 1</p>
-            <h3>Add company client</h3>
+            <h3>Add Client</h3>
             <p>Create the company record that workers, sites, approvals, and payroll will tie back to.</p>
             <div class="page-actions" style="margin-top: 16px;">
               <button class="button button-primary" data-action="open-client-form" type="button">Add Client</button>
@@ -12046,7 +12060,7 @@
           </div>
           <div class="feature-card">
             <p class="eyebrow">Step 2</p>
-            <h3>Add first site</h3>
+            <h3>Add Site</h3>
             <p>Create the warehouse or job location so Portaly can route punches and approvals correctly.</p>
             <div class="page-actions" style="margin-top: 16px;">
               <button class="button button-secondary" data-action="open-site-form" type="button">Add Site</button>
@@ -12054,7 +12068,7 @@
           </div>
           <div class="feature-card">
             <p class="eyebrow">Step 3</p>
-            <h3>Add first worker</h3>
+            <h3>Add Worker</h3>
             <p>Create a worker record so you can assign them, track time, and prepare payroll.</p>
             <div class="page-actions" style="margin-top: 16px;">
               <button class="button button-secondary" data-action="open-worker-form" type="button">Add Worker</button>
@@ -12062,7 +12076,7 @@
           </div>
           <div class="feature-card">
             <p class="eyebrow">Step 4</p>
-            <h3>Assign worker to site</h3>
+            <h3>Assign Worker</h3>
             <p>Connect the worker to the client and site so the public punch page shows the right names.</p>
             <div class="page-actions" style="margin-top: 16px;">
               <button class="button button-secondary" data-action="open-assignment-form" type="button">Assign Worker</button>
@@ -12070,10 +12084,10 @@
           </div>
           <div class="feature-card">
             <p class="eyebrow">Step 5</p>
-            <h3>Publish to punch page</h3>
+            <h3>Generate QR</h3>
             <p>Confirm the live site, refresh the worker list, and generate the QR link workers will scan without logging in.</p>
             <div class="page-actions" style="margin-top: 16px;">
-              <button class="button button-ghost" data-action="open-publish-punch-page" type="button">Publish to Punch Page</button>
+              <button class="button button-ghost" data-action="open-publish-punch-page" type="button">Generate Site QR</button>
             </div>
           </div>
         </div>
@@ -12357,9 +12371,13 @@
     return `${baseUrl}#/punch${query ? `?${query}` : ""}`;
   }
 
-  function buildSiteLink(siteId) {
+  function buildSiteLink(siteId, options = {}) {
     const site = getSite(siteId);
-    return buildSitePunchLink(site?.agencyId || "", site?.clientId || "", siteId);
+    return buildSitePunchLink(
+      site?.agencyId || options.agencyId || "",
+      site?.clientId || options.clientId || "",
+      siteId
+    );
   }
 
   function normalizePublicWorkerOption(option) {

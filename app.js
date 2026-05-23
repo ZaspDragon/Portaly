@@ -1241,6 +1241,47 @@
     }
   }
 
+  async function repairCurrentAgencyAccess(options = {}) {
+    requirePermission(state.session.role === "agencyOwner", "Only the agency owner can repair agency access.");
+    if (!state.firebase.ready || !state.firebase.db || !state.authUser?.uid) {
+      throw new Error("Cloud Mode is not ready yet. Try again in a moment.");
+    }
+
+    const ownedAgency = await findAgencyOwnedBy(state.authUser.uid);
+    if (!ownedAgency?.id) {
+      throw new Error("We could not find an agency owned by this login.");
+    }
+
+    const existingProfile = await loadCloudUserProfile(state.authUser.uid);
+    const nowIso = new Date().toISOString();
+    const repairedProfile = {
+      id: state.authUser.uid,
+      agencyId: ownedAgency.id,
+      role: "agencyOwner",
+      firstName: existingProfile?.firstName || "",
+      lastName: existingProfile?.lastName || "",
+      email: state.authUser.email || existingProfile?.email || "",
+      phone: existingProfile?.phone || ownedAgency?.settings?.supportPhone || "",
+      status: "active",
+      assignedClientIds: Array.isArray(existingProfile?.assignedClientIds) ? existingProfile.assignedClientIds : [],
+      assignedSiteIds: Array.isArray(existingProfile?.assignedSiteIds) ? existingProfile.assignedSiteIds : [],
+      workerId: existingProfile?.workerId || "",
+      createdAt: existingProfile?.createdAt || ownedAgency?.createdAt || nowIso,
+      updatedAt: nowIso
+    };
+
+    await state.firebase.db.collection("users").doc(state.authUser.uid).set(repairedProfile, { merge: true });
+    await establishCloudSession(state.authUser);
+    await refreshSessionData();
+    await loadPublicPunchState();
+    renderApp();
+
+    if (!options.silent) {
+      pushToast("Your agency access was repaired successfully.", "success");
+    }
+    return repairedProfile;
+  }
+
   function buildSessionFromUser(user, mode) {
     return {
       mode,
@@ -1901,6 +1942,9 @@
           break;
         case "delete-sample-data":
           openDeleteSampleDataModal();
+          break;
+        case "repair-agency-access":
+          await repairCurrentAgencyAccess();
           break;
         case "open-worker-form":
           requirePermission(canManageWorkers(), "Only agency owners, admins, or platform owners can edit workers.");
@@ -10224,6 +10268,17 @@
             </div>
           </div>
         ` : ""}
+        ${state.session.role === "agencyOwner" ? `
+          <div class="notice-card warning">
+            <div>
+              <strong>Repair My Agency Access</strong>
+              <p>If clients, sites, or workers are blocked by a missing agency link, Portaly can reconnect this owner profile to the correct agency automatically.</p>
+            </div>
+            <div class="page-actions" style="margin-top: 18px;">
+              <button class="button button-secondary" data-action="repair-agency-access" type="button">Repair My Agency Access</button>
+            </div>
+          </div>
+        ` : ""}
         <div class="setting-card">
           <p class="eyebrow">White Label Settings</p>
           <h3>Agency branding and support details</h3>
@@ -12782,6 +12837,66 @@
     });
   }
 
+  async function loadDirectPublicPunchRecords(query = {}) {
+    if (!state.firebase.ready || !state.firebase.db) {
+      return null;
+    }
+
+    const agencyId = String(query.agencyId || "").trim();
+    const companyId = String(query.companyId || "").trim();
+    const siteId = String(query.siteId || "").trim();
+    if (!agencyId || !companyId || !siteId) {
+      return null;
+    }
+
+    console.log("[Portaly] direct public punch fallback", {
+      agencyId,
+      clientId: companyId,
+      siteId
+    });
+
+    const siteSnapshot = await state.firebase.db.collection("sites").doc(siteId).get();
+    if (!siteSnapshot.exists) {
+      return null;
+    }
+    const site = { id: siteSnapshot.id, ...(siteSnapshot.data() || {}) };
+    if (isInactiveStatus(site.status) || site.agencyId !== agencyId || site.clientId !== companyId) {
+      return null;
+    }
+
+    const clientSnapshot = await state.firebase.db.collection("clients").doc(companyId).get();
+    if (!clientSnapshot.exists) {
+      return null;
+    }
+    const client = { id: clientSnapshot.id, ...(clientSnapshot.data() || {}) };
+    if (isInactiveStatus(client.status) || client.agencyId !== agencyId) {
+      return null;
+    }
+
+    let agency = null;
+    try {
+      const agencySnapshot = await state.firebase.db.collection("agencies").doc(agencyId).get();
+      if (agencySnapshot.exists) {
+        agency = { id: agencySnapshot.id, ...(agencySnapshot.data() || {}) };
+      }
+    } catch (error) {
+      console.warn("[Portaly] direct public punch agency read skipped", {
+        agencyId,
+        errorCode: error?.code || "",
+        errorMessage: error?.message || String(error || "")
+      });
+    }
+
+    const agencies = agency ? [agency] : [{ id: agencyId, name: getAgencyName(agencyId) || "Staffing Agency" }];
+    return buildPublicPunchStateFromRecords(query, {
+      agencies,
+      clients: [client],
+      sites: [site],
+      workers: [],
+      assignments: []
+    });
+  }
+
   async function loadPublicPunchState() {
     const punchHash = parsePublicPunchHash();
     if (!punchHash) {
@@ -12831,9 +12946,22 @@
 
     try {
       const shouldUseSessionSource = state.session.mode !== "public" && !!state.session.role && state.session.role !== "worker";
-      const nextState = shouldUseSessionSource
-        ? buildPublicPunchStateFromRecords(punchHash, getScopedData())
-        : buildPublicPunchStateFromDirectories(punchHash, await loadPublicPunchDirectories(punchHash));
+      let nextState;
+      if (shouldUseSessionSource) {
+        nextState = buildPublicPunchStateFromRecords(punchHash, getScopedData());
+      } else {
+        const directories = await loadPublicPunchDirectories(punchHash);
+        nextState = buildPublicPunchStateFromDirectories(punchHash, directories);
+        if ((!directories.length || nextState.error) && punchHash.agencyId && punchHash.companyId && punchHash.siteId) {
+          const directState = await loadDirectPublicPunchRecords(punchHash);
+          if (directState) {
+            nextState = {
+              ...directState,
+              directories: directories.length ? directories : (directState.directories || [])
+            };
+          }
+        }
+      }
 
       state.publicPunch = {
         ...state.publicPunch,

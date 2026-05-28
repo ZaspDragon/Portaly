@@ -44,7 +44,7 @@
   const DEFAULT_SUPPORT_EMAIL = "support@portaly-demo.com";
   const DEFAULT_SUPPORT_PHONE = "(800) 555-0199";
   const BILLING_LOCK_STATUSES = new Set(["past_due", "unpaid", "expired_trial", "canceled"]);
-  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite", "punch"]);
+  const PUBLIC_ROUTES = new Set(["landing", "clock", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite", "punch"]);
   const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
   const CLIENT_ROUTES = new Set(["approvals", "client-approval", "help", "billing-required"]);
   const AGENCY_SCOPED_COLLECTIONS = new Set([
@@ -837,6 +837,9 @@
     if (!hash) {
       return getHomeRoute();
     }
+    if (hash === "clock") {
+      return "punch";
+    }
     if (hash === "site-qr") {
       return "qr-codes";
     }
@@ -904,7 +907,7 @@
 
   function parsePublicPunchHash() {
     const route = getHashPath();
-    if (route !== "punch" && route !== "landing") {
+    if (route !== "punch" && route !== "landing" && route !== "clock") {
       return null;
     }
     const params = getHashSearchParams();
@@ -1042,7 +1045,7 @@
       params.set("siteId", siteId);
     }
     const query = params.toString();
-    const target = query ? `#/punch?${query}` : "#/punch";
+    const target = query ? `#/clock?${query}` : "#/clock";
     if (options.replace) {
       window.history.replaceState(null, "", target);
       state.route = normalizeRoute(parseHashRoute());
@@ -12423,7 +12426,7 @@
       params.set("siteId", siteId);
     }
     const query = params.toString();
-    return `${baseUrl}#/punch${query ? `?${query}` : ""}`;
+    return `${baseUrl}#/clock${query ? `?${query}` : ""}`;
   }
 
   function buildSiteLink(siteId, options = {}) {

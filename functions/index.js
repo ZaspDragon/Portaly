@@ -198,6 +198,10 @@ function nextInviteStatusAfterEmail(status) {
   return normalizeInviteStatus(status) === "opened" ? "opened" : "sent";
 }
 
+function isValidEmailAddress(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -316,6 +320,50 @@ function buildClientInviteEmailContent({ firstName, agencyName, inviteUrl, assig
           </p>
           <p style="margin:0 0 8px;font-size:13px;color:#6b7b93;">If the button does not open, copy and paste this link into your browser:</p>
           <p style="margin:0;word-break:break-all;font-size:13px;color:#1f6fff;">${escapedUrl}</p>
+        </div>
+      </div>
+    `
+  };
+}
+
+function buildDemoAccessEmailContent() {
+  const loginUrl = buildHashUrl("login");
+  const lines = [
+    "Thanks for checking out Portaly.",
+    "",
+    "Demo Login:",
+    `URL: ${loginUrl}`,
+    "Email: demo@portaly.com",
+    "Password: demo123",
+    "",
+    "You can test:",
+    "- Worker QR punching",
+    "- Client manager approvals",
+    "- Payroll export",
+    "- Agency dashboard"
+  ];
+
+  return {
+    subject: "Your Portaly Demo Access",
+    text: lines.join("\n"),
+    html: `
+      <div style="font-family:Arial,Helvetica,sans-serif;background:#f5f8ff;padding:24px;color:#10203a;">
+        <div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #dbe7ff;border-radius:18px;padding:32px;box-shadow:0 16px 48px rgba(16,32,58,0.08);">
+          <p style="margin:0 0 8px;color:#1f6fff;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;">Portaly</p>
+          <h1 style="margin:0 0 14px;font-size:28px;line-height:1.2;color:#10203a;">Your Portaly Demo Access</h1>
+          <p style="margin:0 0 16px;font-size:16px;line-height:1.65;">Thanks for checking out Portaly.</p>
+          <div style="margin:20px 0;padding:18px;border-radius:14px;background:#f7faff;border:1px solid #dbe7ff;">
+            <p style="margin:0 0 8px;font-size:14px;color:#52627a;"><strong>URL:</strong> <a href="${escapeHtml(loginUrl)}" style="color:#1f6fff;text-decoration:none;">${escapeHtml(loginUrl)}</a></p>
+            <p style="margin:0 0 8px;font-size:14px;color:#52627a;"><strong>Email:</strong> demo@portaly.com</p>
+            <p style="margin:0;font-size:14px;color:#52627a;"><strong>Password:</strong> demo123</p>
+          </div>
+          <p style="margin:0 0 12px;font-size:16px;line-height:1.65;">You can test:</p>
+          <ul style="margin:0;padding-left:20px;color:#52627a;font-size:15px;line-height:1.7;">
+            <li>Worker QR punching</li>
+            <li>Client manager approvals</li>
+            <li>Payroll export</li>
+            <li>Agency dashboard</li>
+          </ul>
         </div>
       </div>
     `
@@ -445,6 +493,36 @@ async function sendInviteEmailViaGmailMessage({ to, subject, html, text }) {
     id: String(gmailResult?.data?.id || "").trim(),
     threadId: String(gmailResult?.data?.threadId || "").trim()
   };
+}
+
+async function sendDemoAccessEmailMessage({ to, subject, html, text }) {
+  if (isGmailInviteConfigured()) {
+    const gmailResult = await sendInviteEmailViaGmailMessage({
+      to,
+      subject,
+      html,
+      text
+    });
+    return {
+      provider: "gmail",
+      providerMessageId: gmailResult.id || ""
+    };
+  }
+
+  if (resendApiKey.value()) {
+    const resendResult = await sendInviteEmailMessage({
+      to,
+      subject,
+      html,
+      text
+    });
+    return {
+      provider: "resend",
+      providerMessageId: String(resendResult?.data?.id || resendResult?.id || "").trim()
+    };
+  }
+
+  throw createHttpError(503, "Demo access email sending is not connected yet.");
 }
 
 async function writeInviteAuditLog({ agencyId, action, entityId, actorId = "", actorRole = "system", oldValue = null, newValue = null, reason = "" }) {
@@ -1004,6 +1082,81 @@ exports.sendClientManagerInviteEmailViaGmail = onRequest(
       logger.error("sendClientManagerInviteEmailViaGmail failed", error);
       responseJson(res, error.status || 500, {
         error: error.message || "Unable to send the client manager invite email through Gmail."
+      });
+    }
+  }
+);
+
+exports.sendDemoAccessEmail = onRequest(
+  {
+    cors: inviteCorsOrigins,
+    secrets: [resendApiKey, gmailOauthClientId, gmailOauthClientSecret, gmailOauthRefreshToken]
+  },
+  async (req, res) => {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const companyName = String(req.body?.companyName || "").trim();
+    const createdAt = nowIso();
+    const demoRequestRef = admin.firestore().collection("demoRequests").doc();
+
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      if (!isValidEmailAddress(email)) {
+        throw createHttpError(400, "Enter a valid email address to receive demo access.");
+      }
+
+      const emailContent = buildDemoAccessEmailContent();
+      let delivery;
+
+      try {
+        delivery = await sendDemoAccessEmailMessage({
+          to: email,
+          subject: emailContent.subject,
+          html: emailContent.html,
+          text: emailContent.text
+        });
+      } catch (error) {
+        await demoRequestRef.set({
+          id: demoRequestRef.id,
+          email,
+          companyName,
+          createdAt,
+          updatedAt: nowIso(),
+          status: "failed",
+          source: "Portaly demo form",
+          emailProvider: error?.message?.toLowerCase().includes("gmail") ? "gmail" : (resendApiKey.value() ? "resend" : ""),
+          emailLastError: error.message || "Demo email sending failed."
+        }, { merge: true });
+        throw error;
+      }
+
+      const emailSentAt = nowIso();
+      await demoRequestRef.set({
+        id: demoRequestRef.id,
+        email,
+        companyName,
+        createdAt,
+        updatedAt: emailSentAt,
+        status: "sent",
+        source: "Portaly demo form",
+        emailProvider: delivery.provider,
+        providerMessageId: delivery.providerMessageId || "",
+        emailLastError: "",
+        emailSentAt
+      }, { merge: true });
+
+      responseJson(res, 200, {
+        ok: true,
+        requestId: demoRequestRef.id,
+        status: "sent"
+      });
+    } catch (error) {
+      logger.error("sendDemoAccessEmail failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to send demo access right now."
       });
     }
   }

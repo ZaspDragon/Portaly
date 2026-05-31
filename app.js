@@ -202,6 +202,11 @@
       details: null,
       error: ""
     },
+    demoAccess: {
+      email: "",
+      companyName: "",
+      message: ""
+    },
     publicPunch: {
       loading: false,
       error: "",
@@ -1105,9 +1110,12 @@
   async function establishCloudSession(authUser) {
     console.log("[Portaly] Establishing cloud session");
     console.log("[Portaly] auth uid", authUser?.uid || "");
+    console.log("Firebase UID", authUser?.uid || "");
     state.authUser = authUser;
     let profile = await loadCloudUserProfile(authUser.uid);
     console.log("[Portaly] loaded user profile", profile);
+    console.log("Firestore role", profile?.role || "");
+    console.log("Firestore agencyId", profile?.agencyId || "");
     profile = await repairOwnerProfileIfNeeded(authUser, profile);
     console.log("[Portaly] repaired user profile", profile);
 
@@ -1155,8 +1163,10 @@
     state.session.agency = agency;
     state.session.agencyName = agency?.name || "";
     state.cache.agencies = agency ? [agency] : [];
+    const displayedRole = getRoleLabel(state.session.role);
     console.log("[Portaly] loaded agency", agency);
     console.log("[Portaly] final session state", state.session);
+    console.log("Sidebar role", displayedRole);
 
     if (state.pendingLink && state.pendingLink.type === "worker" && state.session.role === "worker" && state.session.workerId === state.pendingLink.workerId) {
       navigate("worker-punch", { replace: true });
@@ -1189,10 +1199,12 @@
     const currentRole = String(profile?.role || "").trim();
     const currentAgencyId = String(profile?.agencyId || "").trim();
     const currentStatus = String(profile?.status || "").trim();
-    const needsRepair = !profile
-      || currentRole !== "agencyOwner"
-      || currentAgencyId !== expectedAgencyId
-      || currentStatus !== "active";
+    const hasExplicitNonOwnerRole = !!profile && !!currentRole && currentRole !== "agencyOwner";
+    const needsRepair = !hasExplicitNonOwnerRole && (
+      !profile
+      || !currentRole
+      || currentRole === "agencyOwner" && (currentAgencyId !== expectedAgencyId || currentStatus !== "active")
+    );
 
     console.log("[Portaly] owner profile check", {
       uid: authUser.uid,
@@ -1200,10 +1212,18 @@
       currentAgencyId,
       currentStatus,
       expectedAgencyId,
+      hasExplicitNonOwnerRole,
       needsRepair
     });
 
     if (!needsRepair) {
+      if (hasExplicitNonOwnerRole) {
+        console.log("[Portaly] owner profile repair skipped because Firestore already has an explicit non-owner role", {
+          uid: authUser.uid,
+          currentRole,
+          currentAgencyId
+        });
+      }
       return profile;
     }
 
@@ -1297,6 +1317,10 @@
       assignedSiteIds: Array.isArray(user.assignedSiteIds) ? user.assignedSiteIds : [],
       subscriptionStatus: null
     };
+  }
+
+  function getRoleLabel(role = state.session.role) {
+    return ROLE_META[role]?.label || formatStatusLabel(role || "Unknown Role");
   }
 
   async function refreshSessionData() {
@@ -2343,6 +2367,9 @@
         case "complete-profile":
           await submitCompleteProfile(values);
           break;
+        case "demo-access":
+          await submitDemoAccess(values);
+          break;
         case "client-manager-invite":
           await submitClientManagerInvite(values);
           break;
@@ -2614,6 +2641,35 @@
     await state.firebase.auth.sendPasswordResetEmail(values.email);
     pushToast("Password reset email sent.", "success");
     navigate("login", { replace: true });
+  }
+
+  async function submitDemoAccess(values) {
+    const email = String(values.email || "").trim().toLowerCase();
+    const companyName = String(values.companyName || "").trim();
+    if (!email) {
+      throw new Error("Enter your email so Portaly can send the demo login.");
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error("Enter a valid email address.");
+    }
+
+    await callSecureFunction("sendDemoAccessEmail", {
+      email,
+      companyName
+    }, {
+      requireAuth: false,
+      errorMessage: "Portaly could not send demo access right now.",
+      fallbackMessage: "Portaly could not send demo access right now.",
+      networkErrorMessage: "Portaly could not reach the demo access email service."
+    });
+
+    state.demoAccess = {
+      email,
+      companyName,
+      message: "Demo access sent. Check your email."
+    };
+    renderApp();
+    pushToast("Demo access sent. Check your email.", "success");
   }
 
   async function submitTrialSignup(values) {
@@ -7080,6 +7136,54 @@
     window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
   }
 
+  function renderDemoAccessSuccessNotice() {
+    const message = String(state.demoAccess?.message || "").trim();
+    if (!message) {
+      return "";
+    }
+    return `
+      <div class="notice-card" style="margin: 0 0 16px;">
+        <div>
+          <strong>Demo access sent</strong>
+          <p>${escapeHtml(message)}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderDemoAccessForm(options = {}) {
+    const eyebrow = String(options.eyebrow || "Send Me Demo Access").trim();
+    const title = String(options.title || "Send demo access to your inbox").trim();
+    const copy = String(options.copy || "We will email a working Portaly demo login so you can test the worker clock, client approvals, payroll export, and agency dashboard.").trim();
+    const cardClass = String(options.cardClass || "").trim();
+    const buttonBlock = options.buttonBlock === true ? " button-block" : "";
+    const includeBookDemo = options.includeBookDemo === true;
+    const emailValue = escapeAttribute(state.demoAccess?.email || "");
+    const companyValue = escapeAttribute(state.demoAccess?.companyName || "");
+    return `
+      <div class="support-card marketing-demo-access-card${cardClass ? ` ${escapeAttribute(cardClass)}` : ""}">
+        <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(copy)}</p>
+        ${renderDemoAccessSuccessNotice()}
+        <form class="form-grid demo-access-form" data-form="demo-access">
+          <div class="field-group">
+            <label for="demo-access-email-${escapeAttribute(options.idSuffix || "default")}">Work email</label>
+            <input id="demo-access-email-${escapeAttribute(options.idSuffix || "default")}" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@agency.com" value="${emailValue}" />
+          </div>
+          <div class="field-group">
+            <label for="demo-access-company-${escapeAttribute(options.idSuffix || "default")}">Company name <span class="muted-text">(optional)</span></label>
+            <input id="demo-access-company-${escapeAttribute(options.idSuffix || "default")}" name="companyName" type="text" autocomplete="organization" placeholder="Harbor Staffing" value="${companyValue}" />
+          </div>
+          <div class="page-actions">
+            <button class="button button-primary${buttonBlock}" type="submit">Send Demo Access</button>
+            ${includeBookDemo ? `<button class="button button-ghost" data-action="book-live-demo" type="button">Book Live Demo</button>` : ""}
+          </div>
+        </form>
+      </div>
+    `;
+  }
+
   function scrollToMarketingSection(sectionId) {
     const targetId = String(sectionId || "").trim();
     if (!targetId) {
@@ -7580,6 +7684,14 @@
                 <button class="marketing-link" data-action="go-route" data-route="clock" type="button">Open Worker Clock</button>
                 <button class="marketing-link" data-action="go-route" data-route="login" type="button">Login</button>
               </div>
+              ${renderDemoAccessForm({
+                eyebrow: "Send Me Demo Access",
+                title: "Email the demo login to yourself",
+                copy: "Get a working Portaly demo login in your inbox so you can test worker QR punching, client approvals, payroll export, and the agency dashboard right away.",
+                idSuffix: "landing",
+                cardClass: "hero-demo-access-card",
+                includeBookDemo: false
+              })}
             </div>
             <div class="hero-panel landing-dashboard-panel">
               <div class="landing-dashboard-shell">
@@ -8387,6 +8499,14 @@
             </div>
           </div>
           <div class="stack-md">
+            ${renderDemoAccessForm({
+              eyebrow: "Send Me Demo Access",
+              title: "Need instant demo credentials?",
+              copy: "We will email the Portaly demo login so you can test the worker clock, client approvals, payroll export, and agency dashboard before starting a trial.",
+              idSuffix: "login",
+              cardClass: "login-demo-access-card",
+              includeBookDemo: true
+            })}
             <div class="support-card">
               <p class="eyebrow">Two Data Modes</p>
               <h3>Demo Mode stays local. Cloud Mode syncs.</h3>
@@ -9011,6 +9131,7 @@
 
   function renderOwnerShell() {
     const pageTitle = getPageTitle();
+    const displayedRole = getRoleLabel(state.session.role);
     return `
       <div class="app-root app-layout">
         <aside class="sidebar">
@@ -9028,7 +9149,7 @@
           </div>
           <div class="sidebar-agency">
             <p class="eyebrow">Current role</p>
-            <h2>${escapeHtml(ROLE_META[state.session.role].label)}</h2>
+            <h2>${escapeHtml(displayedRole)}</h2>
             <p class="sidebar-note">${escapeHtml(getSubscriptionSummaryLine())}</p>
           </div>
           <nav class="nav" aria-label="Primary navigation">
@@ -9045,7 +9166,7 @@
             <div class="topbar-title">
               <button class="menu-button" data-action="toggle-nav" type="button">Menu</button>
               <div>
-                <p class="eyebrow">${escapeHtml(ROLE_META[state.session.role].label)}</p>
+                <p class="eyebrow">${escapeHtml(displayedRole)}</p>
                 <h2>${escapeHtml(pageTitle)}</h2>
               </div>
             </div>
@@ -9223,15 +9344,15 @@
               <p class="eyebrow">Quick Actions</p>
               <h3>Move the day forward</h3>
               <div class="page-actions" style="margin-top: 16px;">
-                <button class="button button-primary" data-action="open-worker-form" type="button">Add Worker</button>
-                <button class="button button-secondary" data-action="open-client-form" type="button">Add Client</button>
-                <button class="button button-secondary" data-action="open-site-form" type="button">Add Site</button>
-                <button class="button button-secondary" data-action="open-assignment-form" type="button">Assign Worker</button>
-                <button class="button button-secondary" data-action="open-publish-punch-page" type="button">Publish to Punch Page</button>
-                <button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate QR</button>
-                <button class="button button-ghost" data-action="go-route" data-route="live-punches" type="button">Review Punch Requests</button>
-                <button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Approvals</button>
-                <button class="button button-ghost" data-action="go-route" data-route="payroll" type="button">Export Payroll</button>
+                ${canManageWorkers() ? `<button class="button button-primary" data-action="open-worker-form" type="button">Add Worker</button>` : ""}
+                ${canManageClients() ? `<button class="button button-secondary" data-action="open-client-form" type="button">Add Client</button>` : ""}
+                ${canManageSites() ? `<button class="button button-secondary" data-action="open-site-form" type="button">Add Site</button>` : ""}
+                ${canManageAssignments() ? `<button class="button button-secondary" data-action="open-assignment-form" type="button">Assign Worker</button>` : ""}
+                ${canManageSites() ? `<button class="button button-secondary" data-action="open-publish-punch-page" type="button">Publish to Punch Page</button>` : ""}
+                ${canManageSites() ? `<button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate QR</button>` : ""}
+                ${canReviewPunchRequests() ? `<button class="button button-ghost" data-action="go-route" data-route="live-punches" type="button">Review Punch Requests</button>` : ""}
+                ${canApproveRecord() ? `<button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Approvals</button>` : ""}
+                ${canManagePunches() ? `<button class="button button-ghost" data-action="go-route" data-route="payroll" type="button">Export Payroll</button>` : ""}
                 ${canManageBilling() ? `<button class="button button-ghost" data-action="go-route" data-route="billing" type="button">Manage Billing</button>` : ""}
                 ${canDeleteSampleData() ? `<button class="button button-danger" data-action="delete-sample-data" type="button">Delete Sample Data</button>` : ""}
               </div>

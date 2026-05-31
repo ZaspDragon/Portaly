@@ -744,7 +744,7 @@
       state.route = normalizeRoute(parseHashRoute());
       if (state.route === "accept-invite") {
         await loadInviteFlowState();
-      } else if (state.route === "punch" || state.route === "landing") {
+      } else if (state.route === "punch" || state.route === "clock") {
         await loadPublicPunchState();
       } else if (state.route === "qr-codes") {
         await ensurePublishedSitePunchDirectories();
@@ -789,7 +789,7 @@
       state.route = normalizeRoute(parseHashRoute());
       if (state.route === "accept-invite") {
         await loadInviteFlowState();
-      } else if (state.route === "punch" || state.route === "landing") {
+      } else if (state.route === "punch" || state.route === "clock") {
         await loadPublicPunchState();
       } else if (state.route === "qr-codes") {
         await ensurePublishedSitePunchDirectories();
@@ -904,7 +904,7 @@
 
   function parsePublicPunchHash() {
     const route = getHashPath();
-    if (route !== "punch" && route !== "landing") {
+    if (route !== "punch" && route !== "clock") {
       return null;
     }
     const params = getHashSearchParams();
@@ -1344,10 +1344,48 @@
     state.session.agencyName = cachedAgency?.name || "";
 
     syncSubscriptionStatus();
+    syncOwnerClockState();
     applyTheme();
     if (failedCollections.length) {
       pushToast("Some live data could not be loaded. Portaly kept the app running with the data it could recover.", "warning");
     }
+  }
+
+  function syncOwnerClockState(options = {}) {
+    if (!state.session.role || state.session.mode === "public" || state.session.role === "worker" || state.session.role === "clientManager") {
+      return null;
+    }
+
+    const currentAgencyId = String(state.session.agencyId || state.session.agency?.id || "").trim();
+    if (!currentAgencyId) {
+      return null;
+    }
+
+    const hashState = parsePublicPunchHash() || {};
+    const previous = state.publicPunch || {};
+    const query = {
+      agencyId: String(options.agencyId || hashState.agencyId || previous.agencyId || currentAgencyId).trim(),
+      companyId: String(options.companyId || hashState.companyId || previous.companyId || "").trim(),
+      siteId: String(options.siteId || hashState.siteId || previous.siteId || "").trim()
+    };
+
+    const nextState = buildPublicPunchStateFromRecords(query, getScopedData());
+    state.publicPunch = {
+      ...previous,
+      ...nextState,
+      loading: false,
+      saving: false,
+      error: nextState.error || "",
+      fallbackNotice: "",
+      requestHelpMessage: previous.requestHelpMessage || "",
+      requestDraft: previous.requestDraft || null,
+      lastMessage: previous.lastMessage || "",
+      lastAction: previous.lastAction || "",
+      lastSavedAt: previous.lastSavedAt || "",
+      lastStatus: previous.lastStatus || "",
+      lastWorkerName: previous.lastWorkerName || ""
+    };
+    return state.publicPunch;
   }
 
   function collectionsForRole(role) {
@@ -1911,6 +1949,12 @@
           break;
         case "go-route":
           navigate(trigger.dataset.route || getHomeRoute());
+          break;
+        case "scroll-marketing-section":
+          scrollToMarketingSection(trigger.dataset.section || "");
+          break;
+        case "book-live-demo":
+          openLiveDemoRequest();
           break;
         case "reload-app":
           window.location.reload();
@@ -2723,8 +2767,9 @@
     console.log("[Portaly] Establishing cloud session");
     await establishCloudSession(authResult.user);
     await refreshSessionData();
+    syncOwnerClockState({ agencyId });
     await flushOfflinePunchQueue({ silent: true });
-    navigate("trial-success", { replace: true });
+    navigatePublicPunchRoute(agencyId, "", "", { replace: true });
     if (sampleDataError) {
       pushToast("Your free trial is ready, but sample data could not be loaded.", "warning");
       return;
@@ -2869,8 +2914,9 @@
     console.log("[Portaly] Establishing cloud session");
     await establishCloudSession(authUser);
     await refreshSessionData();
+    syncOwnerClockState({ agencyId });
     await flushOfflinePunchQueue({ silent: true });
-    navigate("trial-success", { replace: true });
+    navigatePublicPunchRoute(agencyId, "", "", { replace: true });
     if (sampleDataError) {
       pushToast("Your workspace is ready, but sample data could not be loaded.", "warning");
       return;
@@ -2941,6 +2987,7 @@
     requirePermission(canManageWorkers(), "Only agency owners, admins, or platform owners can edit workers.");
     const workerId = values.id || createId("worker");
     const existing = findRecord("workers", workerId);
+    const isNewWorker = !existing;
     const willBeActive = values.status !== "inactive";
     const now = new Date().toISOString();
     const agencyId = values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || "";
@@ -2976,6 +3023,16 @@
     await appendAuditLog("worker_saved", "workers", workerId, existing, worker);
     state.modal = null;
     await refreshCurrentView();
+    if (isNewWorker && worker.assignedSiteId) {
+      syncOwnerClockState({
+        agencyId,
+        companyId: worker.assignedClientId || "",
+        siteId: worker.assignedSiteId || ""
+      });
+      navigatePublicPunchRoute(agencyId, worker.assignedClientId || "", worker.assignedSiteId || "", { replace: true });
+      pushToast("Worker added successfully and loaded on the clock page.", "success");
+      return;
+    }
     pushToast(existing ? "Worker updated successfully." : "Worker added successfully.", "success");
   }
 
@@ -3067,6 +3124,7 @@
     requirePermission(canManageAssignments(), "Only agency owners, admins, or platform owners can edit assignments.");
     const assignmentId = values.id || createId("assignment");
     const existing = findRecord("assignments", assignmentId);
+    const isNewAssignment = !existing;
     const now = new Date().toISOString();
     const agencyId = values.agencyId || existing?.agencyId || state.session.agencyId || state.session.agency?.id || "";
 
@@ -3095,6 +3153,16 @@
     await appendAuditLog(existing ? "assignment_updated" : "assignment_created", "assignments", assignmentId, existing, assignment);
     state.modal = null;
     await refreshCurrentView();
+    if (isNewAssignment && assignment.siteId) {
+      syncOwnerClockState({
+        agencyId,
+        companyId: assignment.clientId || "",
+        siteId: assignment.siteId || ""
+      });
+      navigatePublicPunchRoute(agencyId, assignment.clientId || "", assignment.siteId || "", { replace: true });
+      pushToast("Assignment saved and loaded on the clock page.", "success");
+      return;
+    }
     pushToast(existing ? "Assignment updated successfully." : "Assignment added successfully.", "success");
   }
 
@@ -7003,6 +7071,37 @@
     handleBillingPlaceholder(`Support is available at ${email}${phone ? ` or ${phone}` : ""}.`);
   }
 
+  function openLiveDemoRequest() {
+    const email = String(getSupportEmail() || "").trim();
+    const subject = encodeURIComponent("Book a Portaly live demo");
+    const body = encodeURIComponent(
+      "Hi Portaly,\n\nI would like to book a live demo for my staffing agency.\n\nAgency name:\nPrimary industry:\nApproximate worker count:\nBest contact phone:\nCurrent attendance or payroll challenge:\n\nThank you."
+    );
+    window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+  }
+
+  function scrollToMarketingSection(sectionId) {
+    const targetId = String(sectionId || "").trim();
+    if (!targetId) {
+      return;
+    }
+
+    const runScroll = () => {
+      const target = document.getElementById(targetId);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    };
+
+    if (!["landing", "pricing"].includes(state.route)) {
+      navigate("landing");
+      window.setTimeout(runScroll, 90);
+      return;
+    }
+
+    runScroll();
+  }
+
   function enforcePlanLimit(entityType, willBeActive, existingRecord) {
     if (!willBeActive) {
       return;
@@ -7085,7 +7184,7 @@
       let html = "";
       if (state.route === "approval-link") {
         html = renderApprovalLinkShell();
-      } else if (state.route === "punch" || state.route === "landing") {
+      } else if (state.route === "punch" || state.route === "clock" || state.route === "landing") {
         html = renderPublicShell();
       } else if (state.route === "accept-invite") {
         html = renderPublicShell();
@@ -7100,6 +7199,7 @@
       root.innerHTML = html + renderModal();
       renderToasts();
       hydrateQrCanvases(root);
+      focusMarketingRouteSection();
     } catch (error) {
       console.error("[Portaly] renderApp failed", {
         route: state.route,
@@ -7124,8 +7224,17 @@
     document.body.dataset.layout = getLayoutMode();
   }
 
+  function focusMarketingRouteSection() {
+    if (state.route !== "pricing") {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      document.getElementById("pricing")?.scrollIntoView({ block: "start" });
+    });
+  }
+
   function getLayoutMode() {
-    if (state.route === "approval-link" || state.route === "accept-invite" || state.route === "punch" || state.route === "landing") {
+    if (state.route === "approval-link" || state.route === "accept-invite" || state.route === "punch" || state.route === "clock" || state.route === "landing") {
       return "public";
     }
     if (state.session.role === "worker" && state.session.mode !== "public") {
@@ -7138,7 +7247,7 @@
   }
 
   function renderPublicShell() {
-    if (state.route === "punch" || state.route === "landing") {
+    if (state.route === "punch" || state.route === "clock") {
       return `
         <div class="public-root punch-root">
           ${renderPublicPunchPage()}
@@ -7161,18 +7270,19 @@
           <div class="marketing-brand">
             <div class="brand-mark">${escapeHtml(getBrandInitials())}</div>
             <div>
-              <p class="eyebrow">Staffing Agency Platform</p>
+              <p class="eyebrow">Staffing Agency Workforce Platform</p>
               <h1>${escapeHtml(getBrandName())}</h1>
             </div>
           </div>
           <div class="marketing-links">
-            <button class="marketing-link" data-action="go-route" data-route="landing" type="button">Punch Clock</button>
-            <button class="marketing-link" data-action="go-route" data-route="pricing" type="button">Pricing</button>
-            <button class="marketing-link" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+            <button class="marketing-link" data-action="scroll-marketing-section" data-section="features" type="button">Solutions</button>
+            <button class="marketing-link" data-action="scroll-marketing-section" data-section="how-it-works" type="button">How It Works</button>
+            <button class="marketing-link" data-action="scroll-marketing-section" data-section="pricing" type="button">Pricing</button>
+            <button class="marketing-link" data-action="go-route" data-route="clock" type="button">Worker Clock</button>
             <button class="marketing-link" data-action="go-route" data-route="login" type="button">Login</button>
           </div>
           <div class="marketing-actions">
-            <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+            <button class="button button-secondary" data-action="book-live-demo" type="button">Book Live Demo</button>
             <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
           </div>
         </div>
@@ -7189,9 +7299,10 @@
       case "accept-invite":
         return renderAcceptInvitePage();
       case "punch":
+      case "clock":
         return renderPublicPunchPage();
       case "landing":
-        return renderPublicPunchPage();
+        return renderMarketingLanding(false);
       case "pricing":
         return renderMarketingLanding(true);
       case "demo":
@@ -7438,313 +7549,295 @@
 
   function renderMarketingLanding(focusPricing) {
     const preview = getMarketingPreviewData();
-    const roi = getMarketingRoiEstimate();
-    const activePlanId = state.selectedPlan || "agency";
-    const planCards = Object.values(PLAN_DEFINITIONS).map(plan => renderPricingCard(plan, plan.id === activePlanId, "marketing")).join("");
+    const planCards = ["starter", "agency", "growth", "enterprise"]
+      .map(planId => PLAN_DEFINITIONS[planId])
+      .filter(Boolean)
+      .map(plan => renderPricingCard(plan, plan.id === "growth", "marketing"))
+      .join("");
     return `
       <main class="hero-shell">
-        <section class="section">
-          <div class="container hero-grid">
+        <section class="section landing-hero-section" id="hero">
+          <div class="container hero-grid landing-hero-grid">
             <div class="hero-copy">
-              <p class="eyebrow">Built for staffing agencies, warehouses, and light industrial teams</p>
-              <h2>QR Timeclock & Payroll Approval Software for Staffing Agencies</h2>
-              <p>Track temp workers, approve hours, capture client signatures, and export payroll without paper timesheets.</p>
+              <p class="eyebrow">Staffing agency timekeeping and approval software</p>
+              <h2>Stop Payroll Disputes Before They Start</h2>
+              <p>Track temporary workers, manage assignments, approve timesheets, and prepare payroll from one platform.</p>
+              <p class="landing-trust-line">Trusted by staffing agencies managing warehouse, manufacturing, logistics, and temporary labor workforces.</p>
+              <div class="hero-proof-row">
+                <span class="hero-proof-pill">Missing punch visibility</span>
+                <span class="hero-proof-pill">Digital client approvals</span>
+                <span class="hero-proof-pill">Payroll-ready exports</span>
+                <span class="hero-proof-pill">Multi-site staffing control</span>
+              </div>
               <div class="hero-actions">
-                <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start 14-Day Free Trial</button>
-                <button class="button button-secondary button-large" data-action="go-route" data-route="demo" type="button">View Demo</button>
+                <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+                <button class="button button-secondary button-large" data-action="book-live-demo" type="button">Book Live Demo</button>
               </div>
               <div class="hero-link-row">
-                <button class="marketing-link" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
+                <button class="marketing-link" data-action="scroll-marketing-section" data-section="pricing" type="button">View Pricing</button>
+                <button class="marketing-link" data-action="go-route" data-route="demo" type="button">Open Interactive Demo</button>
+                <button class="marketing-link" data-action="go-route" data-route="clock" type="button">Open Worker Clock</button>
                 <button class="marketing-link" data-action="go-route" data-route="login" type="button">Login</button>
               </div>
-              <div class="hero-stat-grid">
-                ${renderHeroStat("14-day free trial", "Launch a real agency workspace first, then convert to a paid Square plan when ready.")}
-                ${renderHeroStat("Worker-first QR flow", "Clock in, lunch, and clock out from a punch screen built for warehouse phones and kiosks.")}
-                ${renderHeroStat("Client-signed payroll", "Capture approvals, signatures, and timestamped audit history before payroll export.")}
-              </div>
             </div>
-            <div class="hero-panel hero-preview-panel">
-              <p class="eyebrow">Worker QR Preview</p>
-              <div class="worker-preview-card">
-                <div class="worker-preview-top">
+            <div class="hero-panel landing-dashboard-panel">
+              <div class="landing-dashboard-shell">
+                <div class="landing-dashboard-top">
                   <div>
-                    <strong>Clock In / Clock Out</strong>
+                    <p class="eyebrow">Live Operations Snapshot</p>
+                    <h3>Staffing command center</h3>
                     <p>${escapeHtml(preview.agencyName)}</p>
                   </div>
-                  <span class="status-badge ${escapeHtml(preview.statusTone)}">${escapeHtml(preview.statusLabel)}</span>
+                  <span class="status-badge status-success">Live</span>
                 </div>
-                <div class="worker-preview-grid">
-                  <div class="worker-preview-item">
-                    <span>Worker</span>
-                    <strong>${escapeHtml(preview.workerName)}</strong>
+                <div class="landing-dashboard-grid">
+                  ${renderDashboardPreviewCard("Active Workers", preview.metrics.activeWorkers, "Assigned and ready to work")}
+                  ${renderDashboardPreviewCard("Clocked In Today", preview.metrics.clockedInToday, "Workers already captured today")}
+                  ${renderDashboardPreviewCard("Pending Approvals", preview.metrics.pendingApprovals, "Waiting on client signoff")}
+                  ${renderDashboardPreviewCard("Open Assignments", preview.metrics.openAssignments, "Placements live across sites")}
+                  ${renderDashboardPreviewCard("Hours This Week", formatHours(preview.metrics.hoursThisWeek), "Approved and in-progress time")}
+                </div>
+                <div class="landing-dashboard-feed">
+                  <div class="landing-feed-item">
+                    <div>
+                      <strong>Worker punch flow</strong>
+                      <p>${escapeHtml(preview.workerName)} at ${escapeHtml(preview.siteName)}</p>
+                    </div>
+                    <span class="status-badge ${escapeHtml(preview.statusTone)}">${escapeHtml(preview.statusLabel)}</span>
                   </div>
-                  <div class="worker-preview-item">
-                    <span>Client</span>
-                    <strong>${escapeHtml(preview.clientName)}</strong>
+                  <div class="landing-feed-item">
+                    <div>
+                      <strong>Client approval queue</strong>
+                      <p>${escapeHtml(String(preview.metrics.pendingApprovals))} submitted timecards still need manager signoff.</p>
+                    </div>
+                    <span class="status-badge status-warning">Action needed</span>
                   </div>
-                  <div class="worker-preview-item">
-                    <span>Site</span>
-                    <strong>${escapeHtml(preview.siteName)}</strong>
-                  </div>
-                  <div class="worker-preview-item">
-                    <span>Current time</span>
-                    <strong>${escapeHtml(preview.currentTime)}</strong>
+                  <div class="landing-feed-item">
+                    <div>
+                      <strong>Payroll prep</strong>
+                      <p>Approved hours are ready to move from timekeeping into export.</p>
+                    </div>
+                    <span class="status-badge status-success">Payroll ready</span>
                   </div>
                 </div>
-                <div class="worker-preview-buttons">
-                  <div class="preview-button ${preview.allowed.clockIn ? "is-active" : ""}">Clock In</div>
-                  <div class="preview-button ${preview.allowed.startLunch ? "is-active" : ""}">Start Lunch</div>
-                  <div class="preview-button ${preview.allowed.endLunch ? "is-active" : ""}">End Lunch</div>
-                  <div class="preview-button ${preview.allowed.clockOut ? "is-active" : ""}">Clock Out</div>
-                </div>
-                <p class="helper-copy">Built for fast punch-ins on a phone, a shared kiosk, or a QR code posted at the site.</p>
+                <p class="helper-copy">Give owners, payroll teams, and client managers a live view before payroll turns into spreadsheet cleanup.</p>
               </div>
             </div>
           </div>
         </section>
 
-        <section class="section">
+        <section class="section" id="statistics">
           <div class="container">
             <div class="section-header">
               <div>
-                <p class="eyebrow">Live Operations Preview</p>
-                <h2 class="section-title">See the kind of shift-day visibility agency owners want by 8 AM</h2>
+                <p class="eyebrow">Impact</p>
+                <h2 class="section-title">Built around the outcomes staffing agencies pay for</h2>
               </div>
-              <p class="section-copy">These preview numbers mirror a live staffing desk view: who is on site, what needs attention, and how close payroll is to being ready.</p>
+              <p class="section-copy">Fewer payroll disputes, faster approvals, cleaner time, and less back-office rework.</p>
             </div>
-            <div class="metrics-grid marketing-metrics-grid">
-              ${renderMetricCard("Active Workers Clocked In", preview.metrics.clockedInNow, "Workers currently active across live assignments", "CI")}
-              ${renderMetricCard("Active Client Sites", preview.metrics.activeSites, "Sites with active staffing coverage", "SI")}
-              ${renderMetricCard("Missed Punch Alerts", preview.metrics.missingClockOuts, "Workers who still need a punch review", "MP")}
-              ${renderMetricCard("Overtime Alerts", preview.metrics.overtimeAlerts, "Assignments already pushing overtime this week", "OT")}
-              ${renderMetricCard("Payroll Ready This Week", formatHours(preview.metrics.payrollReadyHours), "Approved or submitted time ready for export", "PY")}
+            <div class="landing-kpi-grid">
+              ${renderLandingKpiCard("98.7%", "Timesheet Accuracy", "Reduce manual corrections before payroll closes.")}
+              ${renderLandingKpiCard("85%", "Less Admin Work", "Spend less time chasing supervisors and rebuilding timecards.")}
+              ${renderLandingKpiCard("60%", "Faster Payroll Processing", "Move from approved hours to export-ready payroll faster.")}
+              ${renderLandingKpiCard("24/7", "Worker Self-Service", "Workers can punch from posted QR codes across every shift.")}
             </div>
           </div>
         </section>
 
-        <section class="section">
+        <section class="section" id="features">
           <div class="container">
             <div class="section-header">
               <div>
-                <p class="eyebrow">How Portaly Works</p>
-                <h2 class="section-title">Replace paper timecards with one simple agency workflow</h2>
+                <p class="eyebrow">Core Features</p>
+                <h2 class="section-title">Everything staffing agency owners need to control time, approvals, and payroll prep</h2>
               </div>
-              <p class="section-copy">Portaly keeps the worker experience fast while giving operations teams and warehouse managers the controls they need.</p>
-            </div>
-            <div class="flow-grid">
-              ${renderFlowStep(1, "Worker scans QR code", "A temp opens the worker punch screen from a phone-friendly QR link at the site.")}
-              ${renderFlowStep(2, "Hours are tracked automatically", "Clock in, lunch, and clock out events build clean punch history and exception visibility.")}
-              ${renderFlowStep(3, "Client manager reviews and signs", "Warehouse or site managers approve hours, reject problems, and save a digital signature with every approval.")}
-              ${renderFlowStep(4, "Agency exports payroll", "Owners and admins review payroll, fix issues, and export approved time without manual spreadsheet cleanup.")}
-            </div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="container">
-            <div class="section-header">
-              <div>
-                <p class="eyebrow">Problems Portaly Solves</p>
-                <h2 class="section-title">Fix the day-to-day breakdowns that slow staffing payroll down</h2>
-              </div>
-              <p class="section-copy">Portaly gives owners, payroll teams, client approvers, and workers separate experiences that still stay connected.</p>
+              <p class="section-copy">Each part of Portaly is designed to solve one of the staffing problems that slows payroll down.</p>
             </div>
             <div class="feature-grid">
-              ${renderFeatureCard("Paper timesheets", "Replace stacks of handwritten timecards with site-level QR punch capture and digital history.")}
-              ${renderFeatureCard("Buddy punching", "Tie worker punches to a clear assignment, site, and timestamp so questionable time is easier to review.")}
-              ${renderFeatureCard("Payroll disputes", "Give payroll staff punch history, notes, signatures, and approvals in one place before export.")}
-              ${renderFeatureCard("Missed punches", "Surface clock-out gaps, missing lunch events, late punches, and manual edits before payroll closes.")}
-              ${renderFeatureCard("Client approval delays", "Route weekly hours directly to the right warehouse or site manager for faster signoff.")}
-              ${renderFeatureCard("Manual Excel payroll", "Move from approved hours to export-ready payroll without rebuilding time in spreadsheets each week.")}
+              ${renderFeatureCard("QR Clock-In", "Workers scan and clock in instantly from a site-specific punch page built for phones and shared kiosks.")}
+              ${renderFeatureCard("Assignment Management", "Assign workers to clients and job sites so time, approvals, and payroll stay tied to the right placement.")}
+              ${renderFeatureCard("Client Approval Workflow", "Client and site managers approve hours digitally, reject mistakes, and keep payroll moving without email chains.")}
+              ${renderFeatureCard("Payroll Export", "Export approved hours instantly once timecards are signed off and ready for your payroll process.")}
+              ${renderFeatureCard("Multi-Site Management", "Manage hundreds of locations, multiple clients, and complex staffing books from one dashboard.")}
+              ${renderFeatureCard("Real-Time Dashboard", "See who is clocked in, what approvals are pending, and where punch issues are building before payroll day.")}
             </div>
           </div>
         </section>
 
-        <section class="section">
+        <section class="section" id="how-it-works">
           <div class="container">
             <div class="section-header">
               <div>
-                <p class="eyebrow">Built For</p>
-                <h2 class="section-title">Built for the staffing environments where timekeeping gets messy fast</h2>
+                <p class="eyebrow">How It Works</p>
+                <h2 class="section-title">One workflow from client setup to payroll export</h2>
               </div>
-              <p class="section-copy">Use the same platform across one warehouse, one client network, or a wider light industrial book of business.</p>
+              <p class="section-copy">This is the exact agency workflow Portaly is built to simplify.</p>
             </div>
-            <div class="audience-grid">
-              ${["Staffing agencies", "Warehouses", "Distribution centers", "Manufacturing sites", "3PL operations", "Light industrial staffing"].map(item => `<div class="audience-pill">${escapeHtml(item)}</div>`).join("")}
+            <div class="flow-grid landing-flow-grid">
+              ${renderFlowStep(1, "Create Client", "Create the company record that owns the worksite and final approval path.")}
+              ${renderFlowStep(2, "Create Site", "Set up the warehouse, plant, or location where workers punch and managers approve time.")}
+              ${renderFlowStep(3, "Assign Worker", "Tie each worker to the right client and site so punches stay organized.")}
+              ${renderFlowStep(4, "Worker Scans QR", "Workers open a mobile-first punch page and record time without needing a login.")}
+              ${renderFlowStep(5, "Client Approves Hours", "Client managers review weekly timecards, leave notes, and approve digitally.")}
+              ${renderFlowStep(6, "Export Payroll", "Agency staff export approved hours without rebuilding payroll in spreadsheets.")}
             </div>
           </div>
         </section>
 
-        <section class="section">
-          <div class="container info-grid">
-            <div class="surface-card">
-              <p class="eyebrow">Client Manager Approval + Signature</p>
-              <h2 class="page-heading">Get a signed approval trail before payroll runs</h2>
-              <p class="section-copy">Warehouse and site managers can log in, review weekly hours, approve or reject timesheets, and save a digital signature with manager name, email, site, timestamp, and timesheet ID.</p>
-              <ul class="list compact-list">
-                <li>Review weekly hours by worker and site</li>
-                <li>Approve or reject with notes</li>
-                <li>Capture manager name and email</li>
-                <li>Store site, timestamp, and timesheet ID with the signature record</li>
-              </ul>
-            </div>
-            <div class="surface-card">
-              <p class="eyebrow">White Label Your Agency</p>
-              <h2 class="page-heading">Make the worker and client experience feel like your agency</h2>
-              <p class="section-copy">Set your agency logo initials, brand colors, client portal language, worker portal copy, and support contact so Portaly fits the way your operation already presents itself.</p>
-              <ul class="list compact-list">
-                <li>Agency logo and initials</li>
-                <li>Brand color and support contact</li>
-                <li>Client portal approval experience</li>
-                <li>Worker portal and punch screen branding</li>
-              </ul>
-            </div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="container split-grid">
-            <div class="surface-card">
-              <p class="eyebrow">ROI Calculator</p>
-              <h2 class="page-heading">Estimate the hours and labor cost Portaly can give back each month</h2>
-              <p class="section-copy">Use your own staffing desk numbers to see how much payroll prep time and dispute cleanup can shrink when hours are captured digitally.</p>
-              <div class="form-grid" style="margin-top: 18px;">
-                <div class="form-row three">
-                  <div class="field-group">
-                    <label for="roi-workers">Number of workers</label>
-                    <input id="roi-workers" name="roiWorkers" type="number" min="0" value="${escapeAttribute(String(state.roi.workers))}" />
-                  </div>
-                  <div class="field-group">
-                    <label for="roi-admin-hours">Weekly payroll admin hours</label>
-                    <input id="roi-admin-hours" name="roiAdminHours" type="number" min="0" step="0.5" value="${escapeAttribute(String(state.roi.adminHours))}" />
-                  </div>
-                  <div class="field-group">
-                    <label for="roi-disputes">Monthly payroll disputes</label>
-                    <input id="roi-disputes" name="roiDisputes" type="number" min="0" value="${escapeAttribute(String(state.roi.disputes))}" />
-                  </div>
-                </div>
-              </div>
-              <p class="inline-note" style="margin-top: 12px;">Estimate based on reduced payroll rework, fewer punch corrections, and faster approval follow-up.</p>
-            </div>
-            <div class="surface-card roi-results-card">
-              <p class="eyebrow">Estimated ROI</p>
-              <div class="summary-grid" style="margin-top: 18px;">
-                <div class="summary-card">
-                  <div class="summary-top">
-                    <div>
-                      <span class="summary-label">Estimated monthly time saved</span>
-                      <strong class="summary-value">${escapeHtml(formatHours(roi.monthlyHoursSaved))}</strong>
-                    </div>
-                    <span class="metric-icon">TS</span>
-                  </div>
-                </div>
-                <div class="summary-card">
-                  <div class="summary-top">
-                    <div>
-                      <span class="summary-label">Estimated monthly labor savings</span>
-                      <strong class="summary-value">${escapeHtml(formatCurrency(roi.monthlyLaborSavings))}</strong>
-                    </div>
-                    <span class="metric-icon">LS</span>
-                  </div>
-                </div>
-                <div class="summary-card">
-                  <div class="summary-top">
-                    <div>
-                      <span class="summary-label">Estimated disputes avoided</span>
-                      <strong class="summary-value">${escapeHtml(String(roi.disputesReduced))}</strong>
-                    </div>
-                    <span class="metric-icon">DA</span>
-                  </div>
-                </div>
-              </div>
-              <p class="helper-copy" style="margin-top: 16px;">Teams with more workers and more manual payroll cleanup usually see the biggest time savings first.</p>
-            </div>
-          </div>
-        </section>
-
-        <section class="section">
+        <section class="section" id="comparison">
           <div class="container">
             <div class="section-header">
               <div>
-                <p class="eyebrow">Comparison</p>
-                <h2 class="section-title">Portaly gives staffing teams more control than paper or Excel can</h2>
+                <p class="eyebrow">Competitive Comparison</p>
+                <h2 class="section-title">Stronger than spreadsheets and generic payroll tools for staffing operations</h2>
               </div>
-              <p class="section-copy">Use this as the before-and-after story when you show the platform to agency owners, warehouse managers, and investors.</p>
+              <p class="section-copy">Portaly is purpose-built for temporary labor workflows where assignments, job sites, approvals, and payroll all have to stay aligned.</p>
             </div>
             <div class="table-shell comparison-shell">
               <table class="comparison-table">
                 <thead>
                   <tr>
-                    <th>Workflow</th>
-                    <th>Paper / Excel</th>
+                    <th>Feature</th>
+                    <th>Spreadsheets</th>
+                    <th>Generic Payroll Systems</th>
                     <th>Portaly</th>
                   </tr>
                 </thead>
                 <tbody>
-                  ${renderComparisonRow("QR timeclock", "Manual sign-in sheets", "Included with worker and site punch links")}
-                  ${renderComparisonRow("Digital signatures", "Usually missing or emailed later", "Saved with manager name, email, site, and timestamp")}
-                  ${renderComparisonRow("Client approvals", "Phone calls and email follow-up", "Built-in approval queue")}
-                  ${renderComparisonRow("Payroll export", "Manual spreadsheet cleanup", "Export-ready payroll queue")}
-                  ${renderComparisonRow("Live workforce visibility", "No real-time status", "Live dashboard and punch status")}
-                  ${renderComparisonRow("Missed punch alerts", "Found after payroll problems", "Visible before payroll closes")}
-                  ${renderComparisonRow("Multi-site tracking", "Hard to keep organized", "One view across clients and sites")}
-                  ${renderComparisonRow("Agency branding", "Not available", "White-label agency settings")}
+                  ${renderCompetitiveComparisonRow("QR Clock In", "Manual workaround", "Usually requires extra tooling", "Built in for every site")}
+                  ${renderCompetitiveComparisonRow("Client Approval", "Phone calls and email follow-up", "Limited or outside workflow", "Digital approvals with notes and signatures")}
+                  ${renderCompetitiveComparisonRow("Payroll Export", "Manual cleanup every week", "Partial export after heavy setup", "Approved hours ready for export")}
+                  ${renderCompetitiveComparisonRow("Multi Site Tracking", "Hard to maintain", "Often weak across staffing books", "Manage clients, sites, and assignments in one view")}
+                  ${renderCompetitiveComparisonRow("Worker Portal", "Not available", "Usually employee-login focused", "Simple no-login worker punch experience")}
+                  ${renderCompetitiveComparisonRow("Real Time Dashboard", "No live visibility", "Basic status only", "Punches, approvals, assignments, and hours in one dashboard")}
                 </tbody>
               </table>
             </div>
           </div>
         </section>
 
-        <section class="section" id="pricing">
+        <section class="section" id="industries">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Supported Industries</p>
+                <h2 class="section-title">Built for staffing firms placing workers into fast-moving operations</h2>
+              </div>
+              <p class="section-copy">Use Portaly across one warehouse, one client network, or a broader light industrial book of business.</p>
+            </div>
+            <div class="audience-grid landing-industry-grid">
+              ${[
+                "Warehouse Staffing",
+                "Manufacturing Staffing",
+                "Distribution Centers",
+                "Logistics Staffing",
+                "Light Industrial Staffing",
+                "General Labor Staffing",
+                "Administrative Staffing",
+                "Hospitality Staffing"
+              ].map(item => `<div class="audience-pill">${escapeHtml(item)}</div>`).join("")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="testimonials">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Testimonials</p>
+                <h2 class="section-title">The payoff is cleaner time, faster payroll, and happier client managers</h2>
+              </div>
+              <p class="section-copy">These are the outcomes staffing owners want to hear when they evaluate a new operations platform.</p>
+            </div>
+            <div class="feature-grid testimonial-grid">
+              ${renderTestimonialCard("Portaly eliminated our paper timesheets.", "Operations Director", "Warehouse staffing agency")}
+              ${renderTestimonialCard("Payroll takes half the time it used to.", "Payroll Manager", "Manufacturing staffing firm")}
+              ${renderTestimonialCard("Our clients love approving hours digitally.", "Agency Owner", "Temporary labor agency")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="demo-tour">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">See Portaly In Action</p>
+                <h2 class="section-title">Show the full staffing workflow in one live walkthrough</h2>
+              </div>
+              <p class="section-copy">From worker punch capture to assignment setup and payroll export, the demo tells the story agency owners care about most.</p>
+            </div>
+            <div class="surface-card demo-stage-card">
+              <div class="demo-stage-grid">
+                <div class="demo-stage-screen">
+                  <p class="eyebrow">Product Tour</p>
+                  <h3>From QR punch to payroll export</h3>
+                  <p class="section-copy">Walk through the same workflow your staffing desk runs every week without jumping between spreadsheets, texts, and approval emails.</p>
+                  <div class="page-actions" style="margin-top: 20px;">
+                    <button class="button button-primary" data-action="go-route" data-route="demo" type="button">Open Interactive Demo</button>
+                    <button class="button button-secondary" data-action="book-live-demo" type="button">Book Live Demo</button>
+                  </div>
+                </div>
+                <div class="demo-stage-list">
+                  ${renderDemoWorkflowCard("Worker Clock In", "Workers scan a site QR and punch from a mobile-first clock page.", "01")}
+                  ${renderDemoWorkflowCard("Assignment Creation", "Agency staff connect workers to the right client and site.", "02")}
+                  ${renderDemoWorkflowCard("Timesheet Approval", "Client managers review hours, sign, and keep payroll moving.", "03")}
+                  ${renderDemoWorkflowCard("Payroll Export", "Approved hours are ready for payroll without manual spreadsheet cleanup.", "04")}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section ${focusPricing ? "marketing-section-highlight" : ""}" id="pricing">
           <div class="container">
             <div class="section-header">
               <div>
                 <p class="eyebrow">Pricing</p>
-                <h2 class="section-title">Plans for agencies growing from one site to many</h2>
+                <h2 class="section-title">Flexible plans for agencies growing from one site to many</h2>
               </div>
-              <p class="section-copy">Every real account starts with a 14-day free trial. Demo Mode stays free and local to the browser.</p>
+              <p class="section-copy">Growth is the best fit for most staffing agencies that need cleaner approvals, stronger visibility, and payroll-ready exports.</p>
             </div>
             <div class="pricing-grid">
               ${planCards}
             </div>
-            <div class="notice-card" style="margin-top: 18px;">
+            <div class="notice-card pricing-note-card" style="margin-top: 18px;">
               <div>
                 <strong>Payments are processed securely through Square checkout.</strong>
-                <p>After payment, your agency plan can be activated in Portaly.</p>
+                <p>Start with a free trial, validate the workflow with your staffing desk, then convert to the plan that fits your book of business.</p>
               </div>
             </div>
           </div>
         </section>
 
-        <section class="section">
-          <div class="container">
-            <div class="support-card marketing-callout">
-              <p class="eyebrow">Demo Access</p>
-              <h3>Show the owner view, client approval view, and worker punch flow in one demo</h3>
-              <p>Use the public demo to walk through staffing operations without creating a live agency account first.</p>
-              <div class="page-actions" style="margin-top: 18px;">
-                <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">View Demo</button>
-                <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start 14-Day Free Trial</button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="section">
+        <section class="section" id="trust">
           <div class="container">
             <div class="section-header">
               <div>
-                <p class="eyebrow">FAQ</p>
-                <h2 class="section-title">Questions agency owners usually ask first</h2>
+                <p class="eyebrow">Trust</p>
+                <h2 class="section-title">Built for staffing teams that need controlled access and payroll-ready data</h2>
               </div>
+              <p class="section-copy">These are the platform signals staffing agencies look for when timekeeping, approvals, and payroll preparation all touch the same workflow.</p>
             </div>
-            <div class="feature-grid">
-              ${renderFaq("Can I keep a public demo open?", "Yes. Demo Mode runs on sample data in localStorage and never touches Firestore or Square billing.")}
-              ${renderFaq("Can workers log in directly?", "Yes. Worker accounts can go straight to the punch screen and only see their own punch history.")}
-              ${renderFaq("How do subscriptions work?", "Real agencies start with a 14-day trial, then move into monthly billing using secure Square payment links.")}
-              ${renderFaq("Do warehouse managers have to see pay rates or margin?", "No. Client managers can stay limited to approvals, notes, and signatures for their own site only.")}
-              ${renderFaq("Will this still deploy on GitHub Pages?", "Yes. The frontend stays plain HTML, CSS, and JavaScript with no npm or build step required.")}
-              ${renderFaq("Can Portaly be white-labeled for an agency brand?", "Yes. Agency settings can control brand color, logo initials, support contact details, and the client and worker portal presentation.")}
+            <div class="trust-grid">
+              ${renderTrustBadge("Secure Cloud Platform")}
+              ${renderTrustBadge("Role-Based Permissions")}
+              ${renderTrustBadge("Multi-Tenant Staffing Support")}
+              ${renderTrustBadge("Payroll Ready Exports")}
+              ${renderTrustBadge("Mobile Friendly")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="support-card marketing-callout landing-final-cta">
+              <p class="eyebrow">Ready To Replace Spreadsheet Chaos?</p>
+              <h3>Give your staffing team one platform for punches, approvals, assignments, and payroll prep</h3>
+              <p>Show owners, payroll teams, and client managers the exact workflow that removes missing punches, cuts approval delays, and cleans up payroll export week.</p>
+              <div class="page-actions" style="margin-top: 18px;">
+                <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+                <button class="button button-secondary" data-action="book-live-demo" type="button">Book Live Demo</button>
+              </div>
             </div>
           </div>
         </section>
@@ -8575,15 +8668,17 @@
   }
 
   function renderTrialSuccessPage() {
+    const ownerClockRoute = getOwnerClockRoute();
     return `
       <main class="auth-shell">
         <div class="container">
           <div class="auth-card" style="max-width: 760px; margin: 0 auto;">
             <p class="eyebrow">Trial Started</p>
             <h3>Your agency workspace is ready</h3>
-            <p>You now have ${Math.max(getTrialDaysRemaining(), 0)} days left in your free trial. Continue into the onboarding dashboard, invite your team, and load payroll-ready sample records if you chose that option.</p>
+            <p>You now have ${Math.max(getTrialDaysRemaining(), 0)} days left in your free trial. Your staffing agency is preloaded on the worker clock page so you can verify the public punch flow right away.</p>
             <div class="page-actions" style="margin-top: 20px;">
-              <button class="button button-primary" data-action="go-route" data-route="${escapeHtml(getHomeRoute())}" type="button">Continue to Dashboard</button>
+              <button class="button button-primary" data-action="go-route" data-route="${escapeHtml(ownerClockRoute)}" type="button">Open Worker Clock</button>
+              <button class="button button-secondary" data-action="go-route" data-route="${escapeHtml(getHomeRoute())}" type="button">Continue to Dashboard</button>
               <button class="button button-secondary" data-action="go-route" data-route="billing" type="button">Open Billing</button>
             </div>
           </div>
@@ -8634,7 +8729,7 @@
         <div class="container marketing-footer-row">
           <div>
             <strong>${escapeHtml(getBrandName())}</strong>
-            <p class="muted-text">QR punches, approvals, payroll, and margin visibility for staffing agencies.</p>
+            <p class="muted-text">Attendance tracking, client approvals, assignment visibility, and payroll-ready exports for staffing agencies.</p>
             <div class="marketing-footer-links">
               <button class="marketing-link" data-action="privacy-placeholder" type="button">Privacy Policy</button>
               <button class="marketing-link" data-action="terms-placeholder" type="button">Terms of Service</button>
@@ -8646,7 +8741,7 @@
             </div>
           </div>
           <div class="marketing-actions">
-            <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+            <button class="button button-secondary" data-action="book-live-demo" type="button">Book Live Demo</button>
             <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
           </div>
         </div>
@@ -11912,6 +12007,7 @@
 
     return `
       <div class="pricing-card ${highlight ? "is-highlighted" : ""}">
+        ${context === "marketing" && highlight ? `<span class="pricing-recommendation">Recommended</span>` : ""}
         <p class="eyebrow">${escapeHtml(plan.label)}</p>
         <h3>${escapeHtml(plan.label)}</h3>
         <span class="pricing-price">${escapeHtml(label)}</span>
@@ -11935,10 +12031,21 @@
     `;
   }
 
-  function renderHeroStat(value, copy) {
+  function renderLandingKpiCard(value, label, copy) {
     return `
-      <div class="hero-stat">
-        <strong class="hero-stat-value">${escapeHtml(value)}</strong>
+      <div class="landing-kpi-card">
+        <strong class="landing-kpi-value">${escapeHtml(String(value))}</strong>
+        <span class="landing-kpi-label">${escapeHtml(label)}</span>
+        <p>${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderDashboardPreviewCard(label, value, copy) {
+    return `
+      <div class="landing-dashboard-card">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(String(value))}</strong>
         <p>${escapeHtml(copy)}</p>
       </div>
     `;
@@ -11956,13 +12063,45 @@
     `;
   }
 
-  function renderComparisonRow(label, legacyValue, portalyValue) {
+  function renderCompetitiveComparisonRow(label, spreadsheetValue, genericValue, portalyValue) {
     return `
       <tr>
         <th>${escapeHtml(label)}</th>
-        <td>${escapeHtml(legacyValue)}</td>
+        <td>${escapeHtml(spreadsheetValue)}</td>
+        <td>${escapeHtml(genericValue)}</td>
         <td>${escapeHtml(portalyValue)}</td>
       </tr>
+    `;
+  }
+
+  function renderTestimonialCard(quote, name, title) {
+    return `
+      <div class="feature-card testimonial-card">
+        <p class="testimonial-quote">"${escapeHtml(quote)}"</p>
+        <strong class="testimonial-name">${escapeHtml(name)}</strong>
+        <p class="testimonial-title">${escapeHtml(title)}</p>
+      </div>
+    `;
+  }
+
+  function renderDemoWorkflowCard(title, copy, badge) {
+    return `
+      <div class="demo-workflow-card">
+        <span class="demo-workflow-badge">${escapeHtml(badge)}</span>
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(copy)}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTrustBadge(label) {
+    return `
+      <div class="trust-badge-card">
+        <span class="status-badge status-success">Included</span>
+        <strong>${escapeHtml(label)}</strong>
+      </div>
     `;
   }
 
@@ -12014,27 +12153,18 @@
       statusTone: featuredPunchState.statusKey === "on-lunch" ? "status-warning" : featuredPunchState.statusKey === "clocked-in" ? "status-success" : "status-neutral",
       allowed: featuredPunchState.allowed,
       metrics: {
-        clockedInNow: metrics.clockedInNow,
-        activeSites: metrics.activeSites,
-        missingClockOuts: metrics.missingClockOuts,
-        overtimeAlerts: scoped.timesheets.filter(timesheet => Number(timesheet.overtimeHours || 0) > 0).length,
-        payrollReadyHours: sumNumbers(scoped.timesheets
-          .filter(timesheet => ["approved", "submitted"].includes(String(timesheet.status || "").toLowerCase()))
-          .map(timesheet => Number(timesheet.approvedHours || 0)))
+        activeWorkers: metrics.activeWorkers,
+        clockedInToday: scoped.workers.filter(worker => getWorkerPunchesForToday(worker.id, scoped.punches).length > 0).length,
+        pendingApprovals: metrics.pendingApprovals,
+        openAssignments: scoped.assignments.filter(assignment => String(assignment.status || "").toLowerCase() !== "ended").length,
+        hoursThisWeek: sumNumbers(scoped.timesheets.map(timesheet => {
+          const approvedHours = Number(timesheet.approvedHours || 0);
+          if (approvedHours) {
+            return approvedHours;
+          }
+          return Number(timesheet.regularHours || 0) + Number(timesheet.overtimeHours || 0);
+        }))
       }
-    };
-  }
-
-  function getMarketingRoiEstimate() {
-    const workers = Number.isFinite(Number(state.roi.workers)) ? Math.max(Number(state.roi.workers), 0) : 0;
-    const adminHours = Number.isFinite(Number(state.roi.adminHours)) ? Math.max(Number(state.roi.adminHours), 0) : 0;
-    const disputes = Number.isFinite(Number(state.roi.disputes)) ? Math.max(Number(state.roi.disputes), 0) : 0;
-    const monthlyHoursSaved = (adminHours * 0.62 * 4.33) + (disputes * 0.75) + (workers * 0.08);
-    const monthlyLaborSavings = monthlyHoursSaved * 31;
-    return {
-      monthlyHoursSaved,
-      monthlyLaborSavings,
-      disputesReduced: Math.max(Math.round(disputes * 0.5), disputes > 0 ? 1 : 0)
     };
   }
 
@@ -12408,6 +12538,24 @@
 
   function buildWorkerLink(workerId) {
     return `${state.firebase.config.appUrl || DEFAULT_APP_URL}?mode=worker&workerId=${encodeURIComponent(workerId)}`;
+  }
+
+  function getOwnerClockRoute() {
+    const agencyId = String(state.publicPunch?.agencyId || state.session.agencyId || state.session.agency?.id || "").trim();
+    const companyId = String(state.publicPunch?.companyId || "").trim();
+    const siteId = String(state.publicPunch?.siteId || "").trim();
+    const params = new URLSearchParams();
+    if (agencyId) {
+      params.set("agencyId", agencyId);
+    }
+    if (companyId) {
+      params.set("clientId", companyId);
+    }
+    if (siteId) {
+      params.set("siteId", siteId);
+    }
+    const query = params.toString();
+    return query ? `clock?${query}` : "clock";
   }
 
   function buildSitePunchLink(agencyId, companyId, siteId) {
@@ -13127,7 +13275,7 @@
   function startClock() {
     window.setInterval(() => {
       state.now = new Date();
-      if (state.initialized && (state.session.role === "worker" || state.route === "punch" || state.route === "landing")) {
+      if (state.initialized && (state.session.role === "worker" || state.route === "punch" || state.route === "clock")) {
         renderApp();
       }
     }, 1000);

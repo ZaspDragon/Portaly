@@ -44,7 +44,7 @@
   const DEFAULT_SUPPORT_EMAIL = "support@portaly-demo.com";
   const DEFAULT_SUPPORT_PHONE = "(800) 555-0199";
   const BILLING_LOCK_STATUSES = new Set(["past_due", "unpaid", "expired_trial", "canceled"]);
-  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite", "punch"]);
+  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite", "punch", "clock"]);
   const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
   const CLIENT_ROUTES = new Set(["approvals", "client-approval", "help", "billing-required"]);
   const AGENCY_SCOPED_COLLECTIONS = new Set([
@@ -7549,6 +7549,7 @@
 
   function renderMarketingLanding(focusPricing) {
     const preview = getMarketingPreviewData();
+    const roi = calculateMarketingRoi();
     const planCards = ["starter", "agency", "growth", "enterprise"]
       .map(planId => PLAN_DEFINITIONS[planId])
       .filter(Boolean)
@@ -7630,16 +7631,16 @@
           <div class="container">
             <div class="section-header">
               <div>
-                <p class="eyebrow">Impact</p>
-                <h2 class="section-title">Built around the outcomes staffing agencies pay for</h2>
+                <p class="eyebrow">Platform Highlights</p>
+                <h2 class="section-title">Built around the workflows staffing agencies need every day</h2>
               </div>
-              <p class="section-copy">Fewer payroll disputes, faster approvals, cleaner time, and less back-office rework.</p>
+              <p class="section-copy">Portaly keeps punches, approvals, assignments, and payroll prep in one operational system.</p>
             </div>
             <div class="landing-kpi-grid">
-              ${renderLandingKpiCard("98.7%", "Timesheet Accuracy", "Reduce manual corrections before payroll closes.")}
-              ${renderLandingKpiCard("85%", "Less Admin Work", "Spend less time chasing supervisors and rebuilding timecards.")}
-              ${renderLandingKpiCard("60%", "Faster Payroll Processing", "Move from approved hours to export-ready payroll faster.")}
-              ${renderLandingKpiCard("24/7", "Worker Self-Service", "Workers can punch from posted QR codes across every shift.")}
+              ${renderLandingHighlightCard("QR Time Tracking", "Workers scan a site QR and punch in from a fast, mobile-friendly clock screen.")}
+              ${renderLandingHighlightCard("Manager Approvals", "Client and site managers review submitted hours, approve timecards, and add notes digitally.")}
+              ${renderLandingHighlightCard("Payroll Export Ready", "Approved hours stay organized by worker, client, and site so payroll export is cleaner.")}
+              ${renderLandingHighlightCard("24/7 Worker Self-Service", "Workers can clock in, start lunch, end lunch, or clock out without creating an account.")}
             </div>
           </div>
         </section>
@@ -7664,6 +7665,91 @@
           </div>
         </section>
 
+        <section class="section" id="screenshots">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Product Screenshots</p>
+                <h2 class="section-title">Show staffing buyers the exact screens their team will use</h2>
+              </div>
+              <p class="section-copy">These product views mirror the workflows that matter most: worker punches, client approvals, and payroll-ready exports.</p>
+            </div>
+            <div class="marketing-screenshot-grid">
+              ${renderMarketingScreenshotCard(
+                "Worker Clock",
+                "No-login QR punch screen",
+                "Workers scan a site QR, pick their name, and punch in seconds from a phone.",
+                `
+                  <div class="marketing-shot-shell">
+                    <div class="marketing-shot-top">
+                      <strong>${escapeHtml(preview.siteName)}</strong>
+                      <span class="status-badge ${escapeHtml(preview.statusTone)}">${escapeHtml(preview.statusLabel)}</span>
+                    </div>
+                    <div class="marketing-shot-field">
+                      <span>Worker</span>
+                      <strong>${escapeHtml(preview.workerName)}</strong>
+                    </div>
+                    <div class="marketing-shot-button-grid">
+                      <span class="marketing-shot-button is-primary">Clock In</span>
+                      <span class="marketing-shot-button">Start Lunch</span>
+                      <span class="marketing-shot-button">End Lunch</span>
+                      <span class="marketing-shot-button">Clock Out</span>
+                    </div>
+                    <p class="helper-copy">Last action: ${escapeHtml(preview.statusLabel)} for ${escapeHtml(preview.workerName)}</p>
+                  </div>
+                `,
+                `<button class="button button-secondary" data-action="go-route" data-route="clock" type="button">Open Worker Clock</button>`
+              )}
+              ${renderMarketingScreenshotCard(
+                "Client Approval Portal",
+                "Review weekly timecards without email chains",
+                "Client managers approve hours, reject time, and add notes from a focused portal.",
+                `
+                  <div class="marketing-shot-shell">
+                    <div class="marketing-shot-top">
+                      <strong>${escapeHtml(preview.clientName)}</strong>
+                      <span class="status-badge status-warning">Pending Approval</span>
+                    </div>
+                    <div class="marketing-shot-list">
+                      <div class="marketing-shot-row"><span>Worker</span><strong>${escapeHtml(preview.workerName)}</strong></div>
+                      <div class="marketing-shot-row"><span>Site</span><strong>${escapeHtml(preview.siteName)}</strong></div>
+                      <div class="marketing-shot-row"><span>Hours</span><strong>${escapeHtml(formatHours(preview.metrics.hoursThisWeek))}</strong></div>
+                      <div class="marketing-shot-row"><span>Notes</span><strong>Missing punch reviewed</strong></div>
+                    </div>
+                    <div class="marketing-shot-action-row">
+                      <span class="marketing-shot-button is-primary">Approve Hours</span>
+                      <span class="marketing-shot-button">Reject Time</span>
+                    </div>
+                  </div>
+                `,
+                `<button class="button button-secondary" data-action="demo-login" data-role="clientManager" type="button">Open Client Manager Demo</button>`
+              )}
+              ${renderMarketingScreenshotCard(
+                "Payroll Export",
+                "Move from approved time to payroll-ready output",
+                "Approved hours stay organized by worker, client, and site so payroll is cleaner every week.",
+                `
+                  <div class="marketing-shot-shell">
+                    <div class="marketing-shot-top">
+                      <strong>Payroll Export</strong>
+                      <span class="status-badge status-success">Ready</span>
+                    </div>
+                    <div class="marketing-shot-summary-grid">
+                      <div class="marketing-shot-summary"><span>Approved Hours</span><strong>${escapeHtml(formatHours(preview.metrics.hoursThisWeek))}</strong></div>
+                      <div class="marketing-shot-summary"><span>Pending Approvals</span><strong>${escapeHtml(String(preview.metrics.pendingApprovals))}</strong></div>
+                    </div>
+                    <div class="marketing-shot-list">
+                      <div class="marketing-shot-row"><span>${escapeHtml(preview.workerName)}</span><strong>${escapeHtml(preview.clientName)}</strong></div>
+                      <div class="marketing-shot-row"><span>${escapeHtml(preview.siteName)}</span><strong>CSV Export</strong></div>
+                    </div>
+                  </div>
+                `,
+                `<button class="button button-secondary" data-action="demo-login" data-role="agencyOwner" type="button">Open Agency Demo</button>`
+              )}
+            </div>
+          </div>
+        </section>
+
         <section class="section" id="how-it-works">
           <div class="container">
             <div class="section-header">
@@ -7680,6 +7766,53 @@
               ${renderFlowStep(4, "Worker Scans QR", "Workers open a mobile-first punch page and record time without needing a login.")}
               ${renderFlowStep(5, "Client Approves Hours", "Client managers review weekly timecards, leave notes, and approve digitally.")}
               ${renderFlowStep(6, "Export Payroll", "Agency staff export approved hours without rebuilding payroll in spreadsheets.")}
+            </div>
+            <div class="workflow-lanes" style="margin-top: 20px;">
+              ${renderWorkflowLaneCard("Agency setup", "Clients, sites, workers, and assignments all stay tied to the same staffing workflow.", [
+                "Create a client and jobsite",
+                "Add workers without requiring worker logins",
+                "Assign workers and publish a site QR"
+              ])}
+              ${renderWorkflowLaneCard("Worker time capture", "Workers only see a simple punch screen built for busy job sites and shared devices.", [
+                "Scan QR or open the site punch page",
+                "Choose or type a worker name",
+                "Clock in, lunch, and clock out without email"
+              ])}
+              ${renderWorkflowLaneCard("Approval and payroll", "Managers and payroll teams move from punches to approved export-ready hours faster.", [
+                "Client managers approve timecards",
+                "Agency admins review issues and punch requests",
+                "Payroll exports stay clean and auditable"
+              ])}
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="onboarding">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Onboarding Wizard</p>
+                <h2 class="section-title">Launch your agency workflow without a long implementation project</h2>
+              </div>
+              <p class="section-copy">New agency owners land in a guided setup flow so the first client, site, worker, assignment, and QR code are easy to publish.</p>
+            </div>
+            <div class="demo-stage-grid">
+              <div class="demo-stage-screen">
+                <p class="eyebrow">Guided Setup</p>
+                <h3>From empty workspace to first live punch station</h3>
+                <p class="section-copy">Portaly already walks owners through the steps that matter most instead of dropping them into a blank dashboard.</p>
+                <div class="page-actions" style="margin-top: 20px;">
+                  <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+                  <button class="button button-secondary" data-action="demo-login" data-role="agencyOwner" type="button">Open Agency Demo</button>
+                </div>
+              </div>
+              <div class="marketing-wizard-card">
+                <div class="marketing-wizard-step is-complete"><span>01</span><div><strong>Add Client</strong><p>Create the company record and approval owner.</p></div></div>
+                <div class="marketing-wizard-step is-complete"><span>02</span><div><strong>Add Site</strong><p>Create the warehouse, plant, or location.</p></div></div>
+                <div class="marketing-wizard-step is-complete"><span>03</span><div><strong>Add Worker</strong><p>Build the worker roster without worker accounts.</p></div></div>
+                <div class="marketing-wizard-step is-active"><span>04</span><div><strong>Assign Worker</strong><p>Connect workers to the right client and site.</p></div></div>
+                <div class="marketing-wizard-step"><span>05</span><div><strong>Generate Site QR</strong><p>Publish the QR punch page workers will scan.</p></div></div>
+              </div>
             </div>
           </div>
         </section>
@@ -7740,6 +7873,55 @@
           </div>
         </section>
 
+        <section class="section" id="approval-portal">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Client Approval Portal</p>
+                <h2 class="section-title">Give client managers a focused approval workspace instead of a full agency dashboard</h2>
+              </div>
+              <p class="section-copy">Assigned client managers can review hours, approve or reject timecards, and keep payroll moving without seeing the rest of the agency back office.</p>
+            </div>
+            <div class="split-grid">
+              <div class="surface-card">
+                <div class="card-top">
+                  <div>
+                    <p class="eyebrow">Portal Access</p>
+                    <h3>Everything a client manager needs, nothing they do not</h3>
+                  </div>
+                </div>
+                <ul class="list" style="margin-top: 16px;">
+                  <li>Assigned client and site visibility only</li>
+                  <li>Weekly timecard review with notes and approval status</li>
+                  <li>Digital approval actions for submitted hours</li>
+                  <li>Cleaner handoff back to the staffing agency payroll team</li>
+                </ul>
+                <div class="page-actions" style="margin-top: 18px;">
+                  <button class="button button-primary" data-action="demo-login" data-role="clientManager" type="button">Open Client Manager Demo</button>
+                  <button class="button button-secondary" data-action="go-route" data-route="login" type="button">Client Manager Login</button>
+                </div>
+              </div>
+              <div class="surface-card approval-proof-card">
+                <div class="marketing-shot-shell">
+                  <div class="marketing-shot-top">
+                    <strong>${escapeHtml(preview.clientName)} Approval Queue</strong>
+                    <span class="status-badge status-warning">${escapeHtml(String(preview.metrics.pendingApprovals))} Pending</span>
+                  </div>
+                  <div class="marketing-shot-list">
+                    <div class="marketing-shot-row"><span>${escapeHtml(preview.workerName)}</span><strong>${escapeHtml(preview.siteName)}</strong></div>
+                    <div class="marketing-shot-row"><span>Week ending</span><strong>${escapeHtml(formatDate(state.now))}</strong></div>
+                    <div class="marketing-shot-row"><span>Total hours</span><strong>${escapeHtml(formatHours(preview.metrics.hoursThisWeek))}</strong></div>
+                  </div>
+                  <div class="marketing-shot-action-row">
+                    <span class="marketing-shot-button is-primary">Approve</span>
+                    <span class="marketing-shot-button">Reject</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="section" id="testimonials">
           <div class="container">
             <div class="section-header">
@@ -7751,8 +7933,8 @@
             </div>
             <div class="feature-grid testimonial-grid">
               ${renderTestimonialCard("Portaly eliminated our paper timesheets.", "Operations Director", "Warehouse staffing agency")}
-              ${renderTestimonialCard("Payroll takes half the time it used to.", "Payroll Manager", "Manufacturing staffing firm")}
-              ${renderTestimonialCard("Our clients love approving hours digitally.", "Agency Owner", "Temporary labor agency")}
+              ${renderTestimonialCard("Payroll takes half the time it used to, and approvals are finally organized by client and site.", "Payroll Manager", "Manufacturing staffing firm")}
+              ${renderTestimonialCard("Our clients love approving hours digitally instead of texting supervisors on Friday afternoon.", "Agency Owner", "Temporary labor agency")}
             </div>
           </div>
         </section>
@@ -7788,6 +7970,66 @@
           </div>
         </section>
 
+        <section class="section" id="demo-accounts">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Demo Account</p>
+                <h2 class="section-title">Open the real product flow instantly without filling out a sales form</h2>
+              </div>
+              <p class="section-copy">Use working demo roles to walk through the agency dashboard, worker punch flow, and client approval portal right now.</p>
+            </div>
+            <div class="feature-grid demo-access-grid">
+              ${renderMarketingDemoRoleCard("Agency Owner Demo", "See the staffing dashboard, workers, sites, payroll, and billing pages as an owner.", "agencyOwner")}
+              ${renderMarketingDemoRoleCard("Client Manager Demo", "Open the approval workflow and review weekly timecards as a client manager.", "clientManager")}
+              ${renderMarketingDemoRoleCard("Worker Demo", "Go straight to the worker punch experience and test the QR-style clock flow.", "worker")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="roi">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">ROI Calculator</p>
+                <h2 class="section-title">Estimate what cleaner time and approvals could save your staffing desk</h2>
+              </div>
+              <p class="section-copy">This estimator uses your own assumptions. It does not rely on customer benchmark claims or unsupported platform-wide percentages.</p>
+            </div>
+            <div class="roi-estimator-grid">
+              <div class="surface-card roi-input-card">
+                <div class="card-top">
+                  <div>
+                    <p class="eyebrow">Your Inputs</p>
+                    <h3>Adjust the staffing desk math</h3>
+                  </div>
+                </div>
+                <div class="form-grid" style="margin-top: 18px;">
+                  <div class="field-group">
+                    <label for="roi-workers">Active temp workers</label>
+                    <input id="roi-workers" name="roiWorkers" type="number" min="0" value="${escapeAttribute(String(state.roi.workers))}" />
+                  </div>
+                  <div class="field-group">
+                    <label for="roi-admin-hours">Admin hours per week spent fixing time</label>
+                    <input id="roi-admin-hours" name="roiAdminHours" type="number" min="0" value="${escapeAttribute(String(state.roi.adminHours))}" />
+                  </div>
+                  <div class="field-group">
+                    <label for="roi-disputes">Punch or timesheet disputes per month</label>
+                    <input id="roi-disputes" name="roiDisputes" type="number" min="0" value="${escapeAttribute(String(state.roi.disputes))}" />
+                  </div>
+                </div>
+                <p class="helper-copy" style="margin-top: 16px;">Assumptions: 55% of payroll admin time can be recovered, back-office labor cost is estimated at $28/hour, and each dispute costs about $95 in handling time.</p>
+              </div>
+              <div class="summary-grid roi-output-grid">
+                ${renderRoiMetricCard("Hours Recovered / Month", formatHours(roi.monthlyHoursRecovered), "Back-office hours freed from chasing timecards and missing punches.")}
+                ${renderRoiMetricCard("Admin Savings / Month", formatCurrency(roi.monthlyAdminSavings), "Estimated labor savings from cleaner time collection and approvals.")}
+                ${renderRoiMetricCard("Dispute Savings / Month", formatCurrency(roi.monthlyDisputeSavings), "Estimated handling cost avoided from fewer punch disputes and corrections.")}
+                ${renderRoiMetricCard("Annual Savings Potential", formatCurrency(roi.annualSavings), "A directional estimate to help owners justify the switch from spreadsheets.")}
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="section ${focusPricing ? "marketing-section-highlight" : ""}" id="pricing">
           <div class="container">
             <div class="section-header">
@@ -7800,10 +8042,26 @@
             <div class="pricing-grid">
               ${planCards}
             </div>
+            <div class="pricing-provider-grid" style="margin-top: 18px;">
+              ${renderSubscriptionProviderCard(
+                "Square Checkout",
+                "Live today",
+                "Self-serve checkout for agencies ready to start a paid subscription right away.",
+                ["Working payment links", "Fastest path to go live", "Best for small and mid-size staffing teams"],
+                `<button class="button button-primary" data-action="start-checkout" data-plan="growth" type="button">Start Square Checkout</button>`
+              )}
+              ${renderSubscriptionProviderCard(
+                "Stripe or invoiced setup",
+                "Guided onboarding",
+                "Need a different billing motion? Use a live demo call to scope Stripe, invoice, or enterprise subscription setup.",
+                ["Good for larger staffing groups", "Supports custom rollout planning", "Uses a working live-demo contact flow today"],
+                `<button class="button button-secondary" data-action="book-live-demo" type="button">Request Billing Setup</button>`
+              )}
+            </div>
             <div class="notice-card pricing-note-card" style="margin-top: 18px;">
               <div>
-                <strong>Payments are processed securely through Square checkout.</strong>
-                <p>Start with a free trial, validate the workflow with your staffing desk, then convert to the plan that fits your book of business.</p>
+                <strong>Start with a free trial, then move into a subscription path that fits your agency.</strong>
+                <p>Square checkout is available today, and guided Stripe or invoiced subscription setup can be handled during onboarding without blocking the product evaluation.</p>
               </div>
             </div>
           </div>
@@ -8017,10 +8275,10 @@
           <div class="stack-lg">
             <div class="auth-card">
               <p class="eyebrow">Access Hub</p>
-              <h3>Choose a Portal</h3>
-              <p>Demo Mode stays public and separate from real user accounts. Changes only save in this browser.</p>
+              <h3>Choose a Demo Account</h3>
+              <p>Demo Mode stays public and separate from real user accounts. Open any role below instantly and test the workflow in this browser.</p>
               <div class="page-actions" style="margin-top: 18px;">
-                <span class="mode-badge">Demo Mode - sample data only</span>
+                <span class="mode-badge">Demo Mode - no signup required</span>
                 <button class="button button-ghost" data-action="reset-demo" type="button">Reset Demo Data</button>
               </div>
             </div>
@@ -8135,11 +8393,13 @@
               <p>Demo Mode uses localStorage only and does not create real accounts or billing records. Cloud Mode uses Firebase Authentication, Firestore, and Square payment links.</p>
             </div>
             <div class="support-card">
-              <p class="eyebrow">Need a quick walkthrough?</p>
-              <h3>Use the public demo first</h3>
-              <p>Try the owner, client manager, and worker flows before you connect Firebase or Square billing links.</p>
+              <p class="eyebrow">Demo Account</p>
+              <h3>Open a working demo instantly</h3>
+              <p>Test the owner dashboard, client approval flow, and worker clock without creating a real account first.</p>
               <div class="page-actions" style="margin-top: 16px;">
-                <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Try Demo</button>
+                <button class="button button-secondary" data-action="demo-login" data-role="agencyOwner" type="button">Agency Owner Demo</button>
+                <button class="button button-secondary" data-action="demo-login" data-role="clientManager" type="button">Client Manager Demo</button>
+                <button class="button button-secondary" data-action="demo-login" data-role="worker" type="button">Worker Demo</button>
                 <button class="button button-ghost" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
               </div>
             </div>
@@ -10299,7 +10559,7 @@
             ${renderUsageRow("Active workers", usage.activeWorkers, plan.workerLimit)}
             ${renderUsageRow("Active sites", usage.activeSites, plan.siteLimit)}
           </div>
-          <p class="helper-copy" style="margin-top: 18px;">Payments are processed securely through Square checkout. Subscription changes can connect here once the secure backend is deployed.</p>
+          <p class="helper-copy" style="margin-top: 18px;">Payments can start through Square checkout today, and larger agencies can use guided Stripe or invoiced subscription setup during onboarding.</p>
           ${!subscriptionConnected ? `
             <div class="notice-card warning" style="margin-top: 18px;">
               <div>
@@ -12017,7 +12277,9 @@
     const label = plan.price === null ? "Custom" : `$${plan.price}/month`;
     const marketingActionLabel = plan.id === "enterprise" ? "Request Enterprise" : "Start with Square";
     const action = context === "marketing"
-      ? `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">${escapeHtml(marketingActionLabel)}</button>`
+      ? (plan.id === "enterprise"
+        ? `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="book-live-demo" type="button">${escapeHtml(marketingActionLabel)}</button>`
+        : `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">${escapeHtml(marketingActionLabel)}</button>`)
       : (plan.id === "enterprise"
         ? `<button class="button button-ghost" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">Contact Sales</button>`
         : `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="select-plan" data-plan="${escapeHtml(plan.id)}" type="button">${highlight ? "Selected Plan" : "Choose Plan"}</button>`);
@@ -12054,6 +12316,104 @@
         <strong class="landing-kpi-value">${escapeHtml(String(value))}</strong>
         <span class="landing-kpi-label">${escapeHtml(label)}</span>
         <p>${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderLandingHighlightCard(title, copy) {
+    return `
+      <div class="landing-kpi-card">
+        <strong class="landing-kpi-label" style="font-size: 1.1rem;">${escapeHtml(title)}</strong>
+        <p>${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderMarketingScreenshotCard(eyebrow, title, copy, body, footer = "") {
+    return `
+      <div class="surface-card marketing-screenshot-card">
+        <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+        <h3>${escapeHtml(title)}</h3>
+        <p class="section-copy">${escapeHtml(copy)}</p>
+        <div class="marketing-screenshot-frame">
+          ${body}
+        </div>
+        ${footer ? `<div class="page-actions" style="margin-top: 18px;">${footer}</div>` : ""}
+      </div>
+    `;
+  }
+
+  function renderWorkflowLaneCard(title, copy, items) {
+    return `
+      <div class="surface-card workflow-lane-card">
+        <p class="eyebrow">${escapeHtml(title)}</p>
+        <h3>${escapeHtml(title)}</h3>
+        <p class="section-copy">${escapeHtml(copy)}</p>
+        <ul class="list workflow-lane-list">
+          ${(items || []).map(item => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+  function renderMarketingDemoRoleCard(title, copy, role) {
+    const buttonLabel = role === "worker"
+      ? "Open Worker Demo"
+      : role === "clientManager"
+        ? "Open Client Manager Demo"
+        : "Open Agency Demo";
+    return `
+      <div class="surface-card demo-access-card">
+        <p class="eyebrow">Interactive Demo</p>
+        <h3>${escapeHtml(title)}</h3>
+        <p class="section-copy">${escapeHtml(copy)}</p>
+        <div class="page-actions" style="margin-top: 18px;">
+          <button class="button button-primary" data-action="demo-login" data-role="${escapeHtml(role)}" type="button">${escapeHtml(buttonLabel)}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function calculateMarketingRoi() {
+    const workers = Math.max(Number(state.roi.workers || 0), 0);
+    const adminHours = Math.max(Number(state.roi.adminHours || 0), 0);
+    const disputes = Math.max(Number(state.roi.disputes || 0), 0);
+    const monthlyHoursRecovered = adminHours * 4.33 * 0.55;
+    const monthlyAdminSavings = monthlyHoursRecovered * 28;
+    const monthlyDisputeSavings = disputes * 95;
+    const monthlyWorkerVisibilitySavings = workers * 6;
+    const monthlySavings = monthlyAdminSavings + monthlyDisputeSavings + monthlyWorkerVisibilitySavings;
+    return {
+      monthlyHoursRecovered,
+      monthlyAdminSavings,
+      monthlyDisputeSavings,
+      monthlySavings,
+      annualSavings: monthlySavings * 12
+    };
+  }
+
+  function renderRoiMetricCard(label, value, copy) {
+    return `
+      <div class="metric-card roi-metric-card">
+        <span class="metric-label">${escapeHtml(label)}</span>
+        <strong class="metric-value">${escapeHtml(String(value))}</strong>
+        <p class="metric-foot">${escapeHtml(copy)}</p>
+      </div>
+    `;
+  }
+
+  function renderSubscriptionProviderCard(title, eyebrow, copy, bullets, actionHtml) {
+    return `
+      <div class="surface-card provider-option-card">
+        <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+        <h3>${escapeHtml(title)}</h3>
+        <p class="section-copy">${escapeHtml(copy)}</p>
+        <ul class="list provider-option-list">
+          ${(bullets || []).map(item => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+        <div class="page-actions" style="margin-top: 18px;">
+          ${actionHtml}
+        </div>
       </div>
     `;
   }
@@ -12247,11 +12607,11 @@
       <div class="surface-card">
         <div class="card-top">
           <div>
-            <p class="eyebrow">Get Started</p>
-            <h2 class="page-heading">This workspace is ready for your first live records</h2>
+            <p class="eyebrow">Onboarding Wizard</p>
+            <h2 class="page-heading">Launch your first live staffing workflow</h2>
           </div>
         </div>
-        <p class="section-copy">Your sample records are gone. Use these steps to start building the agency workspace with real clients, sites, and workers.</p>
+        <p class="section-copy">Use these guided steps to move from a fresh workspace to a live client, site, worker roster, assignment plan, and QR punch station.</p>
         <div class="feature-grid" style="margin-top: 18px;">
           <div class="feature-card">
             <p class="eyebrow">Step 1</p>

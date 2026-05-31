@@ -2693,6 +2693,8 @@
     const trialDays = Number((state.firebase.config && state.firebase.config.trialDays) || 14);
     const trialStart = new Date();
     const trialEnd = addDays(trialStart, trialDays);
+    const trialStartedAt = trialStart.toISOString();
+    const trialEndsAt = trialEnd.toISOString();
     const agencyId = createId("agency");
     const createdAt = new Date().toISOString();
     const updatedAt = createdAt;
@@ -2715,15 +2717,19 @@
     }
 
     const uid = authResult.user.uid;
+    const authEmail = authResult.user.email || values.email;
 
     const agencyDoc = {
       id: agencyId,
       name: values.agencyName,
       ownerUserId: uid,
+      status: "trial",
       planId: selectedPlan,
       subscriptionStatus: "trialing",
-      trialStart: trialStart.toISOString(),
-      trialEnd: trialEnd.toISOString(),
+      trialStart: trialStartedAt,
+      trialEnd: trialEndsAt,
+      trialStartedAt,
+      trialEndsAt,
       billingProvider: "square",
       squareCustomerId: "",
       squareSubscriptionId: "",
@@ -2738,7 +2744,7 @@
       role: "agencyOwner",
       firstName: values.ownerFirstName,
       lastName: values.ownerLastName,
-      email: values.email,
+      email: authEmail,
       phone: values.phone,
       status: "active",
       assignedClientIds: [],
@@ -2749,15 +2755,16 @@
     };
 
     const settingDoc = {
-      id: createId("setting"),
+      id: agencyId,
       agencyId,
+      trialDays,
       ...agencySettings,
       createdAt,
       updatedAt
     };
 
     const subscriptionDoc = {
-      id: createId("subscription"),
+      id: agencyId,
       agencyId,
       billingProvider: "square",
       squareCustomerId: "",
@@ -2766,8 +2773,10 @@
       status: "trialing",
       currentPeriodStart: "",
       currentPeriodEnd: "",
-      trialStart: trialStart.toISOString(),
-      trialEnd: trialEnd.toISOString(),
+      trialStart: trialStartedAt,
+      trialEnd: trialEndsAt,
+      trialStartedAt,
+      trialEndsAt,
       createdAt,
       updatedAt
     };
@@ -2781,8 +2790,8 @@
       const batch = state.firebase.db.batch();
       batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
       batch.set(state.firebase.db.collection("users").doc(uid), userDoc);
-      batch.set(state.firebase.db.collection("settings").doc(settingDoc.id), settingDoc);
-      batch.set(state.firebase.db.collection("subscriptions").doc(subscriptionDoc.id), subscriptionDoc);
+      batch.set(state.firebase.db.collection("settings").doc(agencyId), settingDoc);
+      batch.set(state.firebase.db.collection("subscriptions").doc(agencyId), subscriptionDoc);
       await batch.commit();
       console.log("[Portaly] Firestore batch committed", {
         agencyId,
@@ -2858,7 +2867,7 @@
     const nowIso = new Date().toISOString();
     const trialStartIso = existingAgency?.trialStart || nowIso;
     const trialEndIso = existingAgency?.trialEnd || addDays(new Date(trialStartIso), trialDays).toISOString();
-    const userCreatedAt = nowIso;
+    const userCreatedAt = (await loadCloudUserProfile(uid))?.createdAt || nowIso;
     const agencyCreatedAt = existingAgency?.createdAt || nowIso;
     const updatedAt = nowIso;
     const agencyId = state.profileRepair?.agencyId || existingAgency?.id || createId("agency");
@@ -2894,10 +2903,13 @@
       id: agencyId,
       name: values.agencyName,
       ownerUserId: uid,
+      status: "trial",
       planId: values.selectedPlan,
       subscriptionStatus: "trialing",
       trialStart: trialStartIso,
       trialEnd: trialEndIso,
+      trialStartedAt: trialStartIso,
+      trialEndsAt: trialEndIso,
       billingProvider: "square",
       squareCustomerId: existingAgency?.squareCustomerId || "",
       squareSubscriptionId: existingAgency?.squareSubscriptionId || "",
@@ -2907,15 +2919,16 @@
     };
 
     const settingDoc = {
-      id: existingSettings?.id || createId("setting"),
+      id: agencyId,
       agencyId,
+      trialDays: Number(existingSettings?.trialDays || trialDays),
       ...agencySettings,
       createdAt: existingSettings?.createdAt || agencyCreatedAt,
       updatedAt
     };
 
     const subscriptionDoc = {
-      id: existingSubscription?.id || createId("subscription"),
+      id: agencyId,
       agencyId,
       billingProvider: "square",
       squareCustomerId: existingSubscription?.squareCustomerId || "",
@@ -2926,6 +2939,8 @@
       currentPeriodEnd: existingSubscription?.currentPeriodEnd || "",
       trialStart: trialStartIso,
       trialEnd: trialEndIso,
+      trialStartedAt: existingSubscription?.trialStartedAt || trialStartIso,
+      trialEndsAt: existingSubscription?.trialEndsAt || trialEndIso,
       createdAt: existingSubscription?.createdAt || agencyCreatedAt,
       updatedAt
     };
@@ -2939,8 +2954,8 @@
       const batch = state.firebase.db.batch();
       batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
       batch.set(state.firebase.db.collection("users").doc(uid), userDoc);
-      batch.set(state.firebase.db.collection("settings").doc(settingDoc.id), settingDoc);
-      batch.set(state.firebase.db.collection("subscriptions").doc(subscriptionDoc.id), subscriptionDoc);
+      batch.set(state.firebase.db.collection("settings").doc(agencyId), settingDoc);
+      batch.set(state.firebase.db.collection("subscriptions").doc(agencyId), subscriptionDoc);
       await batch.commit();
       console.log("[Portaly] Firestore batch committed", {
         agencyId,
@@ -3006,6 +3021,10 @@
       return null;
     }
     try {
+      const directSnapshot = await state.firebase.db.collection(collectionName).doc(agencyId).get();
+      if (directSnapshot.exists) {
+        return { id: directSnapshot.id, ...directSnapshot.data() };
+      }
       const snapshot = await state.firebase.db.collection(collectionName).where("agencyId", "==", agencyId).limit(1).get();
       const record = snapshot.docs && snapshot.docs[0];
       return record ? { id: record.id, ...record.data() } : null;
@@ -3506,7 +3525,8 @@
     if (settingsRecord) {
       savedSettings = await updateData("settings", settingsRecord.id, nextSettings);
     } else {
-      savedSettings = await saveData("settings", createId("setting"), {
+      const settingsId = agency?.id || state.session.agencyId || state.session.agency?.id || createId("setting");
+      savedSettings = await saveData("settings", settingsId, {
         agencyId: agency?.id || state.session.agencyId || state.session.agency?.id,
         ...nextSettings
       });
@@ -11987,7 +12007,10 @@
 
   function getCurrentSettings() {
     const scoped = getScopedData();
-    return scoped.settings[0] || null;
+    const sessionAgencyId = state.session.agencyId || state.session.agency?.id;
+    return (scoped.settings || []).find(setting => setting.agencyId === sessionAgencyId || setting.id === sessionAgencyId)
+      || scoped.settings[0]
+      || null;
   }
 
   function getClientInvites(clientId = "", siteId = "") {

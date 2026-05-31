@@ -966,7 +966,7 @@
 
   function normalizeRoute(route) {
     const candidate = route === "site-qr" ? "qr-codes" : (route || getHomeRoute());
-    if (candidate === "approval-link" || candidate === "accept-invite" || candidate === "punch" || candidate === "landing") {
+    if (candidate === "approval-link" || candidate === "accept-invite" || candidate === "punch" || candidate === "clock" || candidate === "landing") {
       return candidate;
     }
     const allowed = getAllowedRoutes();
@@ -11284,23 +11284,40 @@
   }
 
   function buildAgencyDashboardMetrics(scoped) {
-    const marginRows = buildMarginRows(scoped);
+    const safeScoped = {
+      agencies: [],
+      users: [],
+      clients: [],
+      sites: [],
+      workers: [],
+      assignments: [],
+      punches: [],
+      punchRequests: [],
+      timesheets: [],
+      approvals: [],
+      payrollRuns: [],
+      subscriptions: [],
+      auditLogs: [],
+      settings: [],
+      ...(scoped || {})
+    };
+    const marginRows = buildMarginRows(safeScoped);
     const grossProfit = sumNumbers(marginRows.map(row => row.grossProfit));
     const revenue = sumNumbers(marginRows.map(row => row.revenue));
     const agency = getCurrentAgency();
     const subscription = getCurrentSubscription();
     return {
-      activeWorkers: scoped.workers.filter(worker => worker.status !== "inactive").length,
-      clockedInNow: buildLivePunchRows(scoped).filter(row => row.baseStatusKey === "clocked-in").length,
-      onLunch: buildLivePunchRows(scoped).filter(row => row.baseStatusKey === "on-lunch").length,
-      missingClockOuts: buildLivePunchRows(scoped).filter(row => row.exception === "Missing clock out").length,
-      pendingPunchRequests: scoped.punchRequests.filter(request => request.status === "pending").length,
-      pendingApprovals: scoped.approvals.filter(approval => approval.status === "pending").length,
-      payrollHours: sumNumbers(scoped.timesheets.map(timesheet => timesheet.approvedHours || 0)),
+      activeWorkers: safeScoped.workers.filter(worker => worker.status !== "inactive").length,
+      clockedInNow: buildLivePunchRows(safeScoped).filter(row => row.baseStatusKey === "clocked-in").length,
+      onLunch: buildLivePunchRows(safeScoped).filter(row => row.baseStatusKey === "on-lunch").length,
+      missingClockOuts: buildLivePunchRows(safeScoped).filter(row => row.exception === "Missing clock out").length,
+      pendingPunchRequests: safeScoped.punchRequests.filter(request => request.status === "pending").length,
+      pendingApprovals: safeScoped.approvals.filter(approval => approval.status === "pending").length,
+      payrollHours: sumNumbers(safeScoped.timesheets.map(timesheet => timesheet.approvedHours || 0)),
       grossProfit,
       marginPercent: revenue ? (grossProfit / revenue) * 100 : 0,
-      activeClients: scoped.clients.filter(client => client.status !== "inactive").length,
-      activeSites: scoped.sites.filter(site => site.status !== "inactive").length,
+      activeClients: safeScoped.clients.filter(client => client.status !== "inactive").length,
+      activeSites: safeScoped.sites.filter(site => site.status !== "inactive").length,
       subscriptionStatus: subscription?.status || agency?.subscriptionStatus || "trialing"
     };
   }
@@ -12118,6 +12135,7 @@
       workers: filterAgency(store.workers),
       assignments: filterAgency(store.assignments),
       punches: filterAgency(store.punches),
+      punchRequests: filterAgency(store.punchRequests),
       timesheets: filterAgency(store.timesheets),
       approvals: filterAgency(store.approvals),
       payrollRuns: filterAgency(store.payrollRuns),
@@ -14091,9 +14109,9 @@
       <div class="loading-card">
         <div class="surface-card">
           <p class="eyebrow">Portaly</p>
-          <h2>Something failed while starting the app</h2>
-          <p>${escapeHtml(error.message || "Unknown startup error")}</p>
-          <p class="helper-copy" style="margin-top: 10px;">Portaly logged the full error in the console and kept a recovery screen visible so the page does not go blank.</p>
+          <h2>Portaly failed to load.</h2>
+          <p>Check console for startup error.</p>
+          <p class="helper-copy" style="margin-top: 10px;">${escapeHtml(error.message || "Unknown startup error")}</p>
           <div class="page-actions" style="margin-top: 18px;">
             <button class="button button-primary" data-action="reload-app" type="button">Reload Portaly</button>
             <button class="button button-secondary" data-action="go-route" data-route="demo" type="button">Open Demo Mode</button>

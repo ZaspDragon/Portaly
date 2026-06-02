@@ -502,7 +502,8 @@ service cloud.firestore {
     }
 
     match /sitePunchDirectories/{siteId} {
-      allow read: if true;
+      allow get: if true;
+      allow list: if signedIn();
       allow create: if signedIn() && (
         isPlatformOwner()
         || agencyStaffOwnsRequest()
@@ -584,24 +585,22 @@ service cloud.firestore {
         || (workerOwnsRecord(resource.data.workerId) && sameAgencyResource())
       );
 
-      allow create: if publicSitePunchCreate() || (
-        signedIn() && (
-          isPlatformOwner()
-          || agencyStaffOwnsRequest()
-          || (
-            isClientManager()
-            && sameAgencyRequest()
-            && (assignedClient(request.resource.data.clientId) || assignedSite(request.resource.data.siteId))
-            && request.resource.data.edited == true
-            && request.resource.data.editedBy == request.auth.uid
-            && request.resource.data.editedByRole == 'clientManager'
-          )
-          || (
-            isWorker()
-            && sameAgencyRequest()
-            && request.resource.data.workerId == workerId()
-            && request.resource.data.createdBy == request.auth.uid
-          )
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || agencyStaffOwnsRequest()
+        || (
+          isClientManager()
+          && sameAgencyRequest()
+          && (assignedClient(request.resource.data.clientId) || assignedSite(request.resource.data.siteId))
+          && request.resource.data.edited == true
+          && request.resource.data.editedBy == request.auth.uid
+          && request.resource.data.editedByRole == 'clientManager'
+        )
+        || (
+          isWorker()
+          && sameAgencyRequest()
+          && request.resource.data.workerId == workerId()
+          && request.resource.data.createdBy == request.auth.uid
         )
       );
 
@@ -612,22 +611,26 @@ service cloud.firestore {
       );
     }
 
-    match /punchRequests/{requestId} {
+    match /correctionRequests/{requestId} {
       allow read: if signedIn() && (
         isPlatformOwner()
         || agencyStaffOwnsResource()
         || (isClientManager() && sameAgencyResource() && (assignedClient(resource.data.clientId) || assignedSite(resource.data.siteId)))
+        || (workerOwnsRecord(resource.data.workerId) && sameAgencyResource())
       );
 
-      allow create: if publicPunchRequestCreate() || (
-        signedIn() && (
-          isPlatformOwner()
-          || agencyStaffOwnsRequest()
-          || (
-            isClientManager()
-            && sameAgencyRequest()
-            && (assignedClient(request.resource.data.clientId) || assignedSite(request.resource.data.siteId))
-          )
+      allow create: if signedIn() && (
+        isPlatformOwner()
+        || agencyStaffOwnsRequest()
+        || (
+          isClientManager()
+          && sameAgencyRequest()
+          && (assignedClient(request.resource.data.clientId) || assignedSite(request.resource.data.siteId))
+        )
+        || (
+          isWorker()
+          && sameAgencyRequest()
+          && request.resource.data.workerId == workerId()
         )
       );
 

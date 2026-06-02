@@ -16,6 +16,7 @@ window.PORTALY_FIREBASE_CONFIG = {
   // App
   appName: "Portaly",
   appUrl: "https://zaspdragon.github.io/Portaly/",
+  workerAppUrl: "https://zaspdragon.github.io/QRTIMECLOCK2/",
 
   // Trial Settings
   trialDays: 14,

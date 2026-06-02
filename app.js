@@ -44,9 +44,9 @@
   const DEFAULT_SUPPORT_EMAIL = "support@portaly-demo.com";
   const DEFAULT_SUPPORT_PHONE = "(800) 555-0199";
   const BILLING_LOCK_STATUSES = new Set(["past_due", "unpaid", "expired_trial", "canceled"]);
-  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite", "punch", "clock"]);
-  const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required"]);
-  const CLIENT_ROUTES = new Set(["approvals", "client-approval", "help", "billing-required"]);
+  const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite", "punch", "clock", "unauthorized"]);
+  const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required", "unauthorized"]);
+  const CLIENT_ROUTES = new Set(["dashboard", "approvals", "client-corrections", "workers", "billing-required", "unauthorized"]);
   const AGENCY_SCOPED_COLLECTIONS = new Set([
     "clients",
     "sites",
@@ -65,7 +65,7 @@
   const ROLE_META = {
     platformOwner: {
       label: "Platform Owner",
-      home: "dashboard",
+      home: "agencies",
       badge: "PO"
     },
     agencyOwner: {
@@ -80,7 +80,7 @@
     },
     clientManager: {
       label: "Client Manager",
-      home: "approvals",
+      home: "dashboard",
       badge: "CM"
     },
     worker: {
@@ -96,60 +96,96 @@
       name: "Starter",
       label: "Starter",
       price: 99,
-      workerLimit: 25,
+      clientLimit: 1,
+      workerLimit: 50,
       siteLimit: 1,
       squarePaymentLink: BILLING_CONFIG.starterPaymentLink || "https://square.link/u/mfu6eun7",
-      features: ["QR punches", "Basic payroll export", "Up to 25 workers", "1 client site"]
+      features: ["1 agency", "1 client", "1 site", "50 workers", "QR clock-in", "Weekly CSV export"]
     },
     agency: {
       id: "agency",
       name: "Agency",
       label: "Agency",
       price: 249,
-      workerLimit: 100,
-      siteLimit: 5,
+      clientLimit: 5,
+      workerLimit: 250,
+      siteLimit: 15,
       squarePaymentLink: BILLING_CONFIG.agencyPaymentLink || "https://square.link/u/ojz2a1Au",
-      features: ["Client approvals", "Payroll exports", "Exception alerts", "Up to 100 workers"]
+      features: ["5 clients", "15 sites", "250 workers", "Correction requests", "Client approvals", "Audit logs"]
     },
     growth: {
       id: "growth",
       name: "Growth",
       label: "Growth",
       price: 499,
-      workerLimit: null,
+      clientLimit: null,
+      workerLimit: 1000,
       siteLimit: null,
       squarePaymentLink: BILLING_CONFIG.growthPaymentLink || "https://square.link/u/Iy99LyYg",
-      features: ["Unlimited workers", "Unlimited clients and sites", "White-label branding", "Advanced reports"]
+      features: ["Unlimited clients", "Unlimited sites", "1,000 workers", "Payroll exports", "Priority support", "Advanced reports"]
     },
     enterprise: {
       id: "enterprise",
       name: "Enterprise",
       label: "Enterprise",
       price: null,
+      clientLimit: null,
       workerLimit: null,
       siteLimit: null,
       squarePaymentLink: BILLING_CONFIG.enterprisePaymentLink || "https://square.link/u/96br6x5W",
-      features: ["Multi-branch agencies", "Custom integrations", "Dedicated onboarding", "Contact sales"]
+      features: ["Custom pricing", "Multiple branches", "Custom integrations", "Onboarding support"]
     }
   };
 
   const NAV_ITEMS = [
-    { id: "dashboard", label: "Dashboard", badge: "DB", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
+    { id: "dashboard", label: "Dashboard", badge: "DB", roles: ["agencyOwner", "agencyAdmin", "clientManager"] },
     { id: "agencies", label: "Agencies", badge: "AG", roles: ["platformOwner"] },
-    { id: "workers", label: "Workers", badge: "WK", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "clients", label: "Clients", badge: "CL", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "sites", label: "Sites", badge: "ST", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "assignments", label: "Assignments", badge: "AS", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "live-punches", label: "Live Punches", badge: "LP", roles: ["platformOwner", "agencyOwner", "agencyAdmin", "clientManager"] },
-    { id: "approvals", label: "Approvals", badge: "AP", roles: ["platformOwner", "agencyOwner", "agencyAdmin", "clientManager"] },
+    { id: "subscriptions", label: "Subscriptions", badge: "SB", roles: ["platformOwner"] },
+    { id: "support", label: "Support", badge: "SP", roles: ["platformOwner"] },
+    { id: "clients", label: "Clients", badge: "CL", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "sites", label: "Sites", badge: "ST", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "workers", label: "Workers", badge: "WK", roles: ["agencyOwner", "agencyAdmin", "clientManager"] },
+    { id: "assignments", label: "Assignments", badge: "AS", roles: ["agencyOwner", "agencyAdmin"] },
+    { id: "approvals", label: "Timesheets", badge: "TS", roles: ["agencyOwner", "agencyAdmin", "clientManager"] },
+    { id: "client-corrections", label: "Corrections", badge: "CR", roles: ["clientManager"] },
     { id: "payroll", label: "Payroll", badge: "PY", roles: ["agencyOwner", "agencyAdmin"] },
-    { id: "margin", label: "Margin", badge: "MR", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "exceptions", label: "Problems to Fix", badge: "PF", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "qr-codes", label: "Site QR", badge: "QR", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "users", label: "Users", badge: "US", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "billing", label: "Billing", badge: "BL", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] },
-    { id: "settings", label: "Settings", badge: "SE", roles: ["platformOwner", "agencyOwner", "agencyAdmin"] }
+    { id: "billing", label: "Billing", badge: "BL", roles: ["agencyOwner", "agencyAdmin"] }
   ];
+
+  function getConfiguredAppBasePath() {
+    const configuredUrl = String((window.PORTALY_FIREBASE_CONFIG && window.PORTALY_FIREBASE_CONFIG.appUrl) || DEFAULT_APP_URL || "").trim();
+    if (configuredUrl) {
+      try {
+        const parsed = new URL(configuredUrl, window.location.origin);
+        const pathname = parsed.pathname || "/";
+        return pathname.endsWith("/") ? pathname : `${pathname}/`;
+      } catch (_error) {
+        // Ignore invalid URLs and fall back to inference.
+      }
+    }
+
+    if (window.location.hostname.endsWith(".github.io")) {
+      const parts = window.location.pathname.split("/").filter(Boolean);
+      return parts.length ? `/${parts[0]}/` : "/";
+    }
+
+    const currentPath = window.location.pathname || "/";
+    if (currentPath.endsWith("/")) {
+      return currentPath;
+    }
+    return currentPath.replace(/[^/]*$/, "");
+  }
+
+  function getAppBasePath() {
+    return getConfiguredAppBasePath();
+  }
+
+  function normalizePathname(pathname) {
+    return String(pathname || "")
+      .replace(/^\/+/, "")
+      .replace(/\/+$/, "")
+      .trim();
+  }
 
   const PUNCH_LABELS = {
     clockIn: "Clock In",
@@ -304,6 +340,10 @@
   });
 
   window.addEventListener("hashchange", () => {
+    void handleHashChange();
+  });
+
+  window.addEventListener("popstate", () => {
     void handleHashChange();
   });
 
@@ -769,8 +809,21 @@
     }
   }
 
-  async function applyEntryRoute() {
+  function getCurrentAppPath() {
+    const basePath = getAppBasePath();
+    const pathname = window.location.pathname || "/";
+    const relative = pathname.startsWith(basePath) ? pathname.slice(basePath.length) : pathname;
+    return normalizePathname(relative);
+  }
+
+  function getLocationSearchParams() {
     const params = new URLSearchParams(window.location.search);
+    params.delete("__route");
+    return params;
+  }
+
+  async function applyEntryRoute() {
+    const params = getLocationSearchParams();
     const mode = params.get("mode");
     const workerId = params.get("workerId");
     const siteId = params.get("siteId");
@@ -791,17 +844,17 @@
       return;
     }
 
-      state.route = normalizeRoute(parseHashRoute());
-      if (state.route === "accept-invite") {
-        await loadInviteFlowState();
-      } else if (state.route === "punch" || state.route === "clock") {
-        await loadPublicPunchState();
-      } else if (state.route === "qr-codes") {
-        await ensurePublishedSitePunchDirectories();
-      }
-      if (!window.location.hash) {
-        navigate(state.route, { replace: true });
-      }
+    state.route = normalizeRoute(parseHashRoute());
+    if (state.route === "accept-invite") {
+      await loadInviteFlowState();
+    } else if (state.route === "punch" || state.route === "clock") {
+      await loadPublicPunchState();
+    } else if (state.route === "qr-codes") {
+      await ensurePublishedSitePunchDirectories();
+    }
+    if (!window.location.hash && !getCurrentAppPath()) {
+      navigate(state.route, { replace: true });
+    }
   }
 
   async function handleDirectWorkerRequest(workerId) {
@@ -842,6 +895,51 @@
     if (!hash) {
       return getHomeRoute();
     }
+    if (hash === "landing" || hash === "pricing") {
+      return hash;
+    }
+    if (hash === "login") {
+      return "login";
+    }
+    if (hash === "signup") {
+      return "trial";
+    }
+    if (hash === "agency/dashboard" || hash === "client/dashboard") {
+      return "dashboard";
+    }
+    if (hash === "agency/clients") {
+      return "clients";
+    }
+    if (hash === "agency/sites") {
+      return "sites";
+    }
+    if (hash === "agency/workers" || hash === "client/workers") {
+      return "workers";
+    }
+    if (hash === "agency/assignments") {
+      return "assignments";
+    }
+    if (hash === "agency/timesheets" || hash === "client/timesheets") {
+      return "approvals";
+    }
+    if (hash === "client/corrections") {
+      return "client-corrections";
+    }
+    if (hash === "agency/payroll") {
+      return "payroll";
+    }
+    if (hash === "agency/billing") {
+      return "billing";
+    }
+    if (hash === "admin/agencies") {
+      return "agencies";
+    }
+    if (hash === "admin/subscriptions") {
+      return "subscriptions";
+    }
+    if (hash === "admin/support") {
+      return "support";
+    }
     if (hash === "site-qr") {
       return "qr-codes";
     }
@@ -861,7 +959,13 @@
   }
 
   function getHashFragment() {
-    return window.location.hash.replace(/^#\/?/, "").trim();
+    const legacy = window.location.hash.replace(/^#\/?/, "").trim();
+    if (legacy) {
+      return legacy;
+    }
+    const path = getCurrentAppPath();
+    const query = getLocationSearchParams().toString();
+    return path ? `${path}${query ? `?${query}` : ""}` : "";
   }
 
   function getHashPath() {
@@ -971,14 +1075,17 @@
 
   function normalizeRoute(route) {
     const candidate = route === "site-qr" ? "qr-codes" : (route || getHomeRoute());
-    if (candidate === "approval-link" || candidate === "accept-invite" || candidate === "punch" || candidate === "clock" || candidate === "landing") {
+    if (candidate === "approval-link" || candidate === "accept-invite" || candidate === "punch" || candidate === "clock" || candidate === "landing" || candidate === "pricing") {
       return candidate;
     }
     const allowed = getAllowedRoutes();
     if (allowed.has(candidate)) {
       return candidate;
     }
-    return getHomeRoute();
+    if (state.session.mode === "public" || !state.session.role) {
+      return "login";
+    }
+    return "unauthorized";
   }
 
   function getAllowedRoutes() {
@@ -995,14 +1102,67 @@
     }
 
     if (isBillingLocked()) {
-      return new Set(["billing", "settings", "billing-required"]);
+      return new Set(["billing", "settings", "billing-required", "unauthorized"]);
     }
 
-    return new Set(NAV_ITEMS.filter(item => item.roles.includes(state.session.role)).map(item => item.id));
+    return new Set([
+      ...NAV_ITEMS.filter(item => item.roles.includes(state.session.role)).map(item => item.id),
+      "qr-codes",
+      "live-punches",
+      "settings",
+      "unauthorized"
+    ]);
+  }
+
+  function resolveRoutePath(route) {
+    switch (route) {
+      case "landing":
+      case "pricing":
+        return "landing";
+      case "login":
+        return "login";
+      case "trial":
+        return "signup";
+      case "dashboard":
+        return state.session.role === "clientManager" ? "client/dashboard" : "agency/dashboard";
+      case "clients":
+        return "agency/clients";
+      case "sites":
+        return "agency/sites";
+      case "workers":
+        return state.session.role === "clientManager" ? "client/workers" : "agency/workers";
+      case "assignments":
+        return "agency/assignments";
+      case "approvals":
+        return state.session.role === "clientManager" ? "client/timesheets" : "agency/timesheets";
+      case "client-corrections":
+        return "client/corrections";
+      case "payroll":
+        return "agency/payroll";
+      case "billing":
+        return "agency/billing";
+      case "agencies":
+        return "admin/agencies";
+      case "subscriptions":
+        return "admin/subscriptions";
+      case "support":
+        return "admin/support";
+      default:
+        return route;
+    }
+  }
+
+  function buildRouteUrl(route, options = {}) {
+    const path = normalizePathname(resolveRoutePath(route));
+    const basePath = getAppBasePath();
+    const query = options.query instanceof URLSearchParams
+      ? options.query.toString()
+      : new URLSearchParams(options.query || {}).toString();
+    return `${basePath}${path}${query ? `?${query}` : ""}`;
   }
 
   function navigate(route, options = {}) {
-    const target = `#/${route}`;
+    const target = buildRouteUrl(route, options);
     if (options.replace) {
       window.history.replaceState(null, "", target);
       state.route = normalizeRoute(route);
@@ -1010,29 +1170,33 @@
       return;
     }
 
-    if (window.location.hash === target) {
+    if (window.location.pathname + window.location.search === target) {
       state.route = normalizeRoute(route);
       renderApp();
       return;
     }
 
-    window.location.hash = target;
+    window.history.pushState(null, "", target);
+    state.route = normalizeRoute(route);
+    renderApp();
   }
 
   function navigateInviteRoute(token, options = {}) {
-    const target = `#/accept-invite/${encodeURIComponent(String(token || "").trim())}`;
+    const target = `${getAppBasePath()}accept-invite/${encodeURIComponent(String(token || "").trim())}`;
     if (options.replace) {
       window.history.replaceState(null, "", target);
       state.route = normalizeRoute(parseHashRoute());
       renderApp();
       return;
     }
-    if (window.location.hash === target) {
+    if (window.location.pathname === target) {
       state.route = normalizeRoute(parseHashRoute());
       renderApp();
       return;
     }
-    window.location.hash = target;
+    window.history.pushState(null, "", target);
+    state.route = normalizeRoute(parseHashRoute());
+    renderApp();
   }
 
   function navigatePublicPunchRoute(agencyId = "", companyId = "", siteId = "", options = {}) {
@@ -1046,20 +1210,21 @@
     if (siteId) {
       params.set("siteId", siteId);
     }
-    const query = params.toString();
-    const target = query ? `#/punch?${query}` : "#/punch";
+    const target = buildRouteUrl("punch", { query: params });
     if (options.replace) {
       window.history.replaceState(null, "", target);
       state.route = normalizeRoute(parseHashRoute());
       void loadPublicPunchState().finally(() => renderApp());
       return;
     }
-    if (window.location.hash === target) {
+    if (window.location.pathname + window.location.search === target) {
       state.route = normalizeRoute(parseHashRoute());
       void loadPublicPunchState().finally(() => renderApp());
       return;
     }
-    window.location.hash = target;
+    window.history.pushState(null, "", target);
+    state.route = normalizeRoute(parseHashRoute());
+    void loadPublicPunchState().finally(() => renderApp());
   }
 
   function restoreStoredSession() {
@@ -1452,6 +1617,13 @@
     }, {});
   }
 
+  function getCloudCollectionName(collection) {
+    if (collection === "punchRequests") {
+      return "correctionRequests";
+    }
+    return collection;
+  }
+
   async function getData(collection) {
     if (state.session.mode !== "cloud") {
       return deepClone(state.demoStore[collection] || []);
@@ -1498,9 +1670,10 @@
     }
 
     if (collection === "punchRequests") {
+      const cloudCollection = getCloudCollectionName(collection);
       const baseRows = agencyId
-        ? mapSnapshot(await db.collection("punchRequests").where("agencyId", "==", agencyId).get())
-        : mapSnapshot(await db.collection("punchRequests").get());
+        ? mapSnapshot(await db.collection(cloudCollection).where("agencyId", "==", agencyId).get())
+        : mapSnapshot(await db.collection(cloudCollection).get());
 
       if (role === "platformOwner") {
         return baseRows;
@@ -1513,9 +1686,10 @@
       return baseRows;
     }
 
+    const cloudCollection = getCloudCollectionName(collection);
     const baseRows = agencyId
-      ? mapSnapshot(await db.collection(collection).where("agencyId", "==", agencyId).get())
-      : mapSnapshot(await db.collection(collection).get());
+      ? mapSnapshot(await db.collection(cloudCollection).where("agencyId", "==", agencyId).get())
+      : mapSnapshot(await db.collection(cloudCollection).get());
 
     if (role === "platformOwner") {
       return baseRows;
@@ -1604,7 +1778,7 @@
     }
 
     if (state.session.mode === "cloud") {
-      await state.firebase.db.collection(collection).doc(recordId).set(payload, { merge: false });
+      await state.firebase.db.collection(getCloudCollectionName(collection)).doc(recordId).set(payload, { merge: false });
       state.cache[collection] = [...(state.cache[collection] || []).filter(row => row.id !== recordId), payload];
     } else {
       const store = loadDemoStore();
@@ -1629,7 +1803,7 @@
 
   async function deleteData(collection, id) {
     if (state.session.mode === "cloud") {
-      await state.firebase.db.collection(collection).doc(id).delete();
+      await state.firebase.db.collection(getCloudCollectionName(collection)).doc(id).delete();
       state.cache[collection] = (state.cache[collection] || []).filter(row => row.id !== id);
       return;
     }
@@ -3021,11 +3195,11 @@
       return null;
     }
     try {
-      const directSnapshot = await state.firebase.db.collection(collectionName).doc(agencyId).get();
+      const directSnapshot = await state.firebase.db.collection(getCloudCollectionName(collectionName)).doc(agencyId).get();
       if (directSnapshot.exists) {
         return { id: directSnapshot.id, ...directSnapshot.data() };
       }
-      const snapshot = await state.firebase.db.collection(collectionName).where("agencyId", "==", agencyId).limit(1).get();
+      const snapshot = await state.firebase.db.collection(getCloudCollectionName(collectionName)).where("agencyId", "==", agencyId).limit(1).get();
       const record = snapshot.docs && snapshot.docs[0];
       return record ? { id: record.id, ...record.data() } : null;
     } catch (error) {
@@ -3052,7 +3226,7 @@
         return;
       }
       rows.forEach(row => {
-        batch.set(state.firebase.db.collection(collection).doc(row.id), row);
+        batch.set(state.firebase.db.collection(getCloudCollectionName(collection)).doc(row.id), row);
       });
     });
     await batch.commit();
@@ -3072,16 +3246,23 @@
       throw new Error("Your agency workspace is not loaded. Please log out and log back in.");
     }
 
+    const pinCode = String(values.pinCode || existing?.pinCode || "").trim();
+    if (!/^\d{4}$/.test(pinCode)) {
+      throw new Error("Every worker needs a 4-digit PIN.");
+    }
+
     const worker = {
       agencyId,
       firstName: values.firstName || "",
       lastName: values.lastName || "",
       phone: values.phone || "",
       email: values.email || "",
+      pinCode,
       payRate: Number(values.payRate || 0),
       status: values.status || "active",
       assignedClientId: values.assignedClientId || "",
       assignedSiteId: values.assignedSiteId || "",
+      allowCrossSitePunching: values.allowCrossSitePunching === true || values.allowCrossSitePunching === "true" || values.allowCrossSitePunching === "on",
       workerNoteType: normalizeWorkerNoteType(values.workerNoteType || existing?.workerNoteType || ""),
       notes: values.notes || "",
       terminationReason: values.terminationReason || "",
@@ -3627,8 +3808,9 @@
     }
 
     for (const collectionName of SAMPLE_DATA_COLLECTIONS) {
-      const snapshot = await db.collection(collectionName).where("agencyId", "==", agencyId).get();
-      await Promise.all((snapshot.docs || []).map(record => db.collection(collectionName).doc(record.id).delete()));
+      const cloudCollection = getCloudCollectionName(collectionName);
+      const snapshot = await db.collection(cloudCollection).where("agencyId", "==", agencyId).get();
+      await Promise.all((snapshot.docs || []).map(record => db.collection(cloudCollection).doc(record.id).delete()));
     }
   }
 
@@ -4108,7 +4290,7 @@
     };
 
     if (state.firebase.ready && state.firebase.db && !shouldUsePublicPunchPreviewFallback()) {
-      await state.firebase.db.collection("punchRequests").doc(requestId).set(requestRecord, { merge: false });
+      await state.firebase.db.collection(getCloudCollectionName("punchRequests")).doc(requestId).set(requestRecord, { merge: false });
     } else {
       await saveData("punchRequests", requestId, requestRecord);
     }
@@ -5778,8 +5960,7 @@
   }
 
   function buildClientManagerInviteLink(token) {
-    const baseUrl = String(window.PORTALY_FIREBASE_CONFIG?.appUrl || state.firebase.config.appUrl || DEFAULT_APP_URL || window.location.href || "").replace(/#.*$/, "");
-    return `${baseUrl}#/accept-invite/${encodeURIComponent(String(token || "").trim())}`;
+    return `${window.location.origin}${getAppBasePath()}accept-invite/${encodeURIComponent(String(token || "").trim())}`;
   }
 
   function findLocalClientInvite(token) {
@@ -6975,9 +7156,9 @@
       return "";
     }
     const route = mode === "internal"
-      ? `#/client-approval/${approval.id}`
-      : `#/approve/${approval.approvalToken || approval.id}`;
-    return `${DEFAULT_APP_URL}${route}`;
+      ? `client-approval/${approval.id}`
+      : `approve/${approval.approvalToken || approval.id}`;
+    return `${window.location.origin}${getAppBasePath()}${route}`;
   }
 
   function buildApprovalShareText(approval, link) {
@@ -7402,7 +7583,7 @@
             <button class="marketing-link" data-action="scroll-marketing-section" data-section="features" type="button">Solutions</button>
             <button class="marketing-link" data-action="scroll-marketing-section" data-section="how-it-works" type="button">How It Works</button>
             <button class="marketing-link" data-action="scroll-marketing-section" data-section="pricing" type="button">Pricing</button>
-            <button class="marketing-link" data-action="go-route" data-route="clock" type="button">Worker Clock</button>
+            <button class="marketing-link" data-action="go-route" data-route="clock" type="button">QR Punch Tool</button>
             <button class="marketing-link" data-action="go-route" data-route="login" type="button">Login</button>
           </div>
           <div class="marketing-actions">
@@ -7443,6 +7624,8 @@
         return renderTrialExpiredPage();
       case "billing-required":
         return renderPublicBillingRequired();
+      case "unauthorized":
+        return renderUnauthorizedPage();
       default:
         return renderMarketingLanding(false);
     }
@@ -7684,15 +7867,15 @@
         <section class="section landing-hero-section" id="hero">
           <div class="container hero-grid landing-hero-grid">
             <div class="hero-copy">
-              <p class="eyebrow">Staffing agency timekeeping and approval software</p>
-              <h2>Stop Payroll Disputes Before They Start</h2>
-              <p>Track temporary workers, manage assignments, approve timesheets, and prepare payroll from one platform.</p>
-              <p class="landing-trust-line">Trusted by staffing agencies managing warehouse, manufacturing, logistics, and temporary labor workforces.</p>
+              <p class="eyebrow">Portaly is the business layer. QRTimeClock2 is the worker punch tool.</p>
+              <h2>QR Time Tracking for Staffing Agencies and Warehouse Clients</h2>
+              <p>Sell staffing time tracking today with a portal built for agencies, warehouse clients, client managers, and payroll teams that need clean weekly hours.</p>
+              <p class="landing-trust-line">Run clients, sites, workers, approvals, payroll exports, billing status, and audit history from one paid SaaS portal without forcing worker logins.</p>
               <div class="hero-proof-row">
-                <span class="hero-proof-pill">Missing punch visibility</span>
-                <span class="hero-proof-pill">Digital client approvals</span>
-                <span class="hero-proof-pill">Payroll-ready exports</span>
-                <span class="hero-proof-pill">Multi-site staffing control</span>
+                <span class="hero-proof-pill">Workers clock in by QR code</span>
+                <span class="hero-proof-pill">No worker email required</span>
+                <span class="hero-proof-pill">Client managers approve hours</span>
+                <span class="hero-proof-pill">Payroll-ready CSV export</span>
               </div>
               <div class="hero-actions">
                 <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
@@ -7787,12 +7970,12 @@
               <p class="section-copy">Each part of Portaly is designed to solve one of the staffing problems that slows payroll down.</p>
             </div>
             <div class="feature-grid">
-              ${renderFeatureCard("QR Clock-In", "Workers scan and clock in instantly from a site-specific punch page built for phones and shared kiosks.")}
-              ${renderFeatureCard("Assignment Management", "Assign workers to clients and job sites so time, approvals, and payroll stay tied to the right placement.")}
-              ${renderFeatureCard("Client Approval Workflow", "Client and site managers approve hours digitally, reject mistakes, and keep payroll moving without email chains.")}
-              ${renderFeatureCard("Payroll Export", "Export approved hours instantly once timecards are signed off and ready for your payroll process.")}
-              ${renderFeatureCard("Multi-Site Management", "Manage hundreds of locations, multiple clients, and complex staffing books from one dashboard.")}
-              ${renderFeatureCard("Real-Time Dashboard", "See who is clocked in, what approvals are pending, and where punch issues are building before payroll day.")}
+              ${renderFeatureCard("Workers clock in by QR code", "Each site gets a printable QR code that opens the worker punch tool fast on phones and shared warehouse devices.")}
+              ${renderFeatureCard("No worker email required", "Create workers with a 4-digit PIN, assign them to a site, and let them punch time without a worker login or inbox.")}
+              ${renderFeatureCard("Client managers approve hours", "Client managers only see their assigned client and site data so approval stays focused and payroll handoff stays clean.")}
+              ${renderFeatureCard("Agencies export payroll", "Export weekly CSV payroll files by week, client, and site with approved-only filters and missing punch warning columns.")}
+              ${renderFeatureCard("Audit logs protect against disputes", "Every approval, correction request, override, and punch edit is logged so agencies can defend payroll decisions later.")}
+              ${renderFeatureCard("Built for warehouses, temps, and multi-site staffing", "Manage staffing books across warehouse clients, temp placements, multiple sites, and branch growth from one admin layer.")}
             </div>
           </div>
         </section>
@@ -9112,7 +9295,7 @@
           <div class="auth-card" style="max-width: 760px; margin: 0 auto;">
             <p class="eyebrow">Trial Expired</p>
             <h3>Your free trial has ended</h3>
-            <p>You can still log in to review Billing and Settings, but worker management, approvals, payroll, margin, and punch operations stay locked until a paid subscription is active.</p>
+            <p>You can still log in to review billing and keep your data safe, but worker management, approvals, payroll, and punch operations stay locked until a paid subscription is active.</p>
             <div class="page-actions" style="margin-top: 20px;">
               <button class="button button-primary" data-action="go-route" data-route="login" type="button">Login</button>
               <button class="button button-secondary" data-action="go-route" data-route="pricing" type="button">View Pricing</button>
@@ -9129,7 +9312,7 @@
         <div class="container marketing-footer-row">
           <div>
             <strong>${escapeHtml(getBrandName())}</strong>
-            <p class="muted-text">Attendance tracking, client approvals, assignment visibility, and payroll-ready exports for staffing agencies.</p>
+            <p class="muted-text">QR time tracking, client approvals, payroll exports, and billing-ready staffing operations for agencies and warehouse clients.</p>
             <div class="marketing-footer-links">
               <button class="marketing-link" data-action="privacy-placeholder" type="button">Privacy Policy</button>
               <button class="marketing-link" data-action="terms-placeholder" type="button">Terms of Service</button>
@@ -9230,13 +9413,17 @@
       return renderLockedAgencyView();
     }
 
-      switch (state.route) {
-        case "dashboard":
-          return renderDashboardPage();
-        case "agencies":
-          return renderAgenciesPage();
-        case "workers":
-          return renderWorkersPage();
+    switch (state.route) {
+      case "dashboard":
+        return renderDashboardPage();
+      case "agencies":
+        return renderAgenciesPage();
+      case "subscriptions":
+        return renderAdminSubscriptionsPage();
+      case "support":
+        return renderAdminSupportPage();
+      case "workers":
+        return renderWorkersPage();
       case "clients":
         return renderClientsPage();
       case "sites":
@@ -9247,6 +9434,8 @@
         return renderLivePunchesPage();
       case "approvals":
         return renderApprovalsPage();
+      case "client-corrections":
+        return renderClientCorrectionsPage();
       case "client-approval":
         return renderClientApprovalPage();
       case "payroll":
@@ -9265,6 +9454,8 @@
         return renderSettingsPage();
       case "billing-required":
         return renderLockedAgencyView();
+      case "unauthorized":
+        return renderUnauthorizedPage();
       default:
         return renderDashboardPage();
     }
@@ -9299,15 +9490,102 @@
         return renderWorkerHelpPage();
       case "billing-required":
         return renderWorkerHelpPage();
+      case "unauthorized":
+        return renderUnauthorizedPage();
       case "worker-punch":
       default:
         return renderWorkerPunchPage();
     }
   }
 
+  function renderClientManagerDashboard() {
+    const scoped = getScopedData();
+    const liveRows = buildLivePunchRows(scoped);
+    const approvedHoursThisWeek = sumNumbers(
+      (scoped.timesheets || [])
+        .filter(timesheet => timesheet.status === "approved")
+        .map(timesheet => Number(timesheet.approvedHours || 0))
+    );
+    const pendingCorrections = (scoped.punchRequests || []).filter(request => request.status === "pending").length;
+    const pendingApprovals = (scoped.approvals || []).filter(approval => approval.status === "pending").length;
+    const currentlyClockedIn = liveRows.filter(row => row.baseStatusKey === "clocked-in").length;
+    const missingPunches = liveRows.filter(row => row.exception === "Missing clock out").length;
+    const attentionItems = [
+      ...liveRows
+        .filter(row => row.exception)
+        .slice(0, 4)
+        .map(row => ({
+          title: row.workerName,
+          detail: `${row.siteName} · ${row.exception}`,
+          label: "Missing punch",
+          tone: "status-warning"
+        })),
+      ...(scoped.punchRequests || [])
+        .filter(request => request.status === "pending")
+        .slice(0, 4)
+        .map(request => ({
+          title: request.workerName || "Worker correction request",
+          detail: `${request.siteName || getSiteName(request.siteId)} · ${request.reason || "Awaiting review"}`,
+          label: "Correction",
+          tone: "status-warning"
+        }))
+    ].slice(0, 6);
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Currently Clocked In", currentlyClockedIn, "Workers active on your assigned sites right now", "CI")}
+          ${renderMetricCard("Missing Punches", missingPunches, "Shifts missing a punch or clock out", "MP")}
+          ${renderMetricCard("Pending Corrections", pendingCorrections, "Worker correction requests waiting for review", "CR")}
+          ${renderMetricCard("Timesheets Waiting Approval", pendingApprovals, "Weekly timecards still waiting on client signoff", "TS")}
+          ${renderMetricCard("Approved Hours This Week", formatHours(approvedHoursThisWeek), "Hours already approved for this week", "HR")}
+        </div>
+
+        <div class="split-grid">
+          <div class="surface-card">
+            <div class="card-top">
+              <div>
+                <p class="eyebrow">Client Dashboard</p>
+                <h2 class="page-heading">Only the client and site data assigned to you</h2>
+              </div>
+              <button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Timesheets</button>
+            </div>
+            ${attentionItems.length ? `
+              <ul class="attention-list" style="margin-top: 18px;">
+                ${attentionItems.map(item => `
+                  <li class="attention-item">
+                    <div>
+                      <strong>${escapeHtml(item.title)}</strong>
+                      <p class="inline-note">${escapeHtml(item.detail)}</p>
+                    </div>
+                    <span class="status-badge ${item.tone}">${escapeHtml(item.label)}</span>
+                  </li>
+                `).join("")}
+              </ul>
+            ` : renderEmptyState("Nothing is waiting on you right now", "Clock activity and client approvals for your assigned sites look clear.")}
+          </div>
+
+          <div class="summary-card">
+            <p class="eyebrow">Quick Actions</p>
+            <h3>Keep client approvals moving</h3>
+            <div class="page-actions" style="margin-top: 16px;">
+              <button class="button button-primary" data-action="go-route" data-route="approvals" type="button">Approve Timesheets</button>
+              <button class="button button-secondary" data-action="go-route" data-route="client-corrections" type="button">Review Corrections</button>
+              <button class="button button-ghost" data-action="go-route" data-route="workers" type="button">View Assigned Workers</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
   function renderDashboardPage() {
     if (state.session.role === "platformOwner") {
       return renderPlatformDashboard();
+    }
+
+    if (state.session.role === "clientManager") {
+      return renderClientManagerDashboard();
     }
 
     const scoped = getScopedData();
@@ -9320,16 +9598,13 @@
     return `
       <section class="stack-lg">
         <div class="metrics-grid">
-          ${renderMetricCard("Active Workers", metrics.activeWorkers, "Workers with active records", "AW")}
-          ${renderMetricCard("Workers Clocked In Now", metrics.clockedInNow, "Workers currently active on shift", "CI")}
-          ${renderMetricCard("Workers On Lunch", metrics.onLunch, "Workers currently on lunch", "LU")}
-          ${renderMetricCard("Missing Clock Outs", metrics.missingClockOuts, "Workers with no clock out yet", "MC")}
-          ${renderMetricCard("Punch Requests", metrics.pendingPunchRequests, "Workers asking for punch corrections", "PR")}
-          ${renderMetricCard("Pending Client Approvals", metrics.pendingApprovals, "Timesheets waiting on approval", "AP")}
-          ${renderMetricCard("Payroll Hours This Week", formatHours(metrics.payrollHours), "Approved and submitted time this week", "PY")}
-          ${renderMetricCard("Estimated Gross Margin", formatCurrency(metrics.grossProfit), `${formatPercent(metrics.marginPercent)} average margin`, "GM")}
-          ${renderMetricCard("Active Clients", metrics.activeClients, "Clients with active records", "CL")}
-          ${renderMetricCard("Active Sites", metrics.activeSites, "Sites currently in service", "SI")}
+          ${renderMetricCard("Active Workers Today", metrics.clockedInNow, "Workers currently clocked in across client sites", "AW")}
+          ${renderMetricCard("Total Hours This Week", formatHours(metrics.payrollHours), "Approved and submitted hours for payroll prep", "HR")}
+          ${renderMetricCard("Pending Corrections", metrics.pendingPunchRequests, "Worker correction requests waiting for review", "CR")}
+          ${renderMetricCard("Missing Punches", metrics.missingClockOuts, "Timecards that still need cleanup", "MP")}
+          ${renderMetricCard("Clients", metrics.activeClients, "Active client accounts in this agency", "CL")}
+          ${renderMetricCard("Sites", metrics.activeSites, "Active warehouse and site locations", "SI")}
+          ${renderMetricCard("Payroll Status", metrics.pendingApprovals ? "Waiting Approval" : "Ready To Export", metrics.pendingApprovals ? `${metrics.pendingApprovals} timesheet${metrics.pendingApprovals === 1 ? "" : "s"} still waiting on approval` : "Approved hours are ready for export", "PY")}
           ${renderMetricCard("Subscription Status", formatStatusLabel(metrics.subscriptionStatus), `${escapeHtml(plan.label)} plan`, "SS")}
         </div>
 
@@ -9654,8 +9929,66 @@
     `;
   }
 
+  function renderClientWorkersPage(scoped) {
+    const workers = (scoped.workers || []).slice().sort((left, right) => fullName(left).localeCompare(fullName(right)));
+    const weekHoursByWorker = new Map();
+    (scoped.timesheets || []).forEach(timesheet => {
+      weekHoursByWorker.set(
+        timesheet.workerId,
+        (weekHoursByWorker.get(timesheet.workerId) || 0) + Number(timesheet.approvedHours || 0)
+      );
+    });
+
+    return `
+      <section class="stack-lg">
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Client Workers</p>
+              <h2 class="page-heading">Assigned workers by client and site</h2>
+            </div>
+          </div>
+          ${workers.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Status</th>
+                    <th>Client</th>
+                    <th>Site</th>
+                    <th>Last Punch</th>
+                    <th>Approved Hours This Week</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${workers.map(worker => {
+                    const lastPunch = getWorkerLatestPunch(worker.id, scoped.punches);
+                    return `
+                      <tr>
+                        <td><strong>${escapeHtml(fullName(worker))}</strong></td>
+                        <td>${renderInlineStatus(worker.status || "active")}</td>
+                        <td>${escapeHtml(getClientName(worker.assignedClientId))}</td>
+                        <td>${escapeHtml(getSiteName(worker.assignedSiteId))}</td>
+                        <td>${escapeHtml(lastPunch ? formatDateTime(lastPunch.timestamp) : "No punch recorded")}</td>
+                        <td>${escapeHtml(formatHours(weekHoursByWorker.get(worker.id) || 0))}</td>
+                      </tr>
+                    `;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No assigned workers yet", "Workers assigned to your client and site scope will appear here once the agency places them.")}
+        </div>
+      </section>
+    `;
+  }
+
   function renderWorkersPage() {
     const scoped = getScopedData();
+    if (state.session.role === "clientManager") {
+      return renderClientWorkersPage(scoped);
+    }
     const workers = scoped.workers.slice().sort((left, right) => fullName(left).localeCompare(fullName(right)));
     const timesheets = scoped.timesheets;
 
@@ -10179,6 +10512,111 @@
     `;
   }
 
+  function renderClientCorrectionsPage() {
+    const scoped = getScopedData();
+    const allRequests = (scoped.punchRequests || []).slice();
+    const pendingRequests = allRequests
+      .filter(request => request.status === "pending")
+      .slice()
+      .sort((left, right) => compareDates(right.createdAt || right.requestedTimestamp, left.createdAt || left.requestedTimestamp));
+    const correctedTimesheets = (scoped.timesheets || [])
+      .filter(timesheet => timesheet.clientEdited || timesheet.clientEditReason)
+      .slice()
+      .sort((left, right) => compareDates(right.clientEditedAt || right.updatedAt || right.createdAt, left.clientEditedAt || left.updatedAt || left.createdAt));
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Pending Corrections", pendingRequests.length, "Worker correction requests waiting for a decision", "CR")}
+          ${renderMetricCard("Corrected Timesheets", correctedTimesheets.length, "Timesheets updated through the correction workflow", "TS")}
+          ${renderMetricCard("Approved Corrections", allRequests.filter(request => request.status === "approved").length, "Correction requests already approved", "OK")}
+          ${renderMetricCard("Denied Corrections", allRequests.filter(request => request.status === "rejected").length, "Correction requests denied or sent back", "NO")}
+        </div>
+
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Correction Requests</p>
+              <h2 class="page-heading">Review worker correction requests</h2>
+            </div>
+          </div>
+          ${pendingRequests.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Client</th>
+                    <th>Site</th>
+                    <th>Requested Punch</th>
+                    <th>Requested Time</th>
+                    <th>Reason</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${pendingRequests.map(request => `
+                    <tr>
+                      <td>${escapeHtml(request.workerName || "Worker")}</td>
+                      <td>${escapeHtml(request.companyName || request.clientName || getClientName(request.clientId || request.companyId))}</td>
+                      <td>${escapeHtml(request.siteName || getSiteName(request.siteId))}</td>
+                      <td>${escapeHtml(PUNCH_LABELS[request.requestedAction] || formatStatusLabel(request.requestedAction || ""))}</td>
+                      <td>${escapeHtml(formatDateTime(request.requestedTimestamp || request.createdAt || ""))}</td>
+                      <td>${escapeHtml(request.reason || "-")}</td>
+                      <td>
+                        <div class="table-actions">
+                          ${canReviewPunchRequests(request) ? `<button class="button button-primary" data-action="approve-punch-request" data-request-id="${escapeHtml(request.id)}" type="button">Approve</button>` : ""}
+                          ${canReviewPunchRequests(request) ? `<button class="button button-danger" data-action="reject-punch-request" data-request-id="${escapeHtml(request.id)}" type="button">Deny</button>` : ""}
+                        </div>
+                      </td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No pending correction requests", "Worker-submitted correction requests from QRTimeClock2 will appear here for review.")}
+        </div>
+
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Correction History</p>
+              <h3>Timesheets changed through the approval flow</h3>
+            </div>
+          </div>
+          ${correctedTimesheets.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Worker</th>
+                    <th>Client</th>
+                    <th>Site</th>
+                    <th>Hours</th>
+                    <th>Correction Reason</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${correctedTimesheets.map(timesheet => `
+                    <tr>
+                      <td>${escapeHtml(timesheet.workerName || getWorkerName(timesheet.workerId))}</td>
+                      <td>${escapeHtml(timesheet.clientName || getClientName(timesheet.clientId))}</td>
+                      <td>${escapeHtml(timesheet.siteName || getSiteName(timesheet.siteId))}</td>
+                      <td>${escapeHtml(formatHours(timesheet.approvedHours || 0))}</td>
+                      <td>${escapeHtml(timesheet.clientEditReason || timesheet.adminNotes || "-")}</td>
+                      <td>${escapeHtml(formatDateTime(timesheet.clientEditedAt || timesheet.updatedAt || timesheet.createdAt || ""))}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No correction history yet", "Client and agency correction changes will show here once timecards are edited.")}
+        </div>
+      </section>
+    `;
+  }
+
   function renderApprovalsPage() {
     const scoped = getScopedData();
     const approvals = scoped.approvals;
@@ -10197,8 +10635,8 @@
         <div class="table-shell">
           <div class="table-top">
             <div>
-              <p class="eyebrow">Approvals</p>
-              <h2 class="page-heading">${state.session.role === "clientManager" ? "Approve hours for your site" : "Client approval queue"}</h2>
+              <p class="eyebrow">Timesheets</p>
+              <h2 class="page-heading">${state.session.role === "clientManager" ? "Timesheets waiting for your approval" : "Weekly timesheets and client approvals"}</h2>
             </div>
           </div>
           ${pending.length ? `
@@ -10512,7 +10950,7 @@
               <h3>One QR per company and location</h3>
             </div>
           </div>
-          <p class="helper-copy">Each QR code opens a public punch page where workers can select or type their name, then clock in, start lunch, end lunch, or clock out from the same mobile-first screen.</p>
+          <p class="helper-copy">Each QR code opens the worker punch tool with the agency, client, and site preloaded so temps can clock in fast without an email account.</p>
           ${siteCards.length ? `
             <div class="qr-card-grid" style="margin-top: 18px;">
               ${siteCards.map(site => {
@@ -10660,11 +11098,14 @@
     const agency = getCurrentAgency();
     const subscription = getCurrentSubscription();
     const plan = getPlanDefinition(agency?.planId || state.selectedPlan || "agency");
+    const settings = getCurrentSettings();
     const usage = getUsageStats(getScopedData(), agency?.id);
     const nextBillingDate = subscription?.currentPeriodEnd || subscription?.trialEnd || agency?.trialEnd || addDays(new Date(), 14).toISOString();
     const status = subscription?.status || agency?.subscriptionStatus || "trialing";
     const canManage = canManageBilling();
-    const subscriptionConnected = !!subscription?.squareSubscriptionId;
+    const subscriptionConnected = !!subscription?.squareSubscriptionId || !!subscription?.stripeSubscriptionId;
+    const billingContact = settings?.billingContact || settings?.supportEmail || agency?.billingContact || DEFAULT_SUPPORT_EMAIL;
+    const hasLiveCheckoutLink = !!plan.squarePaymentLink;
     const planOptions = Object.values(PLAN_DEFINITIONS).map(item => renderPricingCard(item, item.id === (agency?.planId || state.selectedPlan), "billing")).join("");
 
     return `
@@ -10672,7 +11113,7 @@
         <div class="metrics-grid">
           ${renderMetricCard("Current Plan", plan.label, "Monthly plan tier", "PL")}
           ${renderMetricCard("Trial Days Remaining", Math.max(getTrialDaysRemaining(), 0), "Days left before billing starts", "TD")}
-          ${renderMetricCard("Subscription Status", formatStatusLabel(status), "Square billing and Portaly subscription status", "SS")}
+          ${renderMetricCard("Subscription Status", formatStatusLabel(status), "Billing and access status for this agency", "SS")}
           ${renderMetricCard("Worker / Site Usage", `${usage.activeWorkers}${plan.workerLimit ? ` / ${plan.workerLimit}` : ""} workers`, `${usage.activeSites}${plan.siteLimit ? ` / ${plan.siteLimit}` : ""} sites`, "US")}
         </div>
 
@@ -10686,26 +11127,27 @@
         ` : ""}
 
         <div class="summary-card">
-          <p class="eyebrow">Billing</p>
+          <p class="eyebrow">Agency Billing</p>
           <h3>${escapeHtml(plan.label)} plan</h3>
           <div class="detail-grid" style="margin-top: 18px;">
             ${renderDetailBox("Current plan", plan.label)}
             ${renderDetailBox("Subscription status", formatStatusLabel(status))}
             ${renderDetailBox("Trial days remaining", String(Math.max(getTrialDaysRemaining(), 0)))}
             ${renderDetailBox("Next billing date", formatDate(nextBillingDate))}
-            ${renderDetailBox("Square customer ID", subscription?.squareCustomerId || agency?.squareCustomerId || "Not connected yet")}
-            ${renderDetailBox("Square subscription ID", subscription?.squareSubscriptionId || agency?.squareSubscriptionId || "Not connected yet")}
+            ${renderDetailBox("Billing contact", billingContact)}
+            ${renderDetailBox("Provider status", subscriptionConnected ? "Connected" : "Square/Stripe-ready placeholder")}
           </div>
           <div class="stack-md" style="margin-top: 18px;">
+            ${renderUsageRow("Active clients", usage.activeClients || getScopedData().clients.filter(client => client.status !== "inactive").length, plan.clientLimit)}
             ${renderUsageRow("Active workers", usage.activeWorkers, plan.workerLimit)}
             ${renderUsageRow("Active sites", usage.activeSites, plan.siteLimit)}
           </div>
-          <p class="helper-copy" style="margin-top: 18px;">Payments can start through Square checkout today, and larger agencies can use guided Stripe or invoiced subscription setup during onboarding.</p>
+          <p class="helper-copy" style="margin-top: 18px;">Use a live checkout link when one is configured. If not, Portaly keeps upgrade controls honest and falls back to Contact Sales or Request Upgrade instead of pretending payments already work.</p>
           ${!subscriptionConnected ? `
             <div class="notice-card warning" style="margin-top: 18px;">
               <div>
-                <strong>Subscription not connected yet</strong>
-                <p>If you already paid, click Refresh Subscription Status or contact support with your Square receipt email.</p>
+                <strong>Backend billing automation is not connected yet</strong>
+                <p>Pause, resume, cancel, payment history, and payment-method actions should be treated as placeholders until Square or Stripe backend wiring is deployed.</p>
               </div>
             </div>
           ` : ""}
@@ -10713,22 +11155,17 @@
             <div class="notice-card" style="margin-top: 18px;">
               <div>
                 <strong>Billing changes are limited</strong>
-                <p>Only the agency owner or platform owner can change plan, pause, resume, or cancel billing.</p>
+                <p>Only the agency owner or platform owner can change plan or billing status for this agency.</p>
               </div>
             </div>
           ` : ""}
           <div class="page-actions billing-action-grid" style="margin-top: 18px;">
-            <button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button" ${!canManage ? "disabled" : ""}>Start Paid Subscription</button>
-            <button class="button button-secondary" data-action="manage-billing" type="button" ${!canManage ? "disabled" : ""}>Manage Billing</button>
-            <button class="button button-ghost" data-action="upgrade-plan" data-plan="growth" type="button" ${!canManage ? "disabled" : ""}>Upgrade Plan</button>
-            <button class="button button-ghost" data-action="downgrade-plan" data-plan="starter" type="button" ${!canManage ? "disabled" : ""}>Downgrade Plan</button>
-            <button class="button button-ghost" data-action="pause-subscription" type="button" ${!canManage || ["paused", "canceled"].includes(status) ? "disabled" : ""}>Pause Subscription</button>
-            <button class="button button-ghost" data-action="resume-subscription" type="button" ${!canManage || status !== "paused" ? "disabled" : ""}>Resume Subscription</button>
-            <button class="button button-danger" data-action="cancel-subscription" type="button" ${!canManage || ["canceled", "cancel_at_period_end"].includes(status) ? "disabled" : ""}>Cancel Subscription</button>
-            <button class="button button-secondary" data-action="reactivate-subscription" type="button" ${!canManage || !["canceled", "cancel_at_period_end", "paused"].includes(status) ? "disabled" : ""}>Reactivate Subscription</button>
-            <button class="button button-ghost" data-action="refresh-subscription" type="button">Refresh Subscription Status</button>
-            <button class="button button-ghost" data-action="view-payment-history" type="button">View Payment History</button>
-            <button class="button button-ghost" data-action="update-payment-method" type="button">Update Payment Method</button>
+            ${hasLiveCheckoutLink ? `<button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button" ${!canManage ? "disabled" : ""}>Start Paid Subscription</button>` : `<button class="button button-primary" data-action="book-live-demo" type="button" ${!canManage ? "disabled" : ""}>Contact Sales</button>`}
+            ${hasLiveCheckoutLink ? `<button class="button button-secondary" data-action="upgrade-plan" data-plan="growth" type="button" ${!canManage ? "disabled" : ""}>Request Upgrade</button>` : `<button class="button button-secondary" data-action="book-live-demo" type="button" ${!canManage ? "disabled" : ""}>Request Upgrade</button>`}
+            <button class="button button-ghost" data-action="manage-billing" type="button" ${!canManage ? "disabled" : ""}>Billing Support</button>
+            <button class="button button-ghost" data-action="refresh-subscription" type="button">Refresh Status</button>
+            ${subscriptionConnected ? `<button class="button button-danger" data-action="cancel-subscription" type="button" ${!canManage || ["canceled", "cancel_at_period_end"].includes(status) ? "disabled" : ""}>Cancel Subscription</button>` : ""}
+            ${subscriptionConnected ? `<button class="button button-ghost" data-action="update-payment-method" type="button">Update Payment Method</button>` : ""}
           </div>
         </div>
 
@@ -10862,6 +11299,23 @@
     `;
   }
 
+  function renderUnauthorizedPage() {
+    return `
+      <section class="stack-lg">
+        <div class="notice-card warning">
+          <div>
+            <strong>You do not have access to that page.</strong>
+            <p>Portaly keeps agency, client, and platform data separated by role. Use the navigation for the workspace assigned to you.</p>
+          </div>
+        </div>
+        <div class="page-actions">
+          <button class="button button-primary" data-action="go-route" data-route="${escapeHtml(getHomeRoute())}" type="button">Go To My Dashboard</button>
+          ${state.session.role === "agencyOwner" || state.session.role === "agencyAdmin" ? `<button class="button button-secondary" data-action="go-route" data-route="billing" type="button">Open Billing</button>` : ""}
+        </div>
+      </section>
+    `;
+  }
+
   function renderLockedAgencyView() {
     return `
       <section class="stack-lg">
@@ -10874,7 +11328,7 @@
         ${state.session.role === "agencyOwner" || state.session.role === "platformOwner" ? `
           <div class="page-actions">
             <button class="button button-primary" data-action="go-route" data-route="billing" type="button">Open Billing</button>
-            <button class="button button-secondary" data-action="go-route" data-route="settings" type="button">Open Settings</button>
+            <button class="button button-secondary" data-action="open-support" type="button">Contact Support</button>
           </div>
         ` : `
           <div class="support-card">
@@ -11156,12 +11610,25 @@
             </div>
             <div class="form-row two">
               <div class="field-group">
-                <label for="worker-phone">Phone</label>
+                <label for="worker-phone">Phone (optional)</label>
                 <input id="worker-phone" name="phone" type="text" value="${escapeAttribute(worker?.phone || "")}" />
               </div>
               <div class="field-group">
                 <label for="worker-email">Email (optional)</label>
                 <input id="worker-email" name="email" type="email" value="${escapeAttribute(worker?.email || "")}" placeholder="Optional contact email" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-pin-code">4-digit PIN</label>
+                <input id="worker-pin-code" name="pinCode" type="text" inputmode="numeric" maxlength="4" value="${escapeAttribute(worker?.pinCode || "")}" placeholder="1234" />
+              </div>
+              <div class="field-group">
+                <label for="worker-status">Status</label>
+                <select id="worker-status" name="status">
+                  <option value="active" ${worker?.status !== "inactive" ? "selected" : ""}>Active</option>
+                  <option value="inactive" ${worker?.status === "inactive" ? "selected" : ""}>Inactive</option>
+                </select>
               </div>
             </div>
             <div class="form-row two">
@@ -11184,10 +11651,10 @@
                 <input id="worker-pay-rate" name="payRate" type="number" step="0.01" value="${escapeAttribute(String(worker?.payRate || 0))}" />
               </div>
               <div class="field-group">
-                <label for="worker-status">Status</label>
-                <select id="worker-status" name="status">
-                  <option value="active" ${worker?.status !== "inactive" ? "selected" : ""}>Active</option>
-                  <option value="inactive" ${worker?.status === "inactive" ? "selected" : ""}>Inactive</option>
+                <label for="worker-site-lock">Punch restriction</label>
+                <select id="worker-site-lock" name="allowCrossSitePunching">
+                  <option value="false" ${worker?.allowCrossSitePunching ? "" : "selected"}>Assigned site only</option>
+                  <option value="true" ${worker?.allowCrossSitePunching ? "selected" : ""}>Allow cross-site punching</option>
                 </select>
               </div>
             </div>
@@ -11243,6 +11710,7 @@
             ${renderDetailBox("Client", getClientName(worker.assignedClientId))}
             ${renderDetailBox("Site", getSiteName(worker.assignedSiteId))}
             ${renderDetailBox("Pay rate", formatCurrency(worker.payRate))}
+            ${renderDetailBox("4-digit PIN", worker.pinCode || "-")}
             ${renderDetailBox("Phone", worker.phone || "-")}
             ${renderDetailBox("Email", worker.email || "-")}
           </div>
@@ -12243,9 +12711,10 @@
   }
 
   function getUsageStats(scoped, agencyId) {
+    const activeClients = scoped.clients.filter(client => client.status !== "inactive" && (!agencyId || client.agencyId === agencyId)).length;
     const activeWorkers = scoped.workers.filter(worker => worker.status !== "inactive" && (!agencyId || worker.agencyId === agencyId)).length;
     const activeSites = scoped.sites.filter(site => site.status !== "inactive" && (!agencyId || site.agencyId === agencyId)).length;
-    return { activeWorkers, activeSites };
+    return { activeClients, activeWorkers, activeSites };
   }
 
   function getPayPeriods(timesheets) {
@@ -12290,23 +12759,26 @@
 
   function getPageTitle() {
     const titles = {
-      landing: "Punch Clock",
-      punch: "Punch Clock",
+      landing: "Staffing Agency Time Tracking",
+      punch: "QR Punch Station",
       dashboard: "Dashboard",
       workers: "Workers",
       clients: "Clients",
       sites: "Sites",
       assignments: "Assignments",
       "live-punches": "Live Punches",
-      approvals: "Approvals",
+      approvals: "Timesheets",
+      "client-corrections": "Corrections",
       "client-approval": "Client Approval",
       payroll: "Payroll",
-      margin: "Margin",
-      exceptions: "Problems to Fix",
+      agencies: "Agencies",
+      subscriptions: "Subscriptions",
+      support: "Support",
       "qr-codes": "Site QR",
       users: "Users",
       billing: "Billing",
-      settings: "Settings"
+      settings: "Settings",
+      unauthorized: "Access Restricted"
     };
     return titles[state.route] || "Portaly";
   }
@@ -12419,13 +12891,15 @@
 
   function renderPricingCard(plan, highlight, context = "app") {
     const label = plan.price === null ? "Custom" : `$${plan.price}/month`;
-    const marketingActionLabel = plan.id === "enterprise" ? "Request Enterprise" : "Start with Square";
+    const marketingActionLabel = plan.id === "enterprise" ? "Contact Sales" : (plan.squarePaymentLink ? "Start Paid Plan" : "Request Upgrade");
     const action = context === "marketing"
       ? (plan.id === "enterprise"
         ? `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="book-live-demo" type="button">${escapeHtml(marketingActionLabel)}</button>`
-        : `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">${escapeHtml(marketingActionLabel)}</button>`)
+        : (plan.squarePaymentLink
+          ? `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">${escapeHtml(marketingActionLabel)}</button>`
+          : `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="book-live-demo" type="button">${escapeHtml(marketingActionLabel)}</button>`))
       : (plan.id === "enterprise"
-        ? `<button class="button button-ghost" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button">Contact Sales</button>`
+        ? `<button class="button button-ghost" data-action="book-live-demo" type="button">Contact Sales</button>`
         : `<button class="button ${highlight ? "button-primary" : "button-secondary"}" data-action="select-plan" data-plan="${escapeHtml(plan.id)}" type="button">${highlight ? "Selected Plan" : "Choose Plan"}</button>`);
 
     return `
@@ -12461,6 +12935,206 @@
         <span class="landing-kpi-label">${escapeHtml(label)}</span>
         <p>${escapeHtml(copy)}</p>
       </div>
+    `;
+  }
+
+  function renderAgenciesPage() {
+    const scoped = getScopedData();
+    const agencies = (scoped.agencies || []).slice().sort((left, right) => left.name.localeCompare(right.name));
+    const users = scoped.users || [];
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Agencies", agencies.length, "Staffing agencies currently in the portal", "AG")}
+          ${renderMetricCard("Trialing", agencies.filter(agency => agency.subscriptionStatus === "trialing").length, "Agencies still inside their 14-day trial", "TR")}
+          ${renderMetricCard("Active", agencies.filter(agency => agency.subscriptionStatus === "active").length, "Agencies on a paid plan", "AC")}
+          ${renderMetricCard("Past Due", agencies.filter(agency => ["past_due", "unpaid", "expired_trial"].includes(agency.subscriptionStatus)).length, "Accounts that need billing follow-up", "PD")}
+        </div>
+
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Admin</p>
+              <h2 class="page-heading">Agency accounts</h2>
+            </div>
+          </div>
+          ${agencies.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Agency</th>
+                    <th>Owner</th>
+                    <th>Plan</th>
+                    <th>Status</th>
+                    <th>Trial End</th>
+                    <th>Workers</th>
+                    <th>Sites</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${agencies.map(agency => {
+                    const owner = users.find(user => user.id === agency.ownerUserId);
+                    const workers = (scoped.workers || []).filter(worker => worker.agencyId === agency.id && worker.status !== "inactive").length;
+                    const sites = (scoped.sites || []).filter(site => site.agencyId === agency.id && site.status !== "inactive").length;
+                    return `
+                      <tr>
+                        <td><strong>${escapeHtml(agency.name || agency.id)}</strong></td>
+                        <td>${escapeHtml(owner ? (fullName(owner) || owner.email || owner.id) : "Unknown")}</td>
+                        <td>${escapeHtml(getPlanDefinition(agency.planId).label)}</td>
+                        <td>${renderInlineStatus(agency.subscriptionStatus || "trialing")}</td>
+                        <td>${escapeHtml(formatDate(agency.trialEnd))}</td>
+                        <td>${escapeHtml(String(workers))}</td>
+                        <td>${escapeHtml(String(sites))}</td>
+                      </tr>
+                    `;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No agencies yet", "New agency trials and paid workspaces will appear here for the platform owner.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderAdminSubscriptionsPage() {
+    const scoped = getScopedData();
+    const agencies = scoped.agencies || [];
+    const subscriptions = scoped.subscriptions || [];
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Subscriptions", subscriptions.length, "Subscription records in Firestore", "SB")}
+          ${renderMetricCard("Trialing", subscriptions.filter(item => item.status === "trialing").length, "Agencies still evaluating the portal", "TR")}
+          ${renderMetricCard("Active", subscriptions.filter(item => item.status === "active").length, "Paid agencies currently unlocked", "AC")}
+          ${renderMetricCard("MRR", formatCurrency(agencies.reduce((total, agency) => total + (getPlanDefinition(agency.planId).price || 0), 0)), "Plan value across active agencies", "MR")}
+        </div>
+
+        <div class="table-shell">
+          <div class="table-top">
+            <div>
+              <p class="eyebrow">Admin</p>
+              <h2 class="page-heading">Subscriptions and billing status</h2>
+            </div>
+          </div>
+          ${subscriptions.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Agency</th>
+                    <th>Plan</th>
+                    <th>Status</th>
+                    <th>Trial Ends</th>
+                    <th>Billing Contact</th>
+                    <th>Provider</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${subscriptions.map(subscription => {
+                    const agency = agencies.find(item => item.id === subscription.agencyId);
+                    const settings = (scoped.settings || []).find(item => item.agencyId === subscription.agencyId);
+                    return `
+                      <tr>
+                        <td>${escapeHtml(agency?.name || subscription.agencyId || "-")}</td>
+                        <td>${escapeHtml(getPlanDefinition(subscription.planId || agency?.planId).label)}</td>
+                        <td>${renderInlineStatus(subscription.status || "trialing")}</td>
+                        <td>${escapeHtml(formatDate(subscription.trialEnd || agency?.trialEnd))}</td>
+                        <td>${escapeHtml(settings?.billingContact || settings?.supportEmail || agency?.billingContact || "-")}</td>
+                        <td>${escapeHtml((agency?.billingProvider || BILLING_CONFIG.provider || "Square/Stripe-ready").replace(/^square$/i, "Square"))}</td>
+                      </tr>
+                    `;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : renderEmptyState("No subscriptions found", "Trial and paid subscription records will appear here once agencies sign up.")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderAdminSupportPage() {
+    const scoped = getScopedData();
+    const agencies = scoped.agencies || [];
+    const recentAuditLogs = (scoped.auditLogs || [])
+      .slice()
+      .sort((left, right) => compareDates(right.timestamp || right.updatedAt || right.createdAt, left.timestamp || left.updatedAt || left.createdAt))
+      .slice(0, 8);
+
+    return `
+      <section class="stack-lg">
+        <div class="metrics-grid">
+          ${renderMetricCard("Support Contacts", agencies.length, "One support contact profile per agency", "SC")}
+          ${renderMetricCard("Past Due Agencies", agencies.filter(agency => ["past_due", "unpaid", "expired_trial"].includes(agency.subscriptionStatus)).length, "Accounts likely to need billing help", "BD")}
+          ${renderMetricCard("Open Trial Agencies", agencies.filter(agency => agency.subscriptionStatus === "trialing").length, "New agencies that may need onboarding help", "ON")}
+          ${renderMetricCard("Recent Audit Events", recentAuditLogs.length, "Latest admin-visible activity across agencies", "AL")}
+        </div>
+
+        <div class="split-grid">
+          <div class="table-shell">
+            <div class="table-top">
+              <div>
+                <p class="eyebrow">Support</p>
+                <h2 class="page-heading">Agency support directory</h2>
+              </div>
+            </div>
+            ${agencies.length ? `
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Agency</th>
+                      <th>Plan</th>
+                      <th>Status</th>
+                      <th>Support Email</th>
+                      <th>Support Phone</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${agencies.map(agency => {
+                      const settings = (scoped.settings || []).find(item => item.agencyId === agency.id);
+                      return `
+                        <tr>
+                          <td>${escapeHtml(agency.name || agency.id)}</td>
+                          <td>${escapeHtml(getPlanDefinition(agency.planId).label)}</td>
+                          <td>${renderInlineStatus(agency.subscriptionStatus || "trialing")}</td>
+                          <td>${escapeHtml(settings?.supportEmail || DEFAULT_SUPPORT_EMAIL)}</td>
+                          <td>${escapeHtml(settings?.supportPhone || DEFAULT_SUPPORT_PHONE)}</td>
+                        </tr>
+                      `;
+                    }).join("")}
+                  </tbody>
+                </table>
+              </div>
+            ` : renderEmptyState("No agency support profiles yet", "Support contacts will populate here after agencies create their workspaces.")}
+          </div>
+
+          <div class="surface-card">
+            <div class="card-top">
+              <div>
+                <p class="eyebrow">Recent Activity</p>
+                <h3>Audit trail snapshot</h3>
+              </div>
+            </div>
+            ${recentAuditLogs.length ? `
+              <ul class="attention-list" style="margin-top: 18px;">
+                ${recentAuditLogs.map(log => `
+                  <li class="attention-item">
+                    <div>
+                      <strong>${escapeHtml(formatStatusLabel(log.action || "audit_event"))}</strong>
+                      <p class="inline-note">${escapeHtml(getAgencyName(log.agencyId) || log.agencyId || "Platform")} · ${escapeHtml(log.entityType || "-")} · ${escapeHtml(formatDateTime(log.timestamp || log.updatedAt || log.createdAt || ""))}</p>
+                    </div>
+                  </li>
+                `).join("")}
+              </ul>
+            ` : renderEmptyState("No audit activity yet", "Support and billing actions will leave an audit trail here as agencies start using the portal.")}
+          </div>
+        </div>
+      </section>
     `;
   }
 
@@ -13059,41 +13733,21 @@
   }
 
   function buildWorkerLink(workerId) {
-    return `${state.firebase.config.appUrl || DEFAULT_APP_URL}?mode=worker&workerId=${encodeURIComponent(workerId)}`;
+    return `${window.location.origin}${getAppBasePath()}login?mode=worker&workerId=${encodeURIComponent(workerId)}`;
   }
 
   function getOwnerClockRoute() {
-    const agencyId = String(state.publicPunch?.agencyId || state.session.agencyId || state.session.agency?.id || "").trim();
-    const companyId = String(state.publicPunch?.companyId || "").trim();
-    const siteId = String(state.publicPunch?.siteId || "").trim();
-    const params = new URLSearchParams();
-    if (agencyId) {
-      params.set("agencyId", agencyId);
-    }
-    if (companyId) {
-      params.set("clientId", companyId);
-    }
-    if (siteId) {
-      params.set("siteId", siteId);
-    }
-    const query = params.toString();
-    return query ? `clock?${query}` : "clock";
+    return "clock";
   }
 
   function buildSitePunchLink(agencyId, companyId, siteId) {
-    const baseUrl = state.firebase.config.appUrl || DEFAULT_APP_URL;
-    const params = new URLSearchParams();
-    if (agencyId) {
-      params.set("agencyId", agencyId);
+    const workerAppUrl = String(state.firebase.config.workerAppUrl || window.PORTALY_FIREBASE_CONFIG?.workerAppUrl || "").trim();
+    const workerPath = agencyId && siteId ? `#/worker/${encodeURIComponent(agencyId)}/${encodeURIComponent(siteId)}` : "#/worker";
+    if (workerAppUrl) {
+      const trimmed = workerAppUrl.endsWith("/") ? workerAppUrl.slice(0, -1) : workerAppUrl;
+      return `${trimmed}/${workerPath.replace(/^#\//, "#/")}`;
     }
-    if (companyId) {
-      params.set("clientId", companyId);
-    }
-    if (siteId) {
-      params.set("siteId", siteId);
-    }
-    const query = params.toString();
-    return `${baseUrl}#/punch${query ? `?${query}` : ""}`;
+    return `${window.location.origin}/${workerPath}`;
   }
 
   function buildSiteLink(siteId, options = {}) {
@@ -14261,6 +14915,8 @@
       status: "active",
       assignedClientId: clientId,
       assignedSiteId: siteId,
+      pinCode: String(Math.floor(Math.random() * 9000) + 1000),
+      allowCrossSitePunching: false,
       userId,
       workerNoteType: "",
       notes: "",

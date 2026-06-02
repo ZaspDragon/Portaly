@@ -1,0 +1,11 @@
+{
+  "name": "portaly",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Portaly staffing agency SaaS portal.",
+  "scripts": {
+    "build": "node scripts/build-static.mjs",
+    "check": "node --check app.js && node --check functions/index.js"
+  }
+}

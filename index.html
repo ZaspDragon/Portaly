@@ -6,9 +6,18 @@
   <meta name="theme-color" content="#1f6fff" />
   <meta
     name="description"
-    content="Portaly is a QR timeclock, approvals, payroll, and margin platform built for staffing agencies."
+    content="Portaly is a staffing agency portal for QR time tracking, client approvals, payroll exports, audit logs, and billing-ready operations."
   />
-  <title>Portaly | Staffing Agency Operating System</title>
+  <title>Portaly | Staffing Agency Time Tracking Portal</title>
+  <script>
+    (function () {
+      const pathParts = window.location.pathname.split("/").filter(Boolean);
+      const basePath = window.location.hostname.endsWith(".github.io") && pathParts.length
+        ? `/${pathParts[0]}/`
+        : "/";
+      document.write(`<base href="${basePath}">`);
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -16,6 +25,24 @@
     rel="stylesheet"
   />
   <link rel="stylesheet" href="style.css" />
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const redirectedRoute = params.get("__route");
+      if (!redirectedRoute) {
+        return;
+      }
+      const pathParts = window.location.pathname.split("/").filter(Boolean);
+      const basePath = window.location.hostname.endsWith(".github.io") && pathParts.length
+        ? `/${pathParts[0]}/`
+        : "/";
+      params.delete("__route");
+      const query = params.toString();
+      const normalizedRoute = String(redirectedRoute || "").replace(/^\/+/, "");
+      const nextUrl = `${basePath}${normalizedRoute}${query ? `?${query}` : ""}`;
+      window.history.replaceState(null, "", nextUrl);
+    })();
+  </script>
 </head>
 <body data-layout="public">
   <div id="app"></div>

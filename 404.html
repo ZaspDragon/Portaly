@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portaly</title>
+  <script>
+    (function () {
+      var parts = window.location.pathname.split("/").filter(Boolean);
+      var basePath = window.location.hostname.endsWith(".github.io") && parts.length
+        ? "/" + parts[0] + "/"
+        : "/";
+      var routePath = window.location.pathname.startsWith(basePath)
+        ? window.location.pathname.slice(basePath.length)
+        : window.location.pathname;
+      var query = window.location.search ? window.location.search.slice(1) : "";
+      var target = basePath + "?__route=" + encodeURIComponent(routePath);
+      if (query) {
+        target += "&" + query;
+      }
+      window.location.replace(target);
+    })();
+  </script>
+</head>
+<body></body>
+</html>

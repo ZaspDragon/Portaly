@@ -5,6 +5,8 @@
     "agencies",
     "users",
     "clientInvites",
+    "jobRequests",
+    "candidateMatches",
     "clients",
     "sites",
     "workers",
@@ -24,6 +26,8 @@
     "sites",
     "workers",
     "assignments",
+    "jobRequests",
+    "candidateMatches",
     "punches",
     "punchRequests",
     "timesheets",
@@ -44,10 +48,13 @@
   const DEFAULT_SUPPORT_EMAIL = "support@portaly-demo.com";
   const DEFAULT_SUPPORT_PHONE = "(800) 555-0199";
   const BILLING_LOCK_STATUSES = new Set(["past_due", "unpaid", "expired_trial", "canceled"]);
+  const DUPLICATE_PUNCH_WINDOW_MS = 2 * 60 * 1000;
   const PUBLIC_ROUTES = new Set(["landing", "pricing", "demo", "login", "trial", "trial-success", "billing-required", "forgot-password", "trial-expired", "approval-link", "complete-profile", "accept-invite", "punch", "clock", "unauthorized"]);
   const WORKER_ROUTES = new Set(["worker-punch", "my-history", "help", "billing-required", "unauthorized"]);
   const CLIENT_ROUTES = new Set(["dashboard", "approvals", "client-corrections", "workers", "billing-required", "unauthorized"]);
   const AGENCY_SCOPED_COLLECTIONS = new Set([
+    "jobRequests",
+    "candidateMatches",
     "clients",
     "sites",
     "workers",
@@ -260,6 +267,9 @@
       companyName: "",
       siteId: "",
       siteName: "",
+      selectedWorkerId: "",
+      workerNameDraft: "",
+      pinCodeDraft: "",
       saving: false,
       emptyMessage: "",
       requestHelpMessage: "",
@@ -280,6 +290,12 @@
       liveAction: "all",
       liveDateFrom: "",
       liveDateTo: ""
+    },
+    assistant: {
+      prompt: "Which workers were late this week?",
+      response: "",
+      headline: "Ready",
+      lastRunAt: ""
     },
     firebase: {
       config: window.PORTALY_FIREBASE_CONFIG || {},
@@ -457,6 +473,10 @@
       if (!trigger) {
         return;
       }
+      const fieldTarget = event.target.closest("input, select, textarea, option, label");
+      if (fieldTarget && fieldTarget !== trigger && !trigger.matches("input, select, textarea")) {
+        return;
+      }
       event.preventDefault();
       void handleAction(trigger);
     });
@@ -476,6 +496,14 @@
         return;
       }
       void handleInputChange(target);
+    });
+
+    document.addEventListener("input", event => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      syncPublicPunchDraftField(target);
     });
 
     window.addEventListener("online", () => {
@@ -1152,13 +1180,22 @@
     }
   }
 
+  function buildHashPath(path, query = "") {
+    const normalizedPath = normalizePathname(path);
+    return `#/${normalizedPath}${query ? `?${query}` : ""}`;
+  }
+
+  function getCurrentNavigationTarget() {
+    return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  }
+
   function buildRouteUrl(route, options = {}) {
     const path = normalizePathname(resolveRoutePath(route));
     const basePath = getAppBasePath();
     const query = options.query instanceof URLSearchParams
       ? options.query.toString()
       : new URLSearchParams(options.query || {}).toString();
-    return `${basePath}${path}${query ? `?${query}` : ""}`;
+    return `${basePath}${buildHashPath(path, query)}`;
   }
 
   function navigate(route, options = {}) {
@@ -1170,7 +1207,7 @@
       return;
     }
 
-    if (window.location.pathname + window.location.search === target) {
+    if (getCurrentNavigationTarget() === target) {
       state.route = normalizeRoute(route);
       renderApp();
       return;
@@ -1182,14 +1219,14 @@
   }
 
   function navigateInviteRoute(token, options = {}) {
-    const target = `${getAppBasePath()}accept-invite/${encodeURIComponent(String(token || "").trim())}`;
+    const target = `${getAppBasePath()}${buildHashPath(`accept-invite/${encodeURIComponent(String(token || "").trim())}`)}`;
     if (options.replace) {
       window.history.replaceState(null, "", target);
       state.route = normalizeRoute(parseHashRoute());
       renderApp();
       return;
     }
-    if (window.location.pathname === target) {
+    if (getCurrentNavigationTarget() === target) {
       state.route = normalizeRoute(parseHashRoute());
       renderApp();
       return;
@@ -1210,14 +1247,14 @@
     if (siteId) {
       params.set("siteId", siteId);
     }
-    const target = buildRouteUrl("punch", { query: params });
+    const target = buildRouteUrl("clock", { query: params });
     if (options.replace) {
       window.history.replaceState(null, "", target);
       state.route = normalizeRoute(parseHashRoute());
       void loadPublicPunchState().finally(() => renderApp());
       return;
     }
-    if (window.location.pathname + window.location.search === target) {
+    if (getCurrentNavigationTarget() === target) {
       state.route = normalizeRoute(parseHashRoute());
       void loadPublicPunchState().finally(() => renderApp());
       return;
@@ -1583,11 +1620,11 @@
     }
 
     if (role === "worker") {
-      return ["agencies", "users", "clients", "sites", "workers", "punches", "timesheets", "settings"];
+      return ["agencies", "users", "clients", "sites", "workers", "punches", "punchRequests", "timesheets", "settings"];
     }
 
     if (role === "clientManager") {
-      return ["agencies", "users", "clients", "sites", "workers", "punches", "punchRequests", "timesheets", "approvals", "settings"];
+      return ["agencies", "users", "clients", "sites", "workers", "jobRequests", "candidateMatches", "punches", "punchRequests", "timesheets", "approvals", "settings"];
     }
 
     return COLLECTIONS.slice();
@@ -1731,6 +1768,8 @@
       case "sites":
         return rows.filter(row => assignedSiteIds.includes(row.id));
       case "workers":
+      case "jobRequests":
+      case "candidateMatches":
       case "punches":
       case "punchRequests":
       case "timesheets":
@@ -1994,6 +2033,10 @@
     return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
   }
 
+  function canRunClockTest() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
   function canManageAssignments() {
     return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
   }
@@ -2246,6 +2289,18 @@
           requirePermission(canManageAssignments(), "Only agency owners, admins, or platform owners can edit assignments.");
           openAssignmentModal(trigger.dataset.assignmentId || "");
           break;
+        case "open-job-request-form":
+          openJobRequestModal({
+            jobRequestId: trigger.dataset.jobRequestId || "",
+            requestType: trigger.dataset.requestType || ""
+          });
+          break;
+        case "view-job-matches":
+          openJobMatchesModal(trigger.dataset.jobRequestId || "");
+          break;
+        case "run-ai-assistant":
+          runAiAssistantPrompt(trigger.dataset.prompt || state.assistant.prompt || "");
+          break;
         case "end-assignment":
           await endAssignment(trigger.dataset.assignmentId || "");
           break;
@@ -2339,6 +2394,9 @@
         case "publish-site-to-punch-page":
           await publishSiteToPunchPage(trigger.dataset.siteId || "");
           break;
+        case "open-clock-test":
+          openClockTestModal(trigger.dataset.siteId || "");
+          break;
         case "deactivate-qr-link":
           await deactivateQrLink(trigger.dataset.qrType || "", trigger.dataset.recordId || "");
           break;
@@ -2428,6 +2486,12 @@
           break;
         case "open-punch-request":
           openPunchRequestModal();
+          break;
+        case "view-public-worker-hours":
+          await openPublicWorkerHoursModal();
+          break;
+        case "open-worker-correction-request":
+          openWorkerCorrectionRequestModal();
           break;
         case "approve-punch-request":
           await approvePunchRequest(trigger.dataset.requestId || "");
@@ -2664,6 +2728,13 @@
 
     if (target.name === "publicPunchAgencyId") {
       const nextAgencyId = String(target.value || "").trim();
+      state.publicPunch = {
+        ...(state.publicPunch || {}),
+        forceManualSelection: true,
+        selectedWorkerId: "",
+        workerNameDraft: "",
+        pinCodeDraft: ""
+      };
       navigatePublicPunchRoute(nextAgencyId, "", "", { replace: true });
       return;
     }
@@ -2673,6 +2744,13 @@
       const nextSiteId = state.publicPunch.siteId && (state.publicPunch.sites || []).some(site => site.id === state.publicPunch.siteId && site.clientId === nextCompanyId)
         ? state.publicPunch.siteId
         : "";
+      state.publicPunch = {
+        ...(state.publicPunch || {}),
+        forceManualSelection: true,
+        selectedWorkerId: "",
+        workerNameDraft: "",
+        pinCodeDraft: ""
+      };
       navigatePublicPunchRoute(state.publicPunch.agencyId || "", nextCompanyId, nextSiteId, { replace: true });
       return;
     }
@@ -2681,6 +2759,13 @@
       const nextSiteId = String(target.value || "").trim();
       const matchedDirectory = state.publicPunch.directories.find(directory => directory.siteId === nextSiteId) || null;
       const matchedSite = (state.publicPunch.sites || []).find(site => site.id === nextSiteId) || null;
+      state.publicPunch = {
+        ...(state.publicPunch || {}),
+        forceManualSelection: true,
+        selectedWorkerId: "",
+        workerNameDraft: "",
+        pinCodeDraft: ""
+      };
       navigatePublicPunchRoute(
         matchedDirectory?.agencyId || matchedSite?.agencyId || state.publicPunch.agencyId || "",
         matchedDirectory?.companyId || matchedSite?.clientId || state.publicPunch.companyId || "",
@@ -2693,10 +2778,19 @@
     if (target.name === "publicPunchWorkerId") {
       const workerId = String(target.value || "").trim();
       const worker = (state.publicPunch.siteWorkers || state.publicPunch.directory?.publicWorkerOptions || []).find(option => option.id === workerId);
-      const manualField = document.getElementById("public-punch-worker-name");
-      if (worker && manualField instanceof HTMLInputElement) {
-        manualField.value = worker.name;
-      }
+      const currentDraft = readPublicPunchWorkerDraftFields();
+      state.publicPunch = {
+        ...(state.publicPunch || {}),
+        ...currentDraft,
+        selectedWorkerId: workerId,
+        workerNameDraft: worker?.name || currentDraft.workerNameDraft || ""
+      };
+      renderApp();
+      return;
+    }
+
+    if (target.name === "publicPunchWorkerName" || target.name === "publicPunchPinCode") {
+      syncPublicPunchDraftField(target);
       return;
     }
 
@@ -3258,14 +3352,24 @@
       phone: values.phone || "",
       email: values.email || "",
       pinCode,
+      workerCode: values.workerCode || existing?.workerCode || `WK-${String(workerId).slice(-5).toUpperCase()}`,
       payRate: Number(values.payRate || 0),
       status: values.status || "active",
       assignedClientId: values.assignedClientId || "",
       assignedSiteId: values.assignedSiteId || "",
       allowCrossSitePunching: values.allowCrossSitePunching === true || values.allowCrossSitePunching === "true" || values.allowCrossSitePunching === "on",
+      skills: normalizeStringArray(values.skills),
+      certifications: normalizeStringArray(values.certifications),
+      location: values.location || "",
+      preferredShift: values.preferredShift || "",
+      attendanceScore: clampNumber(values.attendanceScore, 0, 100, existing?.attendanceScore ?? 90),
+      reliabilityScore: clampNumber(values.reliabilityScore, 0, 100, existing?.reliabilityScore ?? 88),
+      previousSites: normalizeStringArray(values.previousSites),
+      availability: normalizeStringArray(values.availability),
       workerNoteType: normalizeWorkerNoteType(values.workerNoteType || existing?.workerNoteType || ""),
       notes: values.notes || "",
       terminationReason: values.terminationReason || "",
+      createdBy: existing?.createdBy || state.session.userId || "",
       createdAt: existing?.createdAt || now,
       updatedAt: now
     };
@@ -3356,7 +3460,7 @@
       zip: values.zip || "",
       siteContact: values.siteContact || "",
       sitePhone: values.sitePhone || "",
-      qrCodeUrl: values.qrCodeUrl || existing?.qrCodeUrl || buildSiteLink(siteId, {
+      qrCodeUrl: buildSiteLink(siteId, {
         agencyId,
         clientId: values.clientId || existing?.clientId || ""
       }),
@@ -3365,6 +3469,8 @@
       qrNotes: values.qrNotes || existing?.qrNotes || "",
       notes: values.notes || "",
       status: values.status || "active",
+      assignedManagerIds: normalizeStringArray(values.assignedManagerIds || existing?.assignedManagerIds || []),
+      createdBy: existing?.createdBy || state.session.userId || "",
       createdAt: existing?.createdAt || now,
       updatedAt: now
     };
@@ -3400,6 +3506,7 @@
       status: values.status || "active",
       shiftSchedule: values.shiftSchedule || "",
       notes: values.notes || "",
+      createdBy: existing?.createdBy || state.session.userId || "",
       createdAt: existing?.createdAt || now,
       updatedAt: now
     };
@@ -3420,6 +3527,85 @@
       return;
     }
     pushToast(existing ? "Assignment updated successfully." : "Assignment added successfully.", "success");
+  }
+
+  async function saveJobRequestForm(values, existingRecord = null) {
+    requirePermission(["platformOwner", "agencyOwner", "agencyAdmin", "clientManager"].includes(state.session.role), "You do not have permission to save staffing requests.");
+    const scoped = getScopedData();
+    const jobRequestId = values.id || existingRecord?.id || createId("jobRequest");
+    const existing = existingRecord || findRecord("jobRequests", jobRequestId);
+    const now = new Date().toISOString();
+    const agencyId = existing?.agencyId || state.session.agencyId || state.session.agency?.id || "";
+
+    if (!agencyId) {
+      throw new Error("Your agency workspace is not loaded. Please log out and back in.");
+    }
+
+    const jobRequest = {
+      id: jobRequestId,
+      agencyId,
+      clientId: values.clientId || existing?.clientId || "",
+      siteId: values.siteId || existing?.siteId || "",
+      requestType: values.requestType || existing?.requestType || "request_more_workers",
+      role: values.role || existing?.role || "",
+      requiredSkills: normalizeStringArray(values.requiredSkills),
+      requiredCertifications: normalizeStringArray(values.requiredCertifications),
+      shift: values.shift || existing?.shift || "",
+      payRate: Number(values.payRate || existing?.payRate || 0),
+      location: values.location || existing?.location || "",
+      workerCount: Math.max(1, Number(values.workerCount || existing?.workerCount || 1)),
+      startDate: values.startDate ? new Date(values.startDate).toISOString() : (existing?.startDate || now),
+      notes: values.notes || existing?.notes || "",
+      status: values.status || existing?.status || "open",
+      createdBy: existing?.createdBy || state.session.userId || "",
+      requestedByRole: existing?.requestedByRole || state.session.role || "",
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+
+    if (!jobRequest.clientId || !jobRequest.siteId) {
+      throw new Error("Choose a client and site before saving the staffing request.");
+    }
+
+    if (state.session.role === "clientManager" && !recordMatchesAssignmentScope(jobRequest.clientId, jobRequest.siteId)) {
+      throw new Error("Client managers can only create requests for assigned clients and sites.");
+    }
+
+    await saveData("jobRequests", jobRequestId, jobRequest);
+
+    const nextScoped = {
+      ...scoped,
+      jobRequests: [...(scoped.jobRequests || []).filter(item => item.id !== jobRequestId), jobRequest]
+    };
+    const matches = buildCandidateMatchesForJobRequest(jobRequest, nextScoped);
+    const existingMatches = (scoped.candidateMatches || []).filter(match => match.jobRequestId === jobRequestId);
+    await Promise.all(existingMatches.map(match => deleteData("candidateMatches", match.id)));
+    await Promise.all(matches.map(match => saveData("candidateMatches", match.id, {
+      ...match,
+      createdBy: match.createdBy || state.session.userId || "",
+      status: match.status || "suggested"
+    })));
+
+    await appendAuditLog(existing ? "job_request_updated" : "job_request_created", "jobRequests", jobRequestId, existing, jobRequest, {
+      candidateMatchCount: matches.length
+    });
+
+    state.assistant.prompt = `Rank workers for this warehouse job.`;
+    state.assistant.response = "";
+    state.modal = null;
+    await refreshCurrentView();
+    pushToast(existing ? "Staffing request updated." : "Staffing request created and ranked candidates generated.", "success");
+  }
+
+  function runAiAssistantPrompt(prompt) {
+    const result = buildAssistantResponse(prompt, getScopedData());
+    state.assistant = {
+      prompt,
+      response: result.body,
+      headline: result.headline,
+      lastRunAt: new Date().toISOString()
+    };
+    renderApp();
   }
 
   async function savePunchForm(values) {
@@ -4039,11 +4225,47 @@
     return PUNCH_STATUS_LABELS[action] || "Ready";
   }
 
+  function readPublicPunchWorkerDraftFields() {
+    const workerField = document.getElementById("public-punch-worker");
+    const manualField = document.getElementById("public-punch-worker-name");
+    const pinField = document.getElementById("public-punch-pin");
+    return {
+      selectedWorkerId: String(workerField?.value || state.publicPunch?.selectedWorkerId || "").trim(),
+      workerNameDraft: String(manualField?.value || state.publicPunch?.workerNameDraft || "").trim(),
+      pinCodeDraft: String(pinField?.value || state.publicPunch?.pinCodeDraft || "").replace(/\D+/g, "").slice(0, 4)
+    };
+  }
+
+  function syncPublicPunchDraftField(target) {
+    if (!state.publicPunch) {
+      return;
+    }
+
+    if (target.name === "publicPunchWorkerName") {
+      state.publicPunch = {
+        ...(state.publicPunch || {}),
+        workerNameDraft: String(target.value || "").trim()
+      };
+      return;
+    }
+
+    if (target.name === "publicPunchPinCode") {
+      const normalizedPin = String(target.value || "").replace(/\D+/g, "").slice(0, 4);
+      if (target.value !== normalizedPin) {
+        target.value = normalizedPin;
+      }
+      state.publicPunch = {
+        ...(state.publicPunch || {}),
+        pinCodeDraft: normalizedPin
+      };
+    }
+  }
+
   function resolvePublicPunchWorker(directory) {
     const workerField = document.getElementById("public-punch-worker");
     const manualField = document.getElementById("public-punch-worker-name");
-    const selectedWorkerId = String(workerField?.value || "").trim();
-    const manualName = String(manualField?.value || "").trim();
+    const selectedWorkerId = String(workerField?.value || state.publicPunch?.selectedWorkerId || "").trim();
+    const manualName = String(manualField?.value || state.publicPunch?.workerNameDraft || "").trim();
     const workerOptions = Array.isArray(directory?.publicWorkerOptions) ? directory.publicWorkerOptions : [];
     const matchedById = workerOptions.find(option => option.id === selectedWorkerId) || null;
     if (matchedById) {
@@ -4076,6 +4298,201 @@
     };
   }
 
+  function readPublicPunchPinCode() {
+    const pinField = document.getElementById("public-punch-pin");
+    return String(pinField?.value || state.publicPunch?.pinCodeDraft || "").replace(/\D+/g, "").slice(0, 4);
+  }
+
+  function buildPublicWorkerWeekRows(punches, anchor = state.now) {
+    const grouped = new Map();
+    getPunchesForWeek(punches || [], anchor).forEach(punch => {
+      const dateKey = formatDateInput(punch.timestamp || "");
+      const rows = grouped.get(dateKey) || [];
+      rows.push(punch);
+      grouped.set(dateKey, rows);
+    });
+
+    return Array.from(grouped.entries())
+      .sort((left, right) => left[0].localeCompare(right[0]))
+      .map(([dateKey, rows]) => {
+        const ordered = rows.slice().sort((left, right) => compareDates(left.timestamp, right.timestamp));
+        const clockIn = ordered.find(punch => punch.action === "clockIn") || null;
+        const lunchStart = ordered.find(punch => punch.action === "startLunch") || null;
+        const lunchEnd = ordered.find(punch => punch.action === "endLunch") || null;
+        const clockOut = ordered.find(punch => punch.action === "clockOut") || null;
+        return {
+          dateKey,
+          clockIn,
+          lunchStart,
+          lunchEnd,
+          clockOut,
+          totalHours: calculateHoursFromPunches(ordered, state.now),
+          warning: !clockIn || !clockOut ? "Missing punch" : ""
+        };
+      });
+  }
+
+  function findLocalPublicWorkerRecord(context, worker, options = {}) {
+    const normalizedWorkerId = String(worker?.workerId || "").trim();
+    const normalizedWorkerName = String(worker?.workerName || "").trim().toLowerCase();
+    const allowAgencyFallback = !!options.allowAgencyFallback;
+    return (state.demoStore?.workers || []).find(candidate => {
+      if (!candidate || candidate.status === "inactive") {
+        return false;
+      }
+      if (context.agencyId && String(candidate.agencyId || "").trim() !== context.agencyId) {
+        return false;
+      }
+      if (!allowAgencyFallback && context.siteId && String(candidate.assignedSiteId || "").trim() !== context.siteId) {
+        return false;
+      }
+      if (normalizedWorkerId && String(candidate.id || "").trim() === normalizedWorkerId) {
+        return true;
+      }
+      return fullName(candidate).trim().toLowerCase() === normalizedWorkerName;
+    }) || null;
+  }
+
+  function validateLocalPublicWorkerPin(context, worker, pinCode, options = {}) {
+    const matchedWorker = findLocalPublicWorkerRecord(context, worker)
+      || (options.allowAgencyFallback ? findLocalPublicWorkerRecord(context, worker, { allowAgencyFallback: true }) : null);
+    if (!matchedWorker) {
+      if (options.allowUnmatched) {
+        return null;
+      }
+      throw new Error("We could not verify that worker on this site.");
+    }
+    const savedPin = String(matchedWorker.pinCode || matchedWorker.pin || "").trim();
+    if (!savedPin || savedPin !== pinCode) {
+      throw new Error("The worker PIN did not match.");
+    }
+    return matchedWorker;
+  }
+
+  async function loadPublicWorkerHoursSnapshot(context, worker, pinCode) {
+    const weekWindow = getWeekWindow(state.now);
+
+    if (state.firebase.ready && hasSecureBackend() && !shouldUsePublicPunchPreviewFallback()) {
+      return callPublicWorkerFunction("getWorkerPublicTimeSnapshot", {
+        agencyId: context.agencyId,
+        clientId: context.clientId || context.companyId,
+        companyId: context.companyId || context.clientId,
+        siteId: context.siteId,
+        workerId: worker.workerId,
+        workerName: worker.workerName,
+        pinCode
+      }, {
+        errorMessage: "Portaly could not load this worker's weekly hours.",
+        fallbackMessage: "Worker PIN verification needs the secure Portaly backend before hours can be loaded."
+      });
+    }
+
+    if (state.firebase.ready && !shouldUsePublicPunchPreviewFallback()) {
+      throw new Error("The secure worker hours backend is not connected yet.");
+    }
+
+    const localWorker = validateLocalPublicWorkerPin(context, worker, pinCode);
+    const punches = (state.demoStore?.punches || [])
+      .filter(punch => punch.workerId === localWorker.id)
+      .filter(punch => !context.siteId || punch.siteId === context.siteId)
+      .filter(punch => !context.companyId || (punch.clientId || punch.companyId || "") === context.companyId)
+      .map(punch => ({ ...punch }));
+
+    return {
+      workerName: fullName(localWorker) || worker.workerName,
+      weekStart: weekWindow.weekStart.toISOString(),
+      weekEnd: weekWindow.weekEnd.toISOString(),
+      punches
+    };
+  }
+
+  async function openPublicWorkerHoursModal() {
+    const context = getPublicPunchContext();
+    if (!context.agencyId || !context.companyId || !context.siteId) {
+      throw new Error("Scan a valid site QR code or choose the staffing agency, company, and site first.");
+    }
+
+    const worker = resolvePublicPunchWorker(context.directory || { publicWorkerOptions: state.publicPunch?.siteWorkers || [] });
+    const pinCode = readPublicPunchPinCode();
+    if (!/^\d{4}$/.test(pinCode)) {
+      throw new Error("Enter the worker's 4-digit PIN before viewing hours.");
+    }
+
+    openModal("My Hours This Week", `
+      <div class="stack-md">
+        <p class="helper-copy">Verifying the worker and loading this week's punches.</p>
+        <div class="loading-skeleton-stack" aria-hidden="true">
+          <span class="skeleton-line skeleton-line-lg"></span>
+          <span class="skeleton-line"></span>
+          <span class="skeleton-line skeleton-line-sm"></span>
+        </div>
+      </div>
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
+    });
+
+    let snapshot;
+    try {
+      snapshot = await loadPublicWorkerHoursSnapshot(context, worker, pinCode);
+    } catch (error) {
+      closeModal();
+      throw error;
+    }
+    const weekStart = snapshot?.weekStart ? new Date(snapshot.weekStart) : getWeekWindow(state.now).weekStart;
+    const weekEnd = snapshot?.weekEnd ? new Date(snapshot.weekEnd) : getWeekWindow(state.now).weekEnd;
+    const workerName = String(snapshot?.workerName || worker.workerName || "Worker").trim() || "Worker";
+    const punches = Array.isArray(snapshot?.punches) ? snapshot.punches : [];
+    const rows = buildPublicWorkerWeekRows(punches, weekStart);
+    const totalHours = rows.reduce((total, row) => total + Number(row.totalHours || 0), 0);
+
+    openModal("My Hours This Week", `
+      <div class="stack-md">
+        <div class="detail-grid">
+          ${renderDetailBox("Worker", workerName)}
+          ${renderDetailBox("Week", `${formatDate(weekStart)} - ${formatDate(weekEnd)}`)}
+          ${renderDetailBox("Total Hours", formatHours(totalHours))}
+          ${renderDetailBox("Site", context.siteName || "Current site")}
+        </div>
+        ${rows.length ? `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Clock In</th>
+                  <th>Lunch Start</th>
+                  <th>Lunch End</th>
+                  <th>Clock Out</th>
+                  <th>Total</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map(row => `
+                  <tr>
+                    <td>${escapeHtml(formatDate(row.dateKey))}</td>
+                    <td>${escapeHtml(row.clockIn ? formatTime(row.clockIn.timestamp) : "-")}</td>
+                    <td>${escapeHtml(row.lunchStart ? formatTime(row.lunchStart.timestamp) : "-")}</td>
+                    <td>${escapeHtml(row.lunchEnd ? formatTime(row.lunchEnd.timestamp) : "-")}</td>
+                    <td>${escapeHtml(row.clockOut ? formatTime(row.clockOut.timestamp) : "-")}</td>
+                    <td>${escapeHtml(formatHours(row.totalHours))}</td>
+                    <td>${escapeHtml(row.warning || "Recorded")}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        ` : renderEmptyState("No punches this week yet", "After the worker clocks in or out, Portaly will show the hours here.") }
+      </div>
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "large"
+    });
+  }
+
   function getPublicPunchContext() {
     const { agencyId, companyId, siteId, directory } = getSelectedPublicPunchDirectory();
     const client = (state.publicPunch.clients || []).find(item => item.id === companyId) || null;
@@ -4104,7 +4521,7 @@
     const manualField = document.getElementById("public-punch-worker-name");
     const availableWorkers = context.directory?.publicWorkerOptions || state.publicPunch?.siteWorkers || [];
     const matchedWorker = availableWorkers.find(option => option.id === String(workerField?.value || "").trim()) || null;
-    const workerName = String(manualField?.value || matchedWorker?.name || state.publicPunch?.lastWorkerName || "").trim();
+    const workerName = String(manualField?.value || state.publicPunch?.workerNameDraft || matchedWorker?.name || state.publicPunch?.lastWorkerName || "").trim();
 
     openModal("Submit Punch Request", `
       <form class="form-grid" data-form="punch-request-save">
@@ -4119,6 +4536,7 @@
         <div class="field-group">
           <label for="punch-request-context">Company / site</label>
           <input id="punch-request-context" type="text" value="${escapeAttribute([context.companyName, context.siteName].filter(Boolean).join(" - ") || "Select a company and site first")}" readonly />
+          <p class="helper-copy">Portaly will verify the worker PIN from the punch screen before it sends this correction request.</p>
         </div>
         <div class="form-row two">
           <div class="field-group">
@@ -4162,6 +4580,10 @@
     }
 
     const worker = resolvePublicPunchWorker(directory || { publicWorkerOptions: state.publicPunch?.siteWorkers || [] });
+    const pinCode = readPublicPunchPinCode();
+    if (!/^\d{4}$/.test(pinCode)) {
+      throw new Error("Enter the worker's 4-digit PIN before saving a punch.");
+    }
     const now = new Date();
     const timestamp = now.toISOString();
     const punchId = createId("punch");
@@ -4177,6 +4599,7 @@
       workerId: worker.workerId,
       workerName: worker.workerName,
       workerMatched: worker.workerMatched,
+      pinCode,
       action,
       timestamp,
       localDate: formatDateInput(timestamp),
@@ -4185,8 +4608,10 @@
       deviceInfo: String(navigator.userAgent || "").slice(0, 500)
     };
 
+    const workerDraft = readPublicPunchWorkerDraftFields();
     state.publicPunch = {
       ...state.publicPunch,
+      ...workerDraft,
       saving: true,
       requestHelpMessage: "",
       requestDraft: null,
@@ -4197,9 +4622,22 @@
 
     try {
       if (state.firebase.ready && state.firebase.db && !shouldUsePublicPunchPreviewFallback()) {
-        await state.firebase.db.collection("punches").doc(punchId).set(punch, { merge: false });
+        const cloudPunch = { ...punch };
+        delete cloudPunch.pinCode;
+        await state.firebase.db.collection("punches").doc(punchId).set(cloudPunch, { merge: false });
       } else {
-        await saveData("punches", punchId, punch);
+        const verifiedWorker = validateLocalPublicWorkerPin(context, worker, pinCode, {
+          allowAgencyFallback: true,
+          allowUnmatched: !worker.workerMatched
+        });
+        const localPunch = {
+          ...punch,
+          workerId: verifiedWorker?.id || punch.workerId || null,
+          workerName: verifiedWorker ? (fullName(verifiedWorker) || punch.workerName) : punch.workerName,
+          workerMatched: !!verifiedWorker || punch.workerMatched
+        };
+        delete localPunch.pinCode;
+        await saveData("punches", punchId, localPunch);
       }
     } catch (error) {
       console.error("[Portaly] savePublicSitePunch failed", {
@@ -4215,6 +4653,7 @@
 
     state.publicPunch = {
       ...state.publicPunch,
+      ...workerDraft,
       saving: false,
       requestHelpMessage: "",
       requestDraft: null,
@@ -4255,6 +4694,10 @@
     if (!reason) {
       throw new Error("Add a short reason so a manager can review this request.");
     }
+    const pinCode = readPublicPunchPinCode();
+    if (!/^\d{4}$/.test(pinCode)) {
+      throw new Error("Enter the worker's 4-digit PIN before submitting a correction request.");
+    }
 
     const requestedTimestamp = new Date(`${requestedDate}T${requestedTime}:00`);
     if (Number.isNaN(requestedTimestamp.getTime())) {
@@ -4278,6 +4721,7 @@
       workerId: matchedWorker?.id || workerId || null,
       workerName,
       workerMatched: !!(matchedWorker || workerId),
+      pinCode,
       requestedAction,
       requestedTimestamp: requestedTimestamp.toISOString(),
       requestedLocalDate: requestedDate,
@@ -4290,9 +4734,22 @@
     };
 
     if (state.firebase.ready && state.firebase.db && !shouldUsePublicPunchPreviewFallback()) {
-      await state.firebase.db.collection(getCloudCollectionName("punchRequests")).doc(requestId).set(requestRecord, { merge: false });
+      const cloudRequest = { ...requestRecord };
+      delete cloudRequest.pinCode;
+      await state.firebase.db.collection(getCloudCollectionName("punchRequests")).doc(requestId).set(cloudRequest, { merge: false });
     } else {
-      await saveData("punchRequests", requestId, requestRecord);
+      const verifiedWorker = validateLocalPublicWorkerPin(context, { workerId: matchedWorker?.id || workerId || "", workerName }, pinCode, {
+        allowAgencyFallback: true,
+        allowUnmatched: !(matchedWorker || workerId)
+      });
+      const localRequest = {
+        ...requestRecord,
+        workerId: verifiedWorker?.id || requestRecord.workerId || null,
+        workerName: verifiedWorker ? (fullName(verifiedWorker) || requestRecord.workerName) : requestRecord.workerName,
+        workerMatched: !!verifiedWorker || requestRecord.workerMatched
+      };
+      delete localRequest.pinCode;
+      await saveData("punchRequests", requestId, localRequest);
     }
 
     state.publicPunch = {
@@ -5500,13 +5957,11 @@
     }
     const scoped = getScopedData();
     const link = buildSiteLink(site.id);
-    const sitePatch = site.qrEnabled === false || !String(site.qrCodeUrl || "").trim()
-      ? {
-        qrEnabled: true,
-        qrCodeUrl: link,
-        updatedAt: new Date().toISOString()
-      }
-      : null;
+    const sitePatch = {
+      qrEnabled: true,
+      qrCodeUrl: link,
+      updatedAt: new Date().toISOString()
+    };
     const siteForPublish = sitePatch ? { ...site, ...sitePatch } : site;
     if (sitePatch) {
       await updateData("sites", site.id, sitePatch);
@@ -5535,6 +5990,7 @@
       <p class="helper-copy qr-link-text">${escapeHtml(link)}</p>
       <div class="table-actions qr-actions" style="margin-top: 16px;">
         <button class="button button-secondary" data-action="copy-link" data-copy="${escapeAttribute(link)}" data-copy-success="${escapeAttribute("Punch link copied.")}" type="button">Copy Link</button>
+        <a class="button button-secondary" href="${escapeAttribute(link)}" target="_blank" rel="noopener noreferrer">Open Clock Page</a>
         <button class="button button-ghost" data-action="download-qr-png" data-qr-key="${escapeAttribute(qrKey)}" data-link="${escapeAttribute(link)}" data-file-name="${escapeAttribute(fileName)}" type="button">Download PNG</button>
         <button class="button button-ghost" data-action="print-qr-card" data-qr-key="${escapeAttribute(qrKey)}" data-link="${escapeAttribute(link)}" data-company-name="${escapeAttribute(companyName)}" data-site-name="${escapeAttribute(site.name || "Site")}" type="button">Print QR</button>
       </div>
@@ -5551,6 +6007,192 @@
       workerCount: siteWorkers.length
     });
     pushToast("Punch page published successfully.", "success");
+  }
+
+  function openClockTestModal(siteId = "") {
+    requirePermission(canRunClockTest(), "Only agency owners, admins, or platform owners can run the launch clock test.");
+    const scoped = getScopedData();
+    const sites = (scoped.sites || [])
+      .filter(site => site && site.status !== "inactive" && site.clientId)
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const defaultSiteId = siteId || sites[0]?.id || "";
+    openModal("Run Clock Test", `
+      <div class="notice-card">
+        <div>
+          <strong>Run a quick launch diagnostic before the client starts using the QR station.</strong>
+          <p>Portaly will validate the agency, client, site, QR link, worker load, and a temporary punch write. The test punch is removed after verification.</p>
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="clock-test-site">Site</label>
+        <select id="clock-test-site" name="siteId">
+          ${renderSelectOptions(sites, defaultSiteId, "Select site")}
+        </select>
+      </div>
+    `, async values => {
+      await runClockLaunchTest(values.siteId || defaultSiteId);
+    }, {
+      saveLabel: "Run Test",
+      saveTone: "button-primary",
+      size: "small"
+    });
+  }
+
+  async function runClockLaunchTest(siteId) {
+    requirePermission(canRunClockTest(), "Only agency owners, admins, or platform owners can run the launch clock test.");
+    const scoped = getScopedData();
+    const agency = getCurrentAgency();
+    const site = (scoped.sites || []).find(record => record.id === siteId) || null;
+    if (!site) {
+      throw new Error("Choose a live site before running the clock test.");
+    }
+
+    const client = (scoped.clients || []).find(record => record.id === site.clientId) || null;
+    const activeAssignments = (scoped.assignments || []).filter(assignment => assignment.siteId === site.id && isActiveAssignmentStatus(assignment.status));
+    const siteWorkers = getSitePunchWorkers(site, scoped.workers || [], scoped.assignments || []);
+    const clockLink = buildSiteLink(site.id, {
+      agencyId: site.agencyId || agency?.id || "",
+      clientId: site.clientId || ""
+    });
+    const hasStandardClockRoute = clockLink.includes("#/clock?")
+      && clockLink.includes(`agencyId=${encodeURIComponent(site.agencyId || agency?.id || "")}`)
+      && clockLink.includes(`companyId=${encodeURIComponent(site.clientId || "")}`)
+      && clockLink.includes(`siteId=${encodeURIComponent(site.id)}`);
+
+    const selectedWorker = (scoped.workers || []).find(worker => worker.assignedSiteId === site.id && worker.status !== "inactive")
+      || (scoped.workers || []).find(worker => worker.status !== "inactive")
+      || null;
+    const testPunchId = createId("clockTest");
+    const timestamp = new Date().toISOString();
+    const testPunch = {
+      id: testPunchId,
+      agencyId: site.agencyId || agency?.id || "",
+      companyId: site.clientId || "",
+      companyName: client?.name || getClientName(site.clientId || ""),
+      clientId: site.clientId || "",
+      clientName: client?.name || getClientName(site.clientId || ""),
+      siteId: site.id,
+      siteName: site.name || getSiteName(site.id),
+      workerId: selectedWorker?.id || null,
+      workerName: selectedWorker ? (fullName(selectedWorker) || selectedWorker.email || selectedWorker.id) : "Clock Test Worker",
+      workerMatched: !!selectedWorker,
+      action: "clockIn",
+      timestamp,
+      localDate: formatDateInput(timestamp),
+      source: "publicPunchPage",
+      createdAt: timestamp,
+      deviceInfo: "Portaly launch test"
+    };
+
+    let punchSavePassed = false;
+    let dashboardPassed = false;
+
+    try {
+      await saveData("punches", testPunchId, testPunch);
+      punchSavePassed = true;
+      await refreshSessionData();
+      dashboardPassed = !!getScopedData().punches.find(punch => punch.id === testPunchId);
+    } finally {
+      try {
+        await deleteData("punches", testPunchId);
+      } catch (_error) {
+        // Leave the verification result visible even if cleanup fails.
+      }
+      await refreshSessionData();
+    }
+
+    const checks = [
+      {
+        label: "Agency loaded",
+        passed: !!agency && !!(site.agencyId || agency.id),
+        detail: agency ? `${agency.name} is available for this site.` : "No agency record is loaded for the selected site."
+      },
+      {
+        label: "Client loaded",
+        passed: !!client && client.status !== "inactive",
+        detail: client ? `${client.name} is active.` : "The linked client record is missing or inactive."
+      },
+      {
+        label: "Site loaded",
+        passed: !!site && site.status !== "inactive",
+        detail: site.status !== "inactive" ? `${site.name} is active.` : "The selected site is inactive."
+      },
+      {
+        label: "QR enabled",
+        passed: site.qrEnabled !== false && !!String(site.qrCodeUrl || "").trim(),
+        detail: site.qrEnabled !== false && String(site.qrCodeUrl || "").trim()
+          ? "The site has a published clock link."
+          : "Publish the site to the punch page to generate the QR link."
+      },
+      {
+        label: "Clock route opens",
+        passed: hasStandardClockRoute,
+        detail: hasStandardClockRoute
+          ? clockLink
+          : "The site link is not using the #/clock route with agencyId, companyId, and siteId."
+      },
+      {
+        label: "Active workers and assignments loaded",
+        passed: activeAssignments.length > 0 || siteWorkers.length > 0,
+        detail: activeAssignments.length || siteWorkers.length
+          ? `${siteWorkers.length} worker option(s) and ${activeAssignments.length} active assignment(s) loaded.`
+          : "No active assignments are loaded for this site yet. Manual name entry will still work."
+      },
+      {
+        label: "Test punch can save",
+        passed: punchSavePassed,
+        detail: punchSavePassed
+          ? "Portaly created a temporary public clock punch successfully."
+          : "Portaly could not save the temporary launch test punch."
+      },
+      {
+        label: "Punch appears in dashboard",
+        passed: dashboardPassed,
+        detail: dashboardPassed
+          ? "The temporary punch appeared in the agency punch data before cleanup."
+          : "The temporary punch did not round-trip back into the agency dashboard data."
+      }
+    ];
+    const allPassed = checks.every(check => check.passed);
+
+    await appendAuditLog(allPassed ? "clock_launch_test_passed" : "clock_launch_test_failed", "sites", site.id, null, {
+      siteId: site.id,
+      clientId: site.clientId,
+      clockLink,
+      checks: checks.map(check => ({
+        label: check.label,
+        passed: check.passed,
+        detail: check.detail
+      }))
+    });
+
+    openModal(allPassed ? "Clock Test Passed" : "Clock Test Needs Attention", `
+      <div class="detail-grid">
+        ${renderDetailBox("Agency", agency?.name || "Unknown")}
+        ${renderDetailBox("Client", client?.name || "Unknown")}
+        ${renderDetailBox("Site", site.name || "Unknown")}
+        ${renderDetailBox("Clock Link", clockLink)}
+      </div>
+      <div class="stack-sm" style="margin-top: 18px;">
+        ${checks.map(check => `
+          <div class="surface-card" style="padding: 14px;">
+            <div class="card-top">
+              <strong>${escapeHtml(check.label)}</strong>
+              <span class="status-badge ${check.passed ? "status-approved" : "status-warning"}">${escapeHtml(check.passed ? "Pass" : "Fix")}</span>
+            </div>
+            <p class="helper-copy" style="margin-top: 8px;">${escapeHtml(check.detail)}</p>
+          </div>
+        `).join("")}
+      </div>
+      <div class="page-actions" style="margin-top: 18px;">
+        <a class="button button-secondary" href="${escapeAttribute(clockLink)}" target="_blank" rel="noopener noreferrer">Open Clock Page</a>
+        <button class="button button-ghost" data-action="copy-link" data-copy="${escapeAttribute(clockLink)}" data-copy-success="${escapeAttribute("Clock link copied.")}" type="button">Copy Clock Link</button>
+      </div>
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
+    });
   }
 
   async function deactivateQrLink(qrType, recordId) {
@@ -5647,6 +6289,212 @@
     `, null, {
       formName: "user-save",
       saveLabel: user ? "Save User" : "Invite User"
+    });
+  }
+
+  function openWorkerCorrectionRequestModal() {
+    const worker = getCurrentWorker();
+    if (!worker) {
+      throw new Error("Worker profile not found.");
+    }
+    openModal("Request Time Fix", `
+      <div class="detail-grid">
+        ${renderDetailBox("Worker", fullName(worker))}
+        ${renderDetailBox("Client", getClientName(worker.assignedClientId))}
+        ${renderDetailBox("Site", getSiteName(worker.assignedSiteId))}
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="worker-fix-action">Punch type</label>
+          <select id="worker-fix-action" name="requestedAction">
+            ${Object.keys(PUNCH_LABELS).map(entry => `<option value="${escapeAttribute(entry)}">${escapeHtml(PUNCH_LABELS[entry])}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="worker-fix-date">Date</label>
+          <input id="worker-fix-date" name="requestedDate" type="date" value="${escapeAttribute(formatDateInput(state.now))}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="worker-fix-time">Time</label>
+          <input id="worker-fix-time" name="requestedTime" type="time" value="${escapeAttribute(formatTimeInput(state.now))}" />
+        </div>
+        <div class="field-group">
+          <label for="worker-fix-reason">Reason</label>
+          <input id="worker-fix-reason" name="reason" type="text" placeholder="Explain what happened" />
+        </div>
+      </div>
+    `, async values => {
+      const requestedTimestamp = new Date(`${values.requestedDate}T${values.requestedTime}:00`);
+      if (Number.isNaN(requestedTimestamp.getTime())) {
+        throw new Error("Enter a valid correction date and time.");
+      }
+      const requestId = createId("punchRequest");
+      await saveData("punchRequests", requestId, {
+        id: requestId,
+        agencyId: worker.agencyId,
+        companyId: worker.assignedClientId,
+        companyName: getClientName(worker.assignedClientId),
+        clientId: worker.assignedClientId,
+        clientName: getClientName(worker.assignedClientId),
+        siteId: worker.assignedSiteId,
+        siteName: getSiteName(worker.assignedSiteId),
+        workerId: worker.id,
+        workerName: fullName(worker),
+        workerMatched: true,
+        requestedAction: values.requestedAction,
+        requestedTimestamp: requestedTimestamp.toISOString(),
+        requestedLocalDate: values.requestedDate,
+        reason: values.reason || "",
+        status: "pending",
+        source: "workerSelfService",
+        createdBy: state.session.userId || worker.id,
+        createdByRole: "worker",
+        updatedAt: new Date().toISOString()
+      });
+      await appendAuditLog("correction_requested", "punchRequests", requestId, null, {
+        workerId: worker.id,
+        siteId: worker.assignedSiteId,
+        requestedAction: values.requestedAction,
+        requestedLocalDate: values.requestedDate,
+        reason: values.reason || ""
+      });
+      closeModal();
+      await refreshCurrentView();
+      pushToast("Correction request submitted.", "success");
+    }, {
+      saveLabel: "Submit Request"
+    });
+  }
+
+  function openJobRequestModal(options = {}) {
+    requirePermission(["platformOwner", "agencyOwner", "agencyAdmin", "clientManager"].includes(state.session.role), "You do not have permission to create staffing requests.");
+    const scoped = getScopedData();
+    const existing = options.jobRequestId ? (scoped.jobRequests || []).find(item => item.id === options.jobRequestId) : null;
+    const defaultClientId = existing?.clientId || options.clientId || (state.session.role === "clientManager" ? (state.session.assignedClientIds[0] || "") : "");
+    const defaultSiteId = existing?.siteId || options.siteId || (state.session.role === "clientManager" ? (state.session.assignedSiteIds[0] || "") : "");
+    const requestType = existing?.requestType || options.requestType || "request_more_workers";
+    const availableClients = state.session.role === "clientManager"
+      ? scoped.clients.filter(client => (state.session.assignedClientIds || []).includes(client.id))
+      : scoped.clients;
+    const availableSites = state.session.role === "clientManager"
+      ? scoped.sites.filter(site => (state.session.assignedSiteIds || []).includes(site.id))
+      : scoped.sites;
+
+    openModal(existing ? "Edit Staffing Request" : "Create Staffing Request", `
+      <input name="id" type="hidden" value="${escapeAttribute(existing?.id || "")}" />
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="job-request-type">Request type</label>
+          <select id="job-request-type" name="requestType">
+            ${renderStaticOptions(["request_more_workers", "warehouse_job", "worker_issue", "no_show_report"], requestType, value => formatStatusLabel(value.replaceAll("_", " ")))}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="job-request-status">Status</label>
+          <select id="job-request-status" name="status">
+            ${renderStaticOptions(["open", "reviewing", "filled", "closed"], existing?.status || "open")}
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="job-request-client">Client</label>
+          <select id="job-request-client" name="clientId">
+            ${renderSelectOptions(availableClients, defaultClientId, "Select client")}
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="job-request-site">Site</label>
+          <select id="job-request-site" name="siteId">
+            ${renderSelectOptions(availableSites, defaultSiteId, "Select site")}
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="job-request-role">Role needed</label>
+          <input id="job-request-role" name="role" type="text" value="${escapeAttribute(existing?.role || "")}" placeholder="Forklift operator / loader / picker" />
+        </div>
+        <div class="field-group">
+          <label for="job-request-workers-needed">Workers needed</label>
+          <input id="job-request-workers-needed" name="workerCount" type="number" min="1" value="${escapeAttribute(String(existing?.workerCount || 1))}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="job-request-shift">Shift</label>
+          <input id="job-request-shift" name="shift" type="text" value="${escapeAttribute(existing?.shift || "")}" placeholder="1st shift / 7:00 AM" />
+        </div>
+        <div class="field-group">
+          <label for="job-request-pay-rate">Pay rate</label>
+          <input id="job-request-pay-rate" name="payRate" type="number" step="0.01" value="${escapeAttribute(String(existing?.payRate || 0))}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="job-request-location">Location</label>
+          <input id="job-request-location" name="location" type="text" value="${escapeAttribute(existing?.location || "")}" placeholder="Dallas, TX" />
+        </div>
+        <div class="field-group">
+          <label for="job-request-start-date">Start date</label>
+          <input id="job-request-start-date" name="startDate" type="date" value="${escapeAttribute(existing?.startDate ? formatDateInput(existing.startDate) : formatDateInput(state.now))}" />
+        </div>
+      </div>
+      <div class="form-row two">
+        <div class="field-group">
+          <label for="job-request-skills">Required skills</label>
+          <input id="job-request-skills" name="requiredSkills" type="text" value="${escapeAttribute((existing?.requiredSkills || []).join(", "))}" placeholder="Forklift, RF scanner, cold storage" />
+        </div>
+        <div class="field-group">
+          <label for="job-request-certs">Required certifications</label>
+          <input id="job-request-certs" name="requiredCertifications" type="text" value="${escapeAttribute((existing?.requiredCertifications || []).join(", "))}" placeholder="Forklift, OSHA 10" />
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="job-request-notes">Notes / issue details</label>
+        <textarea id="job-request-notes" name="notes" placeholder="What does the client need, or what issue should the agency follow up on?">${escapeHtml(existing?.notes || "")}</textarea>
+      </div>
+    `, values => saveJobRequestForm(values, existing), {
+      saveLabel: existing ? "Save Request" : "Create Request"
+    });
+  }
+
+  function openJobMatchesModal(jobRequestId) {
+    const scoped = getScopedData();
+    const jobRequest = (scoped.jobRequests || []).find(item => item.id === jobRequestId);
+    if (!jobRequest) {
+      throw new Error("That staffing request could not be found.");
+    }
+    const matches = getCandidateMatchesForJobRequest(jobRequestId, scoped);
+    openModal("Candidate Match Suggestions", `
+      <div class="stack-md">
+        <div class="support-card">
+          <p class="eyebrow">Job Request</p>
+          <h3>${escapeHtml(jobRequest.role || "Open request")}</h3>
+          <p class="helper-copy">${escapeHtml(getClientName(jobRequest.clientId))} · ${escapeHtml(getSiteName(jobRequest.siteId))} · ${escapeHtml(jobRequest.shift || "Shift not set")}</p>
+        </div>
+        ${matches.length ? `
+          <div class="stack-sm">
+            ${matches.map(match => `
+              <div class="surface-card">
+                <div class="card-top">
+                  <div>
+                    <h3>${escapeHtml(match.workerName)}</h3>
+                    <p class="helper-copy">${escapeHtml(match.explanation)}</p>
+                  </div>
+                  <span class="status-badge status-success">${escapeHtml(String(match.matchScore || match.score || 0))}% match</span>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : renderEmptyState("No ranked workers yet", "Save a staffing request with skills, certifications, and shift needs to generate suggestions.")}
+      </div>
+    `, null, {
+      readOnly: true,
+      cancelLabel: "Close",
+      size: "small"
     });
   }
 
@@ -5929,12 +6777,36 @@
     });
   }
 
+  async function callPublicWorkerFunction(endpoint, payload = {}, options = {}) {
+    return callSecureFunction(endpoint, payload, {
+      ...options,
+      requireAuth: false,
+      errorMessage: options.errorMessage || "Portaly could not complete that worker punch request.",
+      fallbackMessage: options.fallbackMessage || "This worker punch flow requires the secure Portaly backend.",
+      networkErrorMessage: options.networkErrorMessage || "Portaly could not reach the secure worker punch service."
+    });
+  }
+
   function normalizeStringArray(value) {
     if (Array.isArray(value)) {
       return [...new Set(value.map(item => String(item || "").trim()).filter(Boolean))];
     }
     const normalized = String(value || "").trim();
-    return normalized ? [normalized] : [];
+    if (!normalized) {
+      return [];
+    }
+    if (normalized.includes(",")) {
+      return [...new Set(normalized.split(",").map(item => item.trim()).filter(Boolean))];
+    }
+    return [normalized];
+  }
+
+  function clampNumber(value, minimum, maximum, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return Number(fallback || 0);
+    }
+    return Math.min(maximum, Math.max(minimum, parsed));
   }
 
   function getInviteConfig() {
@@ -5960,7 +6832,7 @@
   }
 
   function buildClientManagerInviteLink(token) {
-    return `${window.location.origin}${getAppBasePath()}accept-invite/${encodeURIComponent(String(token || "").trim())}`;
+    return `${window.location.origin}${getAppBasePath()}${buildHashPath(`accept-invite/${encodeURIComponent(String(token || "").trim())}`)}`;
   }
 
   function findLocalClientInvite(token) {
@@ -7158,7 +8030,7 @@
     const route = mode === "internal"
       ? `client-approval/${approval.id}`
       : `approve/${approval.approvalToken || approval.id}`;
-    return `${window.location.origin}${getAppBasePath()}${route}`;
+    return `${window.location.origin}${getAppBasePath()}${buildHashPath(route)}`;
   }
 
   function buildApprovalShareText(approval, link) {
@@ -7676,6 +8548,10 @@
     const workerOptions = Array.isArray(punchState.siteWorkers) && punchState.siteWorkers.length
       ? punchState.siteWorkers
       : (Array.isArray(selectedDirectory?.publicWorkerOptions) ? selectedDirectory.publicWorkerOptions : []);
+    const selectedWorkerId = String(punchState.selectedWorkerId || "").trim();
+    const selectedWorkerOption = workerOptions.find(worker => String(worker.id || "").trim() === selectedWorkerId) || null;
+    const workerNameDraft = String(punchState.workerNameDraft || selectedWorkerOption?.name || "").trim();
+    const pinCodeDraft = String(punchState.pinCodeDraft || "").trim();
     const selectedSite = (punchState.sites || []).find(site => site.id === punchState.siteId) || null;
     const resolvedAgencyName = selectedDirectory?.agencyName || punchState.agencyName || agencyOptions.find(agency => agency.id === punchState.agencyId)?.name || '';
     const resolvedCompanyName = selectedDirectory?.companyName || punchState.companyName || companyOptions.find(company => company.id === punchState.companyId)?.name || '';
@@ -7684,16 +8560,19 @@
     const punchDisabled = punchReady && !punchState.saving ? '' : 'disabled';
     const currentStatus = punchState.lastStatus || getPunchStatusLabelFromAction(punchState.lastAction);
     const currentWorker = punchState.lastWorkerName || 'Worker';
-    const isQrStation = state.route === 'punch' && !!punchState.siteId;
+    const isQrStation = !!punchState.siteId && !punchState.forceManualSelection;
     const showSelectors = !isQrStation;
     const topTitle = isQrStation ? (resolvedSiteName || 'Punch Station') : 'Worker Punch Clock';
     const topCopy = isQrStation
-      ? 'Select or type your name, then tap the punch you need.'
-      : 'Choose your staffing agency, company, site, and name. Then tap the punch you need.';
-    const contextLine = [resolvedAgencyName, resolvedCompanyName, resolvedSiteName].filter(Boolean).join(' � ');
+      ? 'Select or type your name, enter your 4-digit PIN, then tap the punch you need.'
+      : 'Choose your staffing agency, company, site, worker name, and 4-digit PIN. Then tap the punch you need.';
+    const contextLine = [resolvedAgencyName, resolvedCompanyName, resolvedSiteName].filter(Boolean).join(' / ');
     const workerInputHelp = workerOptions.length
       ? 'Select your name from the list or type it manually if you do not see it yet.'
       : (punchState.siteId ? 'No assigned workers are loaded for this site yet. Type the worker name manually.' : 'Type the worker name exactly as it should appear on the timecard.');
+    const normalizedWorkerInputHelp = workerOptions.length
+      ? 'Select your name from the list or type the exact assigned worker name, then enter your PIN.'
+      : (punchState.siteId ? 'No assigned workers are loaded for this site yet. Ask the agency to assign workers before using this QR clock.' : 'Enter the assigned worker name exactly as it appears in Portaly, then enter the 4-digit PIN.');
     const savingMessage = punchState.saving ? 'Saving punch...' : '';
     const emptyMessage = punchState.emptyMessage
       || (!companyOptions.length
@@ -7812,14 +8691,19 @@
                   <label for="public-punch-worker">Worker</label>
                   <select id="public-punch-worker" name="publicPunchWorkerId">
                     <option value="">Type the worker name instead</option>
-                    ${workerOptions.map(worker => `<option value="${escapeHtml(worker.id)}">${escapeHtml(worker.name)}</option>`).join('')}
+                    ${workerOptions.map(worker => `<option value="${escapeHtml(worker.id)}" ${selectedWorkerId === String(worker.id || "").trim() ? 'selected' : ''}>${escapeHtml(worker.name)}</option>`).join('')}
                   </select>
                 </div>
               ` : ''}
               <div class="field-group">
                 <label for="public-punch-worker-name">Worker name</label>
-                <input id="public-punch-worker-name" name="publicPunchWorkerName" type="text" placeholder="${escapeAttribute(workerOptions.length ? 'Select the worker or type the name here' : 'Type the worker name')}" />
-                <p class="helper-copy">${escapeHtml(workerInputHelp)}</p>
+                <input id="public-punch-worker-name" name="publicPunchWorkerName" type="text" value="${escapeAttribute(workerNameDraft)}" placeholder="${escapeAttribute(workerOptions.length ? 'Select the worker or type the name here' : 'Type the worker name')}" />
+                <p class="helper-copy">${escapeHtml(normalizedWorkerInputHelp)}</p>
+              </div>
+              <div class="field-group">
+                <label for="public-punch-pin">4-digit PIN</label>
+                <input id="public-punch-pin" name="publicPunchPinCode" type="password" inputmode="numeric" maxlength="4" value="${escapeAttribute(pinCodeDraft)}" placeholder="Enter your PIN" />
+                <p class="helper-copy">Workers do not need email access. Use the PIN saved on the worker profile.</p>
               </div>
             </div>
 
@@ -7845,6 +8729,7 @@
             ` : ''}
 
             <div class="public-punch-footer">
+              <button class="button button-secondary button-block" data-action="view-public-worker-hours" type="button" ${punchDisabled}>View My Hours</button>
               <button class="button button-ghost button-text" data-action="open-punch-request" type="button">Need help? Submit punch request</button>
               ${punchState.requestHelpMessage ? `<p class="helper-copy">${escapeHtml(punchState.requestHelpMessage)}</p>` : ''}
             </div>
@@ -9572,9 +10457,13 @@
               <button class="button button-primary" data-action="go-route" data-route="approvals" type="button">Approve Timesheets</button>
               <button class="button button-secondary" data-action="go-route" data-route="client-corrections" type="button">Review Corrections</button>
               <button class="button button-ghost" data-action="go-route" data-route="workers" type="button">View Assigned Workers</button>
+              <button class="button button-ghost" data-action="open-job-request-form" data-request-type="request_more_workers" type="button">Request More Workers</button>
+              <button class="button button-ghost" data-action="open-job-request-form" data-request-type="worker_issue" type="button">Report Worker Issue</button>
             </div>
           </div>
         </div>
+
+        ${renderJobRequestPanel(scoped)}
       </section>
     `;
   }
@@ -9594,6 +10483,8 @@
     const usage = getUsageStats(scoped, state.session.agencyId);
     const plan = getPlanDefinition(getCurrentAgency()?.planId || "agency");
     const showOnboarding = shouldShowEmptyWorkspaceOnboarding(scoped);
+    const showRolloutChecklist = ["agencyOwner", "agencyAdmin"].includes(state.session.role);
+    const showSampleDataActions = state.session.mode !== "cloud" && canDeleteSampleData();
 
     return `
       <section class="stack-lg">
@@ -9602,12 +10493,16 @@
           ${renderMetricCard("Total Hours This Week", formatHours(metrics.payrollHours), "Approved and submitted hours for payroll prep", "HR")}
           ${renderMetricCard("Pending Corrections", metrics.pendingPunchRequests, "Worker correction requests waiting for review", "CR")}
           ${renderMetricCard("Missing Punches", metrics.missingClockOuts, "Timecards that still need cleanup", "MP")}
+          ${renderMetricCard("Late Clock-Ins", metrics.lateWorkers, "Workers who clocked in late this week", "LT")}
+          ${renderMetricCard("No-Show Risks", metrics.noShows, "Assignments with no clock-in today", "NS")}
+          ${renderMetricCard("Overtime Risk", metrics.overtimeRisk, "Workers already close to overtime", "OT")}
           ${renderMetricCard("Clients", metrics.activeClients, "Active client accounts in this agency", "CL")}
           ${renderMetricCard("Sites", metrics.activeSites, "Active warehouse and site locations", "SI")}
           ${renderMetricCard("Payroll Status", metrics.pendingApprovals ? "Waiting Approval" : "Ready To Export", metrics.pendingApprovals ? `${metrics.pendingApprovals} timesheet${metrics.pendingApprovals === 1 ? "" : "s"} still waiting on approval` : "Approved hours are ready for export", "PY")}
           ${renderMetricCard("Subscription Status", formatStatusLabel(metrics.subscriptionStatus), `${escapeHtml(plan.label)} plan`, "SS")}
         </div>
 
+        ${showRolloutChecklist ? renderRolloutChecklist(scoped) : ""}
         ${showOnboarding ? renderEmptyWorkspaceOnboarding() : ""}
 
         <div class="split-grid">
@@ -9643,13 +10538,15 @@
                 ${canManageClients() ? `<button class="button button-secondary" data-action="open-client-form" type="button">Add Client</button>` : ""}
                 ${canManageSites() ? `<button class="button button-secondary" data-action="open-site-form" type="button">Add Site</button>` : ""}
                 ${canManageAssignments() ? `<button class="button button-secondary" data-action="open-assignment-form" type="button">Assign Worker</button>` : ""}
+                ${canManageAssignments() ? `<button class="button button-secondary" data-action="open-job-request-form" data-request-type="warehouse_job" type="button">Create Job Request</button>` : ""}
                 ${canManageSites() ? `<button class="button button-secondary" data-action="open-publish-punch-page" type="button">Publish to Punch Page</button>` : ""}
                 ${canManageSites() ? `<button class="button button-ghost" data-action="go-route" data-route="qr-codes" type="button">Generate QR</button>` : ""}
+                ${canRunClockTest() ? `<button class="button button-ghost" data-action="open-clock-test" type="button">Run Clock Test</button>` : ""}
                 ${canReviewPunchRequests() ? `<button class="button button-ghost" data-action="go-route" data-route="live-punches" type="button">Review Punch Requests</button>` : ""}
                 ${canApproveRecord() ? `<button class="button button-ghost" data-action="go-route" data-route="approvals" type="button">Review Approvals</button>` : ""}
                 ${canManagePunches() ? `<button class="button button-ghost" data-action="go-route" data-route="payroll" type="button">Export Payroll</button>` : ""}
                 ${canManageBilling() ? `<button class="button button-ghost" data-action="go-route" data-route="billing" type="button">Manage Billing</button>` : ""}
-                ${canDeleteSampleData() ? `<button class="button button-danger" data-action="delete-sample-data" type="button">Delete Sample Data</button>` : ""}
+                ${showSampleDataActions ? `<button class="button button-danger" data-action="delete-sample-data" type="button">Delete Sample Data</button>` : ""}
               </div>
             </div>
 
@@ -9662,6 +10559,11 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="split-grid">
+          ${renderAiAssistantPanel(scoped)}
+          ${renderJobRequestPanel(scoped)}
         </div>
       </section>
     `;
@@ -9929,6 +10831,118 @@
     `;
   }
 
+  function renderAiAssistantPanel(scoped) {
+    const prompt = state.assistant.prompt || "Which workers were late this week?";
+    const headline = state.assistant.headline || "Ready";
+    const response = state.assistant.response || "Use one of the staffing prompts below to summarize timekeeping, approvals, and candidate availability from your current Portaly data.";
+    const promptButtons = [
+      "Which workers were late this week?",
+      "Who has missing punches?",
+      "Which clients still need to approve timesheets?",
+      "Find forklift workers available this week.",
+      "Rank workers for this warehouse job.",
+      "Summarize payroll issues for this week."
+    ];
+
+    return `
+      <div class="surface-card">
+        <div class="card-top">
+          <div>
+            <p class="eyebrow">AI Staffing Assistant</p>
+            <h2 class="page-heading">Local staffing intelligence, ready for API wiring later</h2>
+          </div>
+          <span class="status-badge status-info">Mock logic</span>
+        </div>
+        <div class="stack-sm" style="margin-top: 18px;">
+          <div class="detail-grid">
+            ${renderDetailBox("Prompt", prompt)}
+            ${renderDetailBox("Latest run", state.assistant.lastRunAt ? formatDateTime(state.assistant.lastRunAt) : "Not run yet")}
+          </div>
+          <div class="support-card">
+            <p class="eyebrow">${escapeHtml(headline)}</p>
+            <p>${escapeHtml(response)}</p>
+          </div>
+          <div class="page-actions">
+            ${promptButtons.map(item => `<button class="button button-ghost" data-action="run-ai-assistant" data-prompt="${escapeAttribute(item)}" type="button">${escapeHtml(item)}</button>`).join("")}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderJobRequestPanel(scoped) {
+    const jobRequests = (scoped.jobRequests || [])
+      .slice()
+      .sort((left, right) => compareDates(right.updatedAt || right.createdAt, left.updatedAt || left.createdAt))
+      .slice(0, 4);
+    const latest = jobRequests[0] || null;
+    const matches = latest ? getCandidateMatchesForJobRequest(latest.id, scoped).slice(0, 4) : [];
+
+    return `
+      <div class="surface-card">
+        <div class="card-top">
+          <div>
+            <p class="eyebrow">Candidate Matching</p>
+            <h2 class="page-heading">Job requests and ranked worker suggestions</h2>
+          </div>
+          <div class="page-actions">
+            <button class="button button-primary" data-action="open-job-request-form" data-request-type="request_more_workers" type="button">New Staffing Request</button>
+            ${state.session.role === "clientManager" ? `<button class="button button-secondary" data-action="open-job-request-form" data-request-type="no_show_report" type="button">Report No-Show</button>` : ""}
+          </div>
+        </div>
+        ${jobRequests.length ? `
+          <div class="table-wrap" style="margin-top: 18px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Request</th>
+                  <th>Client</th>
+                  <th>Site</th>
+                  <th>Workers Needed</th>
+                  <th>Status</th>
+                  <th>Top Match</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${jobRequests.map(request => {
+                  const topMatch = getCandidateMatchesForJobRequest(request.id, scoped)[0];
+                  return `
+                    <tr>
+                      <td><strong>${escapeHtml(request.role || formatStatusLabel(request.requestType || "request"))}</strong><div class="inline-note">${escapeHtml(request.shift || "Shift not set")}</div></td>
+                      <td>${escapeHtml(getClientName(request.clientId))}</td>
+                      <td>${escapeHtml(getSiteName(request.siteId))}</td>
+                      <td>${escapeHtml(String(request.workerCount || 1))}</td>
+                      <td>${renderInlineStatus(request.status || "open")}</td>
+                      <td>${topMatch ? `${escapeHtml(topMatch.workerName)} · ${escapeHtml(String(topMatch.matchScore || topMatch.score || 0))}%` : "Pending"}</td>
+                      <td><div class="table-actions"><button class="button button-ghost" data-action="open-job-request-form" data-job-request-id="${escapeHtml(request.id)}" type="button">Edit</button><button class="button button-ghost" data-action="view-job-matches" data-job-request-id="${escapeHtml(request.id)}" type="button">View Matches</button></div></td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        ` : renderEmptyState("No staffing requests yet", "Create a warehouse request, no-show report, or extra headcount request to generate ranked worker suggestions.")}
+        ${latest && matches.length ? `
+          <div class="stack-sm" style="margin-top: 18px;">
+            <p class="eyebrow">Top matches for ${escapeHtml(latest.role || "latest request")}</p>
+            ${matches.map(match => `
+              <div class="surface-card">
+                <div class="card-top">
+                  <div>
+                    <strong>${escapeHtml(match.workerName)}</strong>
+                    <p class="inline-note">${escapeHtml(match.explanation)}</p>
+                  </div>
+                  <span class="status-badge status-success">${escapeHtml(String(match.matchScore || match.score || 0))}% match</span>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }
+
   function renderClientWorkersPage(scoped) {
     const workers = (scoped.workers || []).slice().sort((left, right) => fullName(left).localeCompare(fullName(right)));
     const weekHoursByWorker = new Map();
@@ -10013,6 +11027,7 @@
                     <th>Status</th>
                     <th>Client</th>
                     <th>Site</th>
+                    <th>Skills / Shift</th>
                     <th>Pay Rate</th>
                     <th>Last Punch</th>
                     <th>Total Hours This Week</th>
@@ -10035,6 +11050,7 @@
                         <td>${renderInlineStatus(punchState.label)}</td>
                         <td>${escapeHtml(getClientName(worker.assignedClientId))}</td>
                         <td>${escapeHtml(getSiteName(worker.assignedSiteId))}</td>
+                        <td>${escapeHtml((worker.skills || []).slice(0, 2).join(", ") || worker.preferredShift || "Not set")}<div class="inline-note">Attendance ${escapeHtml(String(Number(worker.attendanceScore ?? 0)))} · Reliability ${escapeHtml(String(Number(worker.reliabilityScore ?? 0)))}</div></td>
                         <td>${escapeHtml(formatCurrency(worker.payRate))}</td>
                         <td>${escapeHtml(lastPunch ? formatDateTime(lastPunch.timestamp) : "No punch today")}</td>
                         <td>${escapeHtml(formatHours(weekHours))}</td>
@@ -10147,23 +11163,32 @@
                   </tr>
                 </thead>
                 <tbody>
-                  ${sites.map(site => `
-                    <tr>
-                      <td>${escapeHtml(site.name)}</td>
-                      <td>${escapeHtml(getClientName(site.clientId))}</td>
-                      <td>${escapeHtml(buildSiteAddress(site))}</td>
-                      <td>${renderInlineStatus(site.status)}</td>
-                      <td>${escapeHtml(String(scoped.workers.filter(worker => worker.assignedSiteId === site.id).length))}</td>
-                      <td>
-                        <div class="table-actions">
-                          <button class="button button-ghost" data-action="open-site-form" data-site-id="${escapeHtml(site.id)}" type="button">Edit</button>
-                          <button class="button button-ghost" data-action="open-site-qr" data-site-id="${escapeHtml(site.id)}" type="button">Generate Site QR</button>
-                          ${canDeactivateEntity("sites") ? `<button class="button button-ghost" data-action="deactivate-site" data-site-id="${escapeHtml(site.id)}" type="button">Deactivate</button>` : ""}
-                          ${canPermanentlyDeleteRecords() ? `<button class="button button-danger" data-action="delete-site" data-site-id="${escapeHtml(site.id)}" type="button">Delete</button>` : ""}
-                        </div>
-                      </td>
-                    </tr>
-                  `).join("")}
+                  ${sites.map(site => {
+                    const clockLink = buildSiteLink(site.id, {
+                      agencyId: site.agencyId || state.session.agencyId || state.session.agency?.id || "",
+                      clientId: site.clientId || ""
+                    });
+                    return `
+                      <tr>
+                        <td>${escapeHtml(site.name)}</td>
+                        <td>${escapeHtml(getClientName(site.clientId))}</td>
+                        <td>${escapeHtml(buildSiteAddress(site))}</td>
+                        <td>${renderInlineStatus(site.status)}</td>
+                        <td>${escapeHtml(String(scoped.workers.filter(worker => worker.assignedSiteId === site.id).length))}</td>
+                        <td>
+                          <div class="table-actions">
+                            <button class="button button-ghost" data-action="open-site-form" data-site-id="${escapeHtml(site.id)}" type="button">Edit</button>
+                            <button class="button button-ghost" data-action="open-site-qr" data-site-id="${escapeHtml(site.id)}" type="button">Generate Site QR</button>
+                            <button class="button button-secondary" data-action="copy-link" data-copy="${escapeAttribute(clockLink)}" data-copy-success="${escapeAttribute("Clock link copied.")}" type="button">Copy Clock Link</button>
+                            <a class="button button-secondary" href="${escapeAttribute(clockLink)}" target="_blank" rel="noopener noreferrer">Open Clock Page</a>
+                            ${canRunClockTest() ? `<button class="button button-ghost" data-action="open-clock-test" data-site-id="${escapeHtml(site.id)}" type="button">Run Clock Test</button>` : ""}
+                            ${canDeactivateEntity("sites") ? `<button class="button button-ghost" data-action="deactivate-site" data-site-id="${escapeHtml(site.id)}" type="button">Deactivate</button>` : ""}
+                            ${canPermanentlyDeleteRecords() ? `<button class="button button-danger" data-action="delete-site" data-site-id="${escapeHtml(site.id)}" type="button">Delete</button>` : ""}
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join("")}
                 </tbody>
               </table>
             </div>
@@ -10969,7 +11994,9 @@
                       <p class="helper-copy qr-link-text">${escapeHtml(link || "Link deactivated")}</p>
                       <div class="table-actions qr-actions">
                         <button class="button button-primary" data-action="publish-site-to-punch-page" data-site-id="${escapeAttribute(site.id)}" type="button">Publish</button>
-                        <button class="button button-secondary" data-action="copy-link" data-copy="${escapeAttribute(link)}" data-copy-success="${escapeAttribute("Punch link copied.")}" type="button" ${link ? "" : "disabled"}>Copy Link</button>
+                        <button class="button button-secondary" data-action="copy-link" data-copy="${escapeAttribute(link)}" data-copy-success="${escapeAttribute("Clock link copied.")}" type="button" ${link ? "" : "disabled"}>Copy Clock Link</button>
+                        ${link ? `<a class="button button-secondary" href="${escapeAttribute(link)}" target="_blank" rel="noopener noreferrer">Open Clock Page</a>` : `<button class="button button-secondary" type="button" disabled>Open Clock Page</button>`}
+                        ${canRunClockTest() ? `<button class="button button-ghost" data-action="open-clock-test" data-site-id="${escapeAttribute(site.id)}" type="button">Run Clock Test</button>` : ""}
                         <button class="button button-ghost" data-action="download-qr-png" data-qr-key="${escapeAttribute(site.id)}" data-link="${escapeAttribute(link)}" data-file-name="${escapeAttribute(fileName)}" type="button" ${link ? "" : "disabled"}>Download PNG</button>
                         <button class="button button-ghost" data-action="print-qr-card" data-qr-key="${escapeAttribute(site.id)}" data-link="${escapeAttribute(link)}" data-company-name="${escapeAttribute(companyName)}" data-site-name="${escapeAttribute(site.name)}" type="button" ${link ? "" : "disabled"}>Print QR</button>
                         <button class="button button-ghost" data-action="open-qr-form" data-qr-type="site" data-site-id="${escapeHtml(site.id)}" type="button">Edit</button>
@@ -11350,6 +12377,7 @@
     }
 
     const punchState = getWorkerPunchState(worker.id, scoped);
+    const assignment = getWorkerAssignment(worker.id, scoped);
     const recent = getWorkerPunchesForToday(worker.id, scoped.punches).slice().reverse().slice(0, 6);
 
     return `
@@ -11376,6 +12404,10 @@
             <button class="button button-secondary button-large" data-action="punch-action" data-punch="endLunch" type="button" ${punchState.allowed.endLunch ? "" : "disabled"}>End Lunch</button>
             <button class="button button-ghost button-large" data-action="punch-action" data-punch="clockOut" type="button" ${punchState.allowed.clockOut ? "" : "disabled"}>Clock Out</button>
           </div>
+          <div class="page-actions" style="margin-top: 16px;">
+            <button class="button button-secondary" data-action="go-route" data-route="my-history" type="button">View My Hours</button>
+            <button class="button button-ghost" data-action="open-worker-correction-request" type="button">Request Time Fix</button>
+          </div>
           ${state.notice ? `
             <div class="worker-confirmation">
               <strong>${escapeHtml(state.notice.includes("clocked out") ? "Your shift is complete" : "Punch saved")}</strong>
@@ -11385,6 +12417,17 @@
         </div>
 
         <div class="stack-md">
+          <div class="worker-card">
+            <p class="eyebrow">Assignment</p>
+            <h3>Current assignment</h3>
+            <div class="worker-meta-grid">
+              ${renderWorkerMeta("Client", getClientName(worker.assignedClientId))}
+              ${renderWorkerMeta("Site", getSiteName(worker.assignedSiteId))}
+              ${renderWorkerMeta("Shift", assignment?.shiftSchedule || worker.preferredShift || "Not set")}
+              ${renderWorkerMeta("Pay rate", formatCurrency(worker.payRate))}
+            </div>
+          </div>
+
           <div class="worker-card">
             <p class="eyebrow">Recent Punch History</p>
             <h3>Today</h3>
@@ -11448,7 +12491,7 @@
           <div class="support-card">
             <p class="eyebrow">Help</p>
             <h3>Need a correction?</h3>
-            <p>If a punch is missing or wrong, reach out to your agency so they can correct the record and keep payroll accurate.</p>
+            <p>If a punch is missing or wrong, submit a correction request from the punch screen or contact your agency before payroll is processed.</p>
           </div>
         </div>
       </div>
@@ -11658,6 +12701,50 @@
                 </select>
               </div>
             </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-code">Worker ID / code</label>
+                <input id="worker-code" name="workerCode" type="text" value="${escapeAttribute(worker?.workerCode || "")}" placeholder="Example: HS-2048" />
+              </div>
+              <div class="field-group">
+                <label for="worker-location">Location</label>
+                <input id="worker-location" name="location" type="text" value="${escapeAttribute(worker?.location || "")}" placeholder="Dallas, TX" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-shift">Preferred shift</label>
+                <input id="worker-shift" name="preferredShift" type="text" value="${escapeAttribute(worker?.preferredShift || "")}" placeholder="1st shift / nights / weekends" />
+              </div>
+              <div class="field-group">
+                <label for="worker-availability">Availability</label>
+                <input id="worker-availability" name="availability" type="text" value="${escapeAttribute((worker?.availability || []).join(", "))}" placeholder="Mon-Fri, weekends, on-call" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-skills">Skills</label>
+                <input id="worker-skills" name="skills" type="text" value="${escapeAttribute((worker?.skills || []).join(", "))}" placeholder="Forklift, RF scanner, pallet jack" />
+              </div>
+              <div class="field-group">
+                <label for="worker-certifications">Certifications</label>
+                <input id="worker-certifications" name="certifications" type="text" value="${escapeAttribute((worker?.certifications || []).join(", "))}" placeholder="Forklift, OSHA 10" />
+              </div>
+            </div>
+            <div class="form-row two">
+              <div class="field-group">
+                <label for="worker-attendance-score">Attendance score</label>
+                <input id="worker-attendance-score" name="attendanceScore" type="number" min="0" max="100" value="${escapeAttribute(String(worker?.attendanceScore ?? 90))}" />
+              </div>
+              <div class="field-group">
+                <label for="worker-reliability-score">Reliability score</label>
+                <input id="worker-reliability-score" name="reliabilityScore" type="number" min="0" max="100" value="${escapeAttribute(String(worker?.reliabilityScore ?? 88))}" />
+              </div>
+            </div>
+            <div class="field-group">
+              <label for="worker-previous-sites">Previous sites worked</label>
+              <input id="worker-previous-sites" name="previousSites" type="text" value="${escapeAttribute((worker?.previousSites || []).join(", "))}" placeholder="Dallas Dock 1, Fort Worth Cold Hub" />
+            </div>
             <div class="field-group">
               <label for="worker-notes">Notes</label>
               <textarea id="worker-notes" name="notes">${escapeHtml(worker?.notes || "")}</textarea>
@@ -11709,10 +12796,17 @@
             ${renderDetailBox("Status", punchState.label)}
             ${renderDetailBox("Client", getClientName(worker.assignedClientId))}
             ${renderDetailBox("Site", getSiteName(worker.assignedSiteId))}
+            ${renderDetailBox("Worker code", worker.workerCode || "-")}
             ${renderDetailBox("Pay rate", formatCurrency(worker.payRate))}
             ${renderDetailBox("4-digit PIN", worker.pinCode || "-")}
             ${renderDetailBox("Phone", worker.phone || "-")}
             ${renderDetailBox("Email", worker.email || "-")}
+            ${renderDetailBox("Preferred shift", worker.preferredShift || "-")}
+            ${renderDetailBox("Availability", (worker.availability || []).join(", ") || "-")}
+            ${renderDetailBox("Skills", (worker.skills || []).join(", ") || "-")}
+            ${renderDetailBox("Certifications", (worker.certifications || []).join(", ") || "-")}
+            ${renderDetailBox("Attendance score", `${Number(worker.attendanceScore ?? 0)} / 100`)}
+            ${renderDetailBox("Reliability score", `${Number(worker.reliabilityScore ?? 0)} / 100`)}
           </div>
           ${getWorkerPrimaryNote(worker) ? `
             <div class="support-card" style="margin-top: 18px;">
@@ -11842,6 +12936,7 @@
   function renderSiteFormModal() {
     const site = state.modal.siteId ? getScopedData().sites.find(item => item.id === state.modal.siteId) : null;
     const clients = getScopedData().clients;
+    const clientManagers = getScopedData().users.filter(user => user.role === "clientManager");
     const agencies = getScopedData().agencies.length ? getScopedData().agencies : state.cache.agencies;
     return `
       <div class="modal">
@@ -11920,6 +13015,11 @@
             <div class="field-group">
               <label for="site-notes">Notes</label>
               <textarea id="site-notes" name="notes">${escapeHtml(site?.notes || "")}</textarea>
+            </div>
+            <div class="field-group">
+              <label for="site-assigned-managers">Assigned client managers</label>
+              <input id="site-assigned-managers" name="assignedManagerIds" type="text" value="${escapeAttribute((site?.assignedManagerIds || []).join(", "))}" placeholder="${escapeAttribute(clientManagers.map(user => `${user.id} (${fullName(user)})`).join(", "))}" />
+              <p class="helper-copy">Enter client manager user IDs separated by commas.</p>
             </div>
             <div class="modal-actions">
               <button class="button button-primary" type="submit">Save Site</button>
@@ -12160,6 +13260,8 @@
       sites: [],
       workers: [],
       assignments: [],
+      jobRequests: [],
+      candidateMatches: [],
       punches: [],
       punchRequests: [],
       timesheets: [],
@@ -12180,6 +13282,9 @@
       clockedInNow: buildLivePunchRows(safeScoped).filter(row => row.baseStatusKey === "clocked-in").length,
       onLunch: buildLivePunchRows(safeScoped).filter(row => row.baseStatusKey === "on-lunch").length,
       missingClockOuts: buildLivePunchRows(safeScoped).filter(row => row.exception === "Missing clock out").length,
+      lateWorkers: getLateWorkersThisWeek(safeScoped).length,
+      noShows: getNoShowAssignments(safeScoped).length,
+      overtimeRisk: getOvertimeRiskWorkers(safeScoped).length,
       pendingPunchRequests: safeScoped.punchRequests.filter(request => request.status === "pending").length,
       pendingApprovals: safeScoped.approvals.filter(approval => approval.status === "pending").length,
       payrollHours: sumNumbers(safeScoped.timesheets.map(timesheet => timesheet.approvedHours || 0)),
@@ -12256,6 +13361,360 @@
         timesheet.overtimeHours,
         Number(timesheet.payRate || getWorker(timesheet.workerId)?.payRate || 0)
       )))
+    };
+  }
+
+  function normalizeLowerTokens(value) {
+    return normalizeStringArray(value).map(item => item.toLowerCase());
+  }
+
+  function getWeekWindow(anchor = state.now) {
+    const weekStart = startOfWeek(anchor);
+    const weekEnd = addDays(weekStart, 6);
+    weekEnd.setHours(23, 59, 59, 999);
+    return {
+      weekStart,
+      weekEnd
+    };
+  }
+
+  function getPunchesForWeek(punches, anchor = state.now) {
+    const { weekStart, weekEnd } = getWeekWindow(anchor);
+    return (punches || []).filter(punch => {
+      const punchAt = new Date(punch.timestamp || "");
+      return !Number.isNaN(punchAt.getTime()) && punchAt >= weekStart && punchAt <= weekEnd;
+    });
+  }
+
+  function parseScheduledStartMinutes(worker, assignment) {
+    const raw = String(assignment?.shiftSchedule || worker?.preferredShift || "").trim().toLowerCase();
+    const timeMatch = raw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    if (timeMatch) {
+      let hours = Number(timeMatch[1] || 0);
+      const minutes = Number(timeMatch[2] || 0);
+      const meridiem = String(timeMatch[3] || "").toLowerCase();
+      if (meridiem === "pm" && hours < 12) {
+        hours += 12;
+      }
+      if (meridiem === "am" && hours === 12) {
+        hours = 0;
+      }
+      return (hours * 60) + minutes;
+    }
+    if (raw.includes("3rd") || raw.includes("third") || raw.includes("overnight") || raw.includes("night")) {
+      return 22 * 60;
+    }
+    if (raw.includes("2nd") || raw.includes("second") || raw.includes("swing")) {
+      return 15 * 60;
+    }
+    return 7 * 60;
+  }
+
+  function getWorkerAssignment(workerId, scoped = getScopedData()) {
+    return (scoped.assignments || []).find(assignment => assignment.workerId === workerId && isActiveAssignmentStatus(assignment.status))
+      || (scoped.assignments || []).find(assignment => assignment.workerId === workerId)
+      || null;
+  }
+
+  function getLateWorkersThisWeek(scoped = getScopedData()) {
+    const weekPunches = getPunchesForWeek(scoped.punches || []);
+    const results = [];
+
+    (scoped.workers || []).forEach(worker => {
+      const assignment = getWorkerAssignment(worker.id, scoped);
+      const scheduledMinutes = parseScheduledStartMinutes(worker, assignment);
+      const dailyClockIns = weekPunches
+        .filter(punch => punch.workerId === worker.id && punch.action === "clockIn")
+        .reduce((map, punch) => {
+          const key = formatDateInput(punch.timestamp);
+          if (!map.has(key) || compareDates(punch.timestamp, map.get(key).timestamp) < 0) {
+            map.set(key, punch);
+          }
+          return map;
+        }, new Map());
+
+      dailyClockIns.forEach((punch, dateKey) => {
+        const punchAt = new Date(punch.timestamp);
+        const actualMinutes = (punchAt.getHours() * 60) + punchAt.getMinutes();
+        const lateMinutes = actualMinutes - scheduledMinutes;
+        if (lateMinutes > 10) {
+          results.push({
+            workerId: worker.id,
+            workerName: fullName(worker),
+            clientId: worker.assignedClientId,
+            siteId: worker.assignedSiteId,
+            siteName: getSiteName(worker.assignedSiteId),
+            dateKey,
+            lateMinutes
+          });
+        }
+      });
+    });
+
+    return results.sort((left, right) => right.lateMinutes - left.lateMinutes);
+  }
+
+  function getMissingPunchWorkers(scoped = getScopedData()) {
+    return buildLivePunchRows(scoped)
+      .filter(row => row.exception === "Missing clock out" || row.baseStatusKey === "on-lunch" || row.exception === "Duplicate punch")
+      .map(row => ({
+        workerId: row.workerId,
+        workerName: row.workerName,
+        siteName: row.siteName,
+        issue: row.exception || row.statusLabel
+      }));
+  }
+
+  function getPendingApprovalClients(scoped = getScopedData()) {
+    const grouped = new Map();
+    (scoped.approvals || [])
+      .filter(approval => approval.status === "pending")
+      .forEach(approval => {
+        const key = approval.clientId || "unknown";
+        const current = grouped.get(key) || {
+          clientId: key,
+          clientName: getClientName(key),
+          pendingCount: 0
+        };
+        current.pendingCount += 1;
+        grouped.set(key, current);
+      });
+
+    return Array.from(grouped.values()).sort((left, right) => right.pendingCount - left.pendingCount);
+  }
+
+  function getOvertimeRiskWorkers(scoped = getScopedData()) {
+    return (scoped.timesheets || [])
+      .filter(timesheet => Number(timesheet.regularHours || 0) >= 36 && Number(timesheet.overtimeHours || 0) < 1)
+      .map(timesheet => ({
+        workerId: timesheet.workerId,
+        workerName: getWorkerName(timesheet.workerId),
+        clientId: timesheet.clientId,
+        siteId: timesheet.siteId,
+        totalHours: Number(timesheet.approvedHours || 0)
+      }))
+      .sort((left, right) => right.totalHours - left.totalHours);
+  }
+
+  function getLongShiftWorkers(scoped = getScopedData()) {
+    const weekPunches = getPunchesForWeek(scoped.punches || []);
+    const grouped = new Map();
+    weekPunches.forEach(punch => {
+      const key = `${punch.workerId}::${formatDateInput(punch.timestamp)}`;
+      const rows = grouped.get(key) || [];
+      rows.push(punch);
+      grouped.set(key, rows);
+    });
+
+    const alerts = [];
+    grouped.forEach((rows, key) => {
+      const [workerId, dateKey] = key.split("::");
+      const hours = calculateHoursFromPunches(rows, state.now);
+      if (hours > 12) {
+        alerts.push({
+          workerId,
+          workerName: getWorkerName(workerId),
+          dateKey,
+          hours
+        });
+      }
+    });
+    return alerts.sort((left, right) => right.hours - left.hours);
+  }
+
+  function getNoShowAssignments(scoped = getScopedData()) {
+    const todayKey = formatDateInput(state.now);
+    return (scoped.assignments || [])
+      .filter(assignment => isActiveAssignmentStatus(assignment.status))
+      .filter(assignment => {
+        const worker = getWorker(assignment.workerId);
+        if (!worker || worker.status === "inactive") {
+          return false;
+        }
+        const workerPunches = (scoped.punches || []).filter(punch => punch.workerId === assignment.workerId && formatDateInput(punch.timestamp) === todayKey);
+        return !workerPunches.some(punch => punch.action === "clockIn");
+      })
+      .map(assignment => ({
+        assignmentId: assignment.id,
+        workerId: assignment.workerId,
+        workerName: getWorkerName(assignment.workerId),
+        clientId: assignment.clientId,
+        siteId: assignment.siteId,
+        siteName: getSiteName(assignment.siteId)
+      }));
+  }
+
+  function scoreWorkerForJobRequest(worker, jobRequest, scoped = getScopedData()) {
+    const workerSkills = new Set(normalizeLowerTokens(worker.skills));
+    const requiredSkills = normalizeLowerTokens(jobRequest.requiredSkills);
+    const workerCerts = new Set(normalizeLowerTokens(worker.certifications));
+    const requiredCerts = normalizeLowerTokens(jobRequest.requiredCertifications);
+    const availability = normalizeLowerTokens(worker.availability);
+    const shift = String(jobRequest.shift || "").trim().toLowerCase();
+    const location = String(jobRequest.location || "").trim().toLowerCase();
+    const workerLocation = String(worker.location || "").trim().toLowerCase();
+    const previousSites = new Set(normalizeLowerTokens(worker.previousSites));
+    const currentSiteName = String(jobRequest.siteName || getSiteName(jobRequest.siteId) || "").trim().toLowerCase();
+    const currentClientName = String(jobRequest.clientName || getClientName(jobRequest.clientId) || "").trim().toLowerCase();
+    const workerPayRate = Number(worker.payRate || 0);
+    const targetPayRate = Number(jobRequest.payRate || 0);
+
+    const skillHits = requiredSkills.filter(skill => workerSkills.has(skill));
+    const certHits = requiredCerts.filter(cert => workerCerts.has(cert));
+    const availabilityMatch = !shift || availability.some(item => item.includes(shift)) || String(worker.preferredShift || "").trim().toLowerCase().includes(shift);
+    const locationMatch = !location || !workerLocation || workerLocation.includes(location) || location.includes(workerLocation);
+    const historyMatch = currentSiteName && previousSites.has(currentSiteName)
+      ? "site"
+      : (currentClientName && previousSites.has(currentClientName) ? "client" : "");
+    const payAlignment = !targetPayRate || !workerPayRate || workerPayRate <= targetPayRate;
+
+    const breakdown = {
+      skill: requiredSkills.length ? Math.round((skillHits.length / requiredSkills.length) * 35) : 35,
+      certification: requiredCerts.length ? Math.round((certHits.length / requiredCerts.length) * 15) : 15,
+      availability: availabilityMatch ? 15 : 0,
+      reliability: Math.round((Number(worker.reliabilityScore ?? 0) / 100) * 15),
+      attendance: Math.round((Number(worker.attendanceScore ?? 0) / 100) * 10),
+      history: historyMatch === "site" ? 10 : (historyMatch === "client" ? 7 : 0),
+      location: locationMatch ? 5 : 0,
+      pay: payAlignment ? 5 : 0
+    };
+
+    const score = Math.min(100, Object.values(breakdown).reduce((sum, value) => sum + Number(value || 0), 0));
+    const reasons = [];
+    if (skillHits.length) reasons.push(`${skillHits.join(", ")} skill match`);
+    if (certHits.length) reasons.push(`${certHits.join(", ")} certified`);
+    if (availabilityMatch) reasons.push(`${worker.preferredShift || "shift"} availability`);
+    if (historyMatch === "site") reasons.push("already worked this site");
+    else if (historyMatch === "client") reasons.push("already worked this client");
+    if (Number(worker.attendanceScore ?? 0) >= 90) reasons.push("strong attendance");
+    if (Number(worker.reliabilityScore ?? 0) >= 90) reasons.push("high reliability");
+    if (locationMatch && worker.location) reasons.push(`based near ${worker.location}`);
+
+    return {
+      id: `candidate_match_${jobRequest.id}_${worker.id}`,
+      agencyId: jobRequest.agencyId,
+      jobRequestId: jobRequest.id,
+      workerId: worker.id,
+      workerName: fullName(worker),
+      clientId: jobRequest.clientId,
+      siteId: jobRequest.siteId,
+      score,
+      matchScore: score,
+      explanation: `${score}% match — ${reasons.slice(0, 4).join(", ") || "available for review."}`,
+      breakdown,
+      matchedSkills: skillHits,
+      matchedCertifications: certHits,
+      status: "suggested",
+      createdBy: state.session.userId || "system",
+      createdAt: jobRequest.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  function buildCandidateMatchesForJobRequest(jobRequest, scoped = getScopedData()) {
+    if (!jobRequest) {
+      return [];
+    }
+    return (scoped.workers || [])
+      .filter(worker => worker.status !== "inactive")
+      .filter(worker => !jobRequest.clientId || worker.agencyId === jobRequest.agencyId)
+      .map(worker => scoreWorkerForJobRequest(worker, jobRequest, scoped))
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 8);
+  }
+
+  function getCandidateMatchesForJobRequest(jobRequestId, scoped = getScopedData()) {
+    const stored = (scoped.candidateMatches || [])
+      .filter(match => match.jobRequestId === jobRequestId)
+      .sort((left, right) => Number(right.matchScore || right.score || 0) - Number(left.matchScore || left.score || 0));
+    if (stored.length) {
+      return stored;
+    }
+    const jobRequest = (scoped.jobRequests || []).find(item => item.id === jobRequestId);
+    return buildCandidateMatchesForJobRequest(jobRequest, scoped);
+  }
+
+  function buildAssistantResponse(prompt, scoped = getScopedData()) {
+    const normalized = String(prompt || "").trim().toLowerCase();
+    if (!normalized) {
+      return {
+        headline: "Ask Portaly about staffing operations",
+        body: "Try: Which workers were late this week? Who has missing punches? Which clients still need approval?"
+      };
+    }
+
+    if (normalized.includes("late")) {
+      const lateWorkers = getLateWorkersThisWeek(scoped).slice(0, 5);
+      return {
+        headline: lateWorkers.length ? `${lateWorkers.length} late clock-in alerts this week` : "No late clock-ins detected this week",
+        body: lateWorkers.length
+          ? lateWorkers.map(item => `${item.workerName} at ${item.siteName} was ${item.lateMinutes} minutes late on ${item.dateKey}.`).join(" ")
+          : "Portaly did not find any workers whose first weekly clock-in landed more than 10 minutes after the scheduled start."
+      };
+    }
+
+    if (normalized.includes("missing punch")) {
+      const missing = getMissingPunchWorkers(scoped).slice(0, 5);
+      return {
+        headline: missing.length ? `${missing.length} workers need punch cleanup` : "No missing punch issues right now",
+        body: missing.length
+          ? missing.map(item => `${item.workerName} at ${item.siteName} is flagged for ${item.issue}.`).join(" ")
+          : "Worker punch activity looks clean across the current scope."
+      };
+    }
+
+    if (normalized.includes("approve")) {
+      const clients = getPendingApprovalClients(scoped);
+      return {
+        headline: clients.length ? `${clients.length} clients still owe timesheet approval` : "All visible client approvals are complete",
+        body: clients.length
+          ? clients.map(item => `${item.clientName} has ${item.pendingCount} pending timesheet approval${item.pendingCount === 1 ? "" : "s"}.`).join(" ")
+          : "No pending client approvals were found in this workspace."
+      };
+    }
+
+    if (normalized.includes("forklift") || normalized.includes("available")) {
+      const available = (scoped.workers || [])
+        .filter(worker => worker.status !== "inactive")
+        .filter(worker => normalizeLowerTokens(worker.skills).includes("forklift") || normalizeLowerTokens(worker.certifications).includes("forklift"))
+        .sort((left, right) => Number(right.reliabilityScore || 0) - Number(left.reliabilityScore || 0))
+        .slice(0, 5);
+      return {
+        headline: available.length ? `${available.length} forklift-ready workers found` : "No forklift-ready workers matched that request",
+        body: available.length
+          ? available.map(worker => `${fullName(worker)} is available for ${worker.preferredShift || "the requested shift"} with ${Number(worker.attendanceScore || 0)} attendance and ${Number(worker.reliabilityScore || 0)} reliability.`).join(" ")
+          : "Add forklift skills or certifications to worker profiles so matching can rank candidates."
+      };
+    }
+
+    if (normalized.includes("rank") || normalized.includes("warehouse job")) {
+      const latestJobRequest = (scoped.jobRequests || []).slice().sort((left, right) => compareDates(right.updatedAt || right.createdAt, left.updatedAt || left.createdAt))[0];
+      const matches = latestJobRequest ? getCandidateMatchesForJobRequest(latestJobRequest.id, scoped).slice(0, 3) : [];
+      return {
+        headline: latestJobRequest ? `Top matches for ${latestJobRequest.role || "the latest job request"}` : "Create a job request to rank workers",
+        body: matches.length
+          ? matches.map(match => `${match.workerName}: ${match.explanation}`).join(" ")
+          : "Portaly needs a job request before it can rank workers for a warehouse placement."
+      };
+    }
+
+    if (normalized.includes("payroll")) {
+      const overtimeRisk = getOvertimeRiskWorkers(scoped).slice(0, 4);
+      const pendingApprovals = getPendingApprovalClients(scoped).slice(0, 3);
+      const missing = getMissingPunchWorkers(scoped).slice(0, 3);
+      return {
+        headline: "Payroll issues summary for this week",
+        body: [
+          pendingApprovals.length ? `${pendingApprovals.map(item => `${item.clientName} (${item.pendingCount})`).join(", ")} still need timesheet approval.` : "No client approvals are waiting.",
+          missing.length ? `${missing.map(item => `${item.workerName} (${item.issue})`).join(", ")} still need punch cleanup.` : "No missing punch cleanup is waiting.",
+          overtimeRisk.length ? `${overtimeRisk.map(item => `${item.workerName} is at ${formatHours(item.totalHours)}`).join(", ")} should be watched for overtime.` : "No overtime risk workers are near the threshold."
+        ].join(" ")
+      };
+    }
+
+    return {
+      headline: "Prompt saved for future AI connection",
+      body: "Portaly is using local staffing logic right now. Try one of the built-in staffing prompts to get a structured answer from your current data."
     };
   }
 
@@ -12346,6 +13805,33 @@
       });
     });
 
+    getNoShowAssignments(scoped).forEach(item => {
+      items.push({
+        title: `${item.workerName} has not clocked in`,
+        detail: `${item.siteName} is scheduled today but no clock-in is on file yet.`,
+        kind: "No-show risk",
+        tone: "status-danger"
+      });
+    });
+
+    getOvertimeRiskWorkers(scoped).forEach(item => {
+      items.push({
+        title: `${item.workerName} is nearing overtime`,
+        detail: `${formatHours(item.totalHours)} is already on the timesheet for this week.`,
+        kind: "Overtime risk",
+        tone: "status-warning"
+      });
+    });
+
+    getLongShiftWorkers(scoped).forEach(item => {
+      items.push({
+        title: `${item.workerName} worked a long shift`,
+        detail: `${formatHours(item.hours)} was tracked on ${item.dateKey}.`,
+        kind: "Shift over 12 hours",
+        tone: "status-danger"
+      });
+    });
+
     return items;
   }
 
@@ -12353,7 +13839,7 @@
     const punches = getWorkerPunchesForToday(workerId, scoped.punches);
     const hasDuplicate = punches.some((punch, index) => {
       const next = punches[index + 1];
-      return next && next.action === punch.action && Math.abs(new Date(next.timestamp) - new Date(punch.timestamp)) <= 5 * 60 * 1000;
+      return next && next.action === punch.action && Math.abs(new Date(next.timestamp) - new Date(punch.timestamp)) <= DUPLICATE_PUNCH_WINDOW_MS;
     });
     if (hasDuplicate) {
       return "Duplicate punch";
@@ -12393,6 +13879,8 @@
       agencies: (source.agencies || []).filter(agency => agency.id === agencyId),
       users: filterAgency(source.users),
       clientInvites: filterAgency(source.clientInvites),
+      jobRequests: filterAgency(source.jobRequests),
+      candidateMatches: filterAgency(source.candidateMatches),
       clients: filterAgency(source.clients),
       sites: filterAgency(source.sites),
       workers: filterAgency(source.workers),
@@ -12421,10 +13909,12 @@
         users: scoped.users.filter(user => user.id === state.session.userId),
         workers: scoped.workers.filter(worker => worker.id === state.session.workerId),
         punches: scoped.punches.filter(punch => punch.workerId === state.session.workerId),
-        punchRequests: [],
+        punchRequests: scoped.punchRequests.filter(request => request.workerId === state.session.workerId),
         timesheets: scoped.timesheets.filter(timesheet => timesheet.workerId === state.session.workerId),
         approvals: scoped.approvals.filter(approval => approval.workerId === state.session.workerId),
         clientInvites: [],
+        jobRequests: [],
+        candidateMatches: [],
         clients: scoped.clients.filter(client => client.id === getCurrentWorkerFrom(scoped)?.assignedClientId),
         sites: scoped.sites.filter(site => site.id === getCurrentWorkerFrom(scoped)?.assignedSiteId),
         assignments: [],
@@ -12442,6 +13932,8 @@
         clients: scoped.clients.filter(client => clientIds.includes(client.id)),
         sites: scoped.sites.filter(site => siteIds.includes(site.id)),
         workers: filterAssigned(scoped.workers),
+        jobRequests: filterAssigned(scoped.jobRequests),
+        candidateMatches: filterAssigned(scoped.candidateMatches),
         punches: filterAssigned(scoped.punches),
         punchRequests: filterAssigned(scoped.punchRequests),
         timesheets: filterAssigned(scoped.timesheets),
@@ -12612,7 +14104,7 @@
         return false;
       }
       const punchTime = new Date(punch.timestamp).getTime();
-      return Number.isFinite(punchTime) && Math.abs(punchTime - targetTime) <= 90 * 1000;
+      return Number.isFinite(punchTime) && Math.abs(punchTime - targetTime) <= DUPLICATE_PUNCH_WINDOW_MS;
     });
   }
 
@@ -13476,6 +14968,112 @@
     `;
   }
 
+  function buildRolloutChecklist(scoped) {
+    const activeClients = (scoped.clients || []).filter(client => client.status !== "inactive");
+    const activeSites = (scoped.sites || []).filter(site => site.status !== "inactive");
+    const activeWorkers = (scoped.workers || []).filter(worker => worker.status !== "inactive");
+    const activeAssignments = (scoped.assignments || []).filter(assignment => isActiveAssignmentStatus(assignment.status));
+    const qrReadySite = activeSites.find(site => site.clientId && site.qrEnabled !== false && String(site.qrCodeUrl || "").trim()) || null;
+    const clockTestPassed = (scoped.auditLogs || []).some(log => log.action === "clock_launch_test_passed")
+      || (scoped.punches || []).some(punch => punch.source === "publicPunchPage");
+    return [
+      {
+        key: "client",
+        title: "Add Client",
+        detail: "Create the company record workers and approvals will tie back to.",
+        complete: activeClients.length > 0,
+        action: "open-client-form",
+        label: "Add Client"
+      },
+      {
+        key: "site",
+        title: "Add Site",
+        detail: "Create the warehouse or job site the QR clock will point to.",
+        complete: activeSites.length > 0,
+        action: "open-site-form",
+        label: "Add Site"
+      },
+      {
+        key: "worker",
+        title: "Add Worker",
+        detail: "Create the worker record with the 4-digit PIN before launch.",
+        complete: activeWorkers.length > 0,
+        action: "open-worker-form",
+        label: "Add Worker"
+      },
+      {
+        key: "assignment",
+        title: "Assign Worker",
+        detail: "Connect the worker to the client and site for cleaner dropdown matching.",
+        complete: activeAssignments.length > 0,
+        action: "open-assignment-form",
+        label: "Assign Worker"
+      },
+      {
+        key: "qr",
+        title: "Generate QR",
+        detail: "Publish a site punch page link with agency, company, and site preloaded.",
+        complete: !!qrReadySite,
+        action: qrReadySite ? "go-route" : "open-publish-punch-page",
+        route: qrReadySite ? "qr-codes" : "",
+        siteId: qrReadySite?.id || "",
+        label: qrReadySite ? "Manage QR" : "Generate QR"
+      },
+      {
+        key: "test",
+        title: "Test Clock",
+        detail: "Run a launch test that checks the route, link, worker load, and punch write path.",
+        complete: clockTestPassed,
+        action: "open-clock-test",
+        siteId: qrReadySite?.id || activeSites[0]?.id || "",
+        label: "Run Clock Test"
+      },
+      {
+        key: "print",
+        title: "Print QR",
+        detail: "Open the QR station card and print the final sheet for the client site.",
+        complete: !!qrReadySite,
+        action: "go-route",
+        route: "qr-codes",
+        label: "Print QR"
+      }
+    ];
+  }
+
+  function renderRolloutChecklist(scoped) {
+    const steps = buildRolloutChecklist(scoped);
+    return `
+      <div class="surface-card">
+        <div class="card-top">
+          <div>
+            <p class="eyebrow">Rollout Checklist</p>
+            <h2 class="page-heading">Launch your client clock today</h2>
+          </div>
+        </div>
+        <p class="section-copy">Use this checklist to move from setup to a live worker clock with the right GitHub Pages link, QR code, and dashboard verification.</p>
+        <div class="stack-sm" style="margin-top: 18px;">
+          ${steps.map((step, index) => `
+            <div class="surface-card" style="padding: 16px;">
+              <div class="card-top">
+                <div>
+                  <p class="eyebrow">Step ${index + 1}</p>
+                  <h3>${escapeHtml(step.title)}</h3>
+                  <p class="helper-copy">${escapeHtml(step.detail)}</p>
+                </div>
+                <span class="status-badge ${step.complete ? "status-approved" : "status-warning"}">${escapeHtml(step.complete ? "Complete" : "Next")}</span>
+              </div>
+              <div class="page-actions" style="margin-top: 16px;">
+                ${step.action === "go-route"
+                  ? `<button class="button ${step.complete ? "button-ghost" : "button-secondary"}" data-action="go-route" data-route="${escapeAttribute(step.route || "dashboard")}" type="button">${escapeHtml(step.label)}</button>`
+                  : `<button class="button ${step.complete ? "button-ghost" : "button-secondary"}" data-action="${escapeAttribute(step.action)}" ${step.siteId ? `data-site-id="${escapeAttribute(step.siteId)}"` : ""} type="button">${escapeHtml(step.label)}</button>`}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }
+
   function renderSelectOptions(rows, selectedId, placeholder, labelKey = "name") {
     const optionRows = rows || [];
     const placeholderOption = placeholder ? `<option value="">${escapeHtml(placeholder)}</option>` : "";
@@ -13733,7 +15331,10 @@
   }
 
   function buildWorkerLink(workerId) {
-    return `${window.location.origin}${getAppBasePath()}login?mode=worker&workerId=${encodeURIComponent(workerId)}`;
+    const params = new URLSearchParams();
+    params.set("mode", "worker");
+    params.set("workerId", workerId);
+    return `${window.location.origin}${buildRouteUrl("login", { query: params })}`;
   }
 
   function getOwnerClockRoute() {
@@ -13741,13 +15342,39 @@
   }
 
   function buildSitePunchLink(agencyId, companyId, siteId) {
-    const workerAppUrl = String(state.firebase.config.workerAppUrl || window.PORTALY_FIREBASE_CONFIG?.workerAppUrl || "").trim();
-    const workerPath = agencyId && siteId ? `#/worker/${encodeURIComponent(agencyId)}/${encodeURIComponent(siteId)}` : "#/worker";
-    if (workerAppUrl) {
-      const trimmed = workerAppUrl.endsWith("/") ? workerAppUrl.slice(0, -1) : workerAppUrl;
-      return `${trimmed}/${workerPath.replace(/^#\//, "#/")}`;
+    const params = new URLSearchParams();
+    if (agencyId) params.set("agencyId", agencyId);
+    if (companyId) params.set("companyId", companyId);
+    if (siteId) params.set("siteId", siteId);
+    return `${window.location.origin}${buildRouteUrl("clock", { query: params })}`;
+  }
+
+  function normalizeSitePunchLink(url, agencyId, companyId, siteId) {
+    const fallbackLink = buildSitePunchLink(agencyId, companyId, siteId);
+    if (!url) {
+      return fallbackLink;
     }
-    return `${window.location.origin}/${workerPath}`;
+
+    try {
+      const parsed = new URL(url, window.location.origin);
+      const hashPath = String(parsed.hash || "").replace(/^#\/?/, "");
+      const isClockRoute = hashPath.startsWith("clock") || hashPath.startsWith("punch");
+      const isLegacyClockPath = /\/(clock|punch)$/.test(parsed.pathname);
+      if (!isClockRoute && !isLegacyClockPath) {
+        return parsed.toString();
+      }
+
+      const params = isClockRoute
+        ? new URLSearchParams(hashPath.includes("?") ? hashPath.split("?")[1] : "")
+        : parsed.searchParams;
+      return buildSitePunchLink(
+        params.get("agencyId") || agencyId || "",
+        params.get("clientId") || params.get("companyId") || companyId || "",
+        params.get("siteId") || siteId || ""
+      );
+    } catch (error) {
+      return fallbackLink;
+    }
   }
 
   function buildSiteLink(siteId, options = {}) {
@@ -13791,7 +15418,12 @@
       clientName: String(directory.clientName || directory.companyName || "").trim() || "Unknown Company",
       siteId: String(directory.siteId || directory.id || "").trim(),
       siteName: String(directory.siteName || directory.name || "").trim() || "Unknown Site",
-      punchUrl: String(directory.punchUrl || buildSitePunchLink(directory.agencyId || "", directory.companyId || directory.clientId || "", directory.siteId || directory.id || "")).trim(),
+      punchUrl: normalizeSitePunchLink(
+        String(directory.punchUrl || "").trim(),
+        directory.agencyId || "",
+        directory.companyId || directory.clientId || "",
+        directory.siteId || directory.id || ""
+      ),
       publicWorkerOptions: workerOptions,
       qrEnabled: directory.qrEnabled !== false,
       status: String(directory.status || "active").trim().toLowerCase() || "active"
@@ -13933,14 +15565,8 @@
       : !agencySites.length
         ? "Add a worksite under a client."
         : !workers.length
-          ? "Add workers or allow typed worker names."
+          ? "No assigned workers are loaded yet. Workers can still type their name manually."
           : "";
-
-    console.log("Current agencyId", resolvedAgencyId || sessionAgencyId || "");
-    console.log("Loaded clients", agencyClients.length);
-    console.log("Loaded sites", agencySites.length);
-    console.log("Loaded workers", workers.length);
-    console.log("Selected site workers", siteWorkers.length);
 
     return {
       directories,
@@ -14015,12 +15641,6 @@
     ).values()];
     const siteWorkers = directory?.publicWorkerOptions || [];
 
-    console.log("Current agencyId", directory?.agencyId || resolvedAgencyId || "");
-    console.log("Loaded clients", clientOptions.length);
-    console.log("Loaded sites", siteOptions.length);
-    console.log("Loaded workers", allWorkers.length);
-    console.log("Selected site workers", siteWorkers.length);
-
     return {
       directories: normalizedDirectories,
       agencies: agencyOptions,
@@ -14037,12 +15657,14 @@
       siteId: directory?.siteId || resolvedSiteId || "",
       siteName: directory?.siteName || siteOptions.find(option => option.siteId === resolvedSiteId)?.siteName || "",
       error: requestedSiteId && !directory ? "This punch station could not be found. Ask your staffing agency to refresh the QR code." : "",
-      emptyMessage: !clientOptions.length
+      emptyMessage: !requestedSiteId && !normalizedDirectories.length
+        ? "Scan a site QR code or ask the staffing agency for a direct clock link."
+        : !clientOptions.length
         ? "Add a company/client first."
         : !siteOptions.length
-          ? "Add a worksite under a client."
-          : !allWorkers.length
-            ? "Add workers or allow typed worker names."
+        ? "Add a worksite under a client."
+        : !allWorkers.length
+            ? "No assigned workers are loaded yet. Workers can still type their name manually."
             : ""
     };
   }
@@ -14123,6 +15745,7 @@
     const agencyId = String(query.agencyId || "").trim();
     const companyId = String(query.companyId || "").trim();
     const siteId = String(query.siteId || "").trim();
+    const canListDirectories = state.session.mode !== "public" && !!state.session.role;
 
     if (state.firebase.ready && state.firebase.db) {
       if (siteId) {
@@ -14138,6 +15761,10 @@
           return [];
         }
         return [directory];
+      }
+
+      if (!canListDirectories) {
+        return [];
       }
 
       return mapSnapshot(await state.firebase.db.collection("sitePunchDirectories").get())
@@ -14241,6 +15868,9 @@
         companyName: "",
         siteId: "",
         siteName: "",
+        selectedWorkerId: "",
+        workerNameDraft: "",
+        pinCodeDraft: "",
         saving: false,
         fallbackNotice: "",
         emptyMessage: "",
@@ -14256,6 +15886,9 @@
     }
 
     const previous = state.publicPunch || {};
+    const contextChanged = previous.agencyId !== punchHash.agencyId
+      || previous.companyId !== punchHash.companyId
+      || previous.siteId !== punchHash.siteId;
     state.publicPunch = {
       ...previous,
       loading: true,
@@ -14263,6 +15896,9 @@
       agencyId: punchHash.agencyId,
       companyId: punchHash.companyId,
       siteId: punchHash.siteId,
+      selectedWorkerId: contextChanged ? "" : previous.selectedWorkerId || "",
+      workerNameDraft: contextChanged ? "" : previous.workerNameDraft || "",
+      pinCodeDraft: contextChanged ? "" : previous.pinCodeDraft || "",
       companyName: "",
       siteName: "",
       emptyMessage: ""
@@ -14276,15 +15912,6 @@
       } else {
         const directories = await loadPublicPunchDirectories(punchHash);
         nextState = buildPublicPunchStateFromDirectories(punchHash, directories);
-        if ((!directories.length || nextState.error) && punchHash.agencyId && punchHash.companyId && punchHash.siteId) {
-          const directState = await loadDirectPublicPunchRecords(punchHash);
-          if (directState) {
-            nextState = {
-              ...directState,
-              directories: directories.length ? directories : (directState.directories || [])
-            };
-          }
-        }
       }
 
       state.publicPunch = {
@@ -14353,22 +15980,53 @@
 
   function buildPayrollCsv(timesheets, excelReady) {
     const rows = [
-      ["Worker", "Client", "Site", "Approved Hours", "Regular Hours", "OT Hours", "Pay Rate", "Total Labor Cost", "Status"]
+      ["Worker Name", "Worker ID", "Client", "Site", "Week Start", "Date", "Clock In", "Lunch Start", "Lunch End", "Clock Out", "Regular Hours", "Overtime Hours", "Total Hours", "Approval Status", "Missing Punch Warning", "Notes"]
     ];
 
     timesheets.forEach(timesheet => {
-      const payRate = Number(timesheet.payRate || getWorker(timesheet.workerId)?.payRate || 0);
-      rows.push([
-        getWorkerName(timesheet.workerId),
-        getClientName(timesheet.clientId),
-        getSiteName(timesheet.siteId),
-        Number(timesheet.approvedHours || 0).toFixed(2),
-        Number(timesheet.regularHours || 0).toFixed(2),
-        Number(timesheet.overtimeHours || 0).toFixed(2),
-        payRate.toFixed(2),
-        calculateLaborCost(timesheet.regularHours, timesheet.overtimeHours, payRate).toFixed(2),
-        formatStatusLabel(timesheet.status)
-      ]);
+      const worker = getWorker(timesheet.workerId) || {};
+      const relatedPunches = (getScopedData().punches || [])
+        .filter(punch => punch.workerId === timesheet.workerId && punch.siteId === timesheet.siteId)
+        .filter(punch => compareDates(punch.timestamp, timesheet.payPeriodStart) >= 0 && compareDates(punch.timestamp, timesheet.payPeriodEnd) <= 0)
+        .sort((left, right) => compareDates(left.timestamp, right.timestamp));
+      const dailyGroups = relatedPunches.reduce((map, punch) => {
+        const key = formatDateInput(punch.timestamp);
+        const current = map.get(key) || [];
+        current.push(punch);
+        map.set(key, current);
+        return map;
+      }, new Map());
+      const dailyRows = dailyGroups.size ? Array.from(dailyGroups.entries()) : [["", []]];
+
+      dailyRows.forEach(([dateKey, punchesForDay]) => {
+        const ordered = punchesForDay.slice().sort((left, right) => compareDates(left.timestamp, right.timestamp));
+        const clockIn = ordered.find(punch => punch.action === "clockIn") || null;
+        const lunchStart = ordered.find(punch => punch.action === "startLunch") || null;
+        const lunchEnd = ordered.find(punch => punch.action === "endLunch") || null;
+        const clockOut = [...ordered].reverse().find(punch => punch.action === "clockOut") || null;
+        const totalHours = ordered.length ? calculateHoursFromPunches(ordered, state.now) : 0;
+        const regularHours = Math.min(totalHours, 8);
+        const overtimeHours = Math.max(0, totalHours - 8);
+        const warning = !clockIn || !clockOut ? "Missing punch" : "";
+        rows.push([
+          getWorkerName(timesheet.workerId),
+          worker.workerCode || timesheet.workerId || "",
+          getClientName(timesheet.clientId),
+          getSiteName(timesheet.siteId),
+          formatDate(timesheet.payPeriodStart),
+          dateKey || formatDate(timesheet.payPeriodStart),
+          clockIn ? formatTime(clockIn.timestamp) : "",
+          lunchStart ? formatTime(lunchStart.timestamp) : "",
+          lunchEnd ? formatTime(lunchEnd.timestamp) : "",
+          clockOut ? formatTime(clockOut.timestamp) : "",
+          regularHours.toFixed(2),
+          overtimeHours.toFixed(2),
+          totalHours.toFixed(2),
+          formatStatusLabel(timesheet.status),
+          warning,
+          timesheet.clientEditReason || timesheet.adminNotes || timesheet.clientNotes || ""
+        ]);
+      });
     });
 
     const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -14451,7 +16109,7 @@
   function startClock() {
     window.setInterval(() => {
       state.now = new Date();
-      if (state.initialized && (state.session.role === "worker" || state.route === "punch" || state.route === "clock")) {
+      if (state.initialized && state.session.role === "worker" && state.session.mode !== "public") {
         renderApp();
       }
     }, 1000);
@@ -14540,6 +16198,33 @@
       buildWorker("worker_omar_hassan", "agency_summit", "Omar", "Hassan", 21.5, "client_blueline", "site_arlington_crossdock")
     ];
 
+    const workerProfiles = {
+      worker_maria_ortiz: { workerCode: "HS-1001", pinCode: "2468", skills: ["Forklift", "RF Scanner", "Loading"], certifications: ["Forklift"], location: "Dallas, TX", preferredShift: "1st shift", attendanceScore: 96, reliabilityScore: 95, previousSites: ["Dallas Dock 1", "Northstar Fulfillment"], availability: ["1st shift", "Mon-Fri"] },
+      worker_james_carter: { workerCode: "HS-1002", pinCode: "1357", skills: ["Picker", "Loader"], certifications: ["OSHA 10"], location: "Dallas, TX", preferredShift: "1st shift", attendanceScore: 84, reliabilityScore: 82, previousSites: ["Dallas Dock 2"], availability: ["1st shift", "Weekdays"] },
+      worker_alana_nguyen: { workerCode: "HS-1003", pinCode: "2244", skills: ["Forklift", "Cold Storage", "Team Lead"], certifications: ["Forklift", "OSHA 10"], location: "Fort Worth, TX", preferredShift: "1st shift", attendanceScore: 98, reliabilityScore: 97, previousSites: ["Fort Worth Cold Hub", "Apex Cold Storage"], availability: ["1st shift", "Weekdays", "Saturday"] },
+      worker_eric_johnson: { workerCode: "HS-1004", pinCode: "4455", skills: ["Loader"], certifications: [], location: "Fort Worth, TX", preferredShift: "2nd shift", attendanceScore: 58, reliabilityScore: 51, previousSites: ["Fort Worth Cold Hub"], availability: ["2nd shift"] },
+      worker_tasha_brown: { workerCode: "HS-1005", pinCode: "7788", skills: ["Packing", "RF Scanner"], certifications: [], location: "Dallas, TX", preferredShift: "1st shift", attendanceScore: 91, reliabilityScore: 89, previousSites: ["Dallas Dock 1"], availability: ["1st shift", "Weekdays"] },
+      worker_leo_martinez: { workerCode: "HS-1006", pinCode: "8899", skills: ["Forklift", "Crossdock"], certifications: ["Forklift"], location: "Irving, TX", preferredShift: "2nd shift", attendanceScore: 79, reliabilityScore: 76, previousSites: ["Dallas Dock 2", "Northstar Fulfillment"], availability: ["2nd shift", "Weekdays"] },
+      worker_nina_patel: { workerCode: "SW-2001", pinCode: "1122", skills: ["Forklift", "Inventory", "RF Scanner"], certifications: ["Forklift"], location: "Arlington, TX", preferredShift: "1st shift", attendanceScore: 94, reliabilityScore: 92, previousSites: ["Arlington Crossdock", "BlueLine Logistics"], availability: ["1st shift", "Weekdays"] },
+      worker_andre_lewis: { workerCode: "SW-2002", pinCode: "3344", skills: ["Loader", "Pallet Jack"], certifications: ["OSHA 10"], location: "Arlington, TX", preferredShift: "2nd shift", attendanceScore: 88, reliabilityScore: 86, previousSites: ["Arlington Crossdock"], availability: ["2nd shift", "Weekends"] },
+      worker_sofia_ramirez: { workerCode: "SW-2003", pinCode: "5566", skills: ["Forklift", "Warehouse Lead", "Receiving"], certifications: ["Forklift", "OSHA 10"], location: "Grand Prairie, TX", preferredShift: "1st shift", attendanceScore: 99, reliabilityScore: 98, previousSites: ["Arlington Crossdock", "BlueLine Logistics"], availability: ["1st shift", "Mon-Sat"] },
+      worker_omar_hassan: { workerCode: "SW-2004", pinCode: "6677", skills: ["Inventory", "Shipping"], certifications: [], location: "Arlington, TX", preferredShift: "3rd shift", attendanceScore: 90, reliabilityScore: 87, previousSites: ["Arlington Crossdock"], availability: ["3rd shift", "Weekdays"] }
+    };
+
+    workers.forEach(worker => {
+      Object.assign(worker, workerProfiles[worker.id] || {
+        workerCode: worker.workerCode || `WK-${String(worker.id).slice(-4).toUpperCase()}`,
+        skills: [],
+        certifications: [],
+        location: "",
+        preferredShift: "",
+        attendanceScore: 85,
+        reliabilityScore: 85,
+        previousSites: [],
+        availability: []
+      });
+    });
+
     const assignments = [
       buildAssignment("assignment_maria", "agency_harbor", "worker_maria_ortiz", "client_northstar", "site_dallas_dock_1", 18.5, 30.0, payPeriodStart),
       buildAssignment("assignment_james", "agency_harbor", "worker_james_carter", "client_northstar", "site_dallas_dock_2", 19.25, 31.0, payPeriodStart),
@@ -14612,6 +16297,14 @@
     ];
 
     const clientInvites = [];
+    const jobRequests = [
+      buildJobRequest("job_request_northstar_forklift", "agency_harbor", "client_northstar", "site_dallas_dock_2", "Forklift Operator", "warehouse_job", 3, "1st shift", 20.5, "Dallas, TX", ["Forklift", "Loading"], ["Forklift"], "Need three forklift-certified workers for inbound dock expansion next week."),
+      buildJobRequest("job_request_apex_freezer", "agency_harbor", "client_apex", "site_fort_worth_cold_hub", "Cold Storage Picker", "request_more_workers", 2, "1st shift", 19.0, "Fort Worth, TX", ["Cold Storage", "RF Scanner"], [], "Client asked for two more temps after weekend volume spike.")
+    ];
+    jobRequests.forEach(request => {
+      request.clientName = clients.find(client => client.id === request.clientId)?.name || "";
+      request.siteName = sites.find(site => site.id === request.siteId)?.name || "";
+    });
     const punchRequests = [
       {
         id: "punch_request_maria_clock_out",
@@ -14635,8 +16328,61 @@
         reviewedBy: "",
         resolvedPunchId: "",
         deviceInfo: "Demo mobile browser"
+      },
+      {
+        id: "punch_request_james_clock_in",
+        agencyId: "agency_harbor",
+        companyId: "client_northstar",
+        companyName: "Northstar Fulfillment",
+        clientId: "client_northstar",
+        clientName: "Northstar Fulfillment",
+        siteId: "site_dallas_dock_2",
+        siteName: "Dallas Dock 2",
+        workerId: "worker_james_carter",
+        workerName: "James Carter",
+        workerMatched: true,
+        requestedAction: "clockIn",
+        requestedTimestamp: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 6, 55).toISOString(),
+        requestedLocalDate: formatDateInput(now),
+        reason: "Gate line was backed up and the clock page did not load in time.",
+        status: "pending",
+        source: "publicPunchPage",
+        reviewedAt: "",
+        reviewedBy: "",
+        resolvedPunchId: "",
+        deviceInfo: "Demo mobile browser"
+      },
+      {
+        id: "punch_request_tasha_lunch_end",
+        agencyId: "agency_harbor",
+        companyId: "client_northstar",
+        companyName: "Northstar Fulfillment",
+        clientId: "client_northstar",
+        clientName: "Northstar Fulfillment",
+        siteId: "site_dallas_dock_1",
+        siteName: "Dallas Dock 1",
+        workerId: "worker_tasha_brown",
+        workerName: "Tasha Brown",
+        workerMatched: true,
+        requestedAction: "endLunch",
+        requestedTimestamp: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 35).toISOString(),
+        requestedLocalDate: formatDateInput(now),
+        reason: "Returned from lunch but forgot to tap End Lunch.",
+        status: "approved",
+        source: "publicPunchPage",
+        reviewedAt: addDays(now, -1).toISOString(),
+        reviewedBy: "demo_client_manager",
+        resolvedPunchId: "",
+        deviceInfo: "Demo mobile browser"
       }
     ];
+
+    const candidateMatches = jobRequests.flatMap(jobRequest => buildCandidateMatchesForJobRequest(jobRequest, {
+      workers,
+      assignments,
+      clients,
+      sites
+    }));
 
     const payrollRuns = [
       {
@@ -14709,6 +16455,8 @@
       sites,
       workers,
       assignments,
+      jobRequests,
+      candidateMatches,
       punches,
       punchRequests,
       timesheets,
@@ -14746,6 +16494,8 @@
       sites,
       workers,
       assignments,
+      jobRequests,
+      candidateMatches,
       punches,
       punchRequests,
       timesheets,
@@ -14809,6 +16559,16 @@
         siteId: siteIdMap[assignment.siteId]
       }));
     const assignmentIdMap = mapIds(seed.assignments.filter(assignment => assignment.agencyId === baseAgency.id), assignments);
+    const jobRequests = seed.jobRequests
+      .filter(request => request.agencyId === baseAgency.id)
+      .map(request => ({
+        ...request,
+        agencyId,
+        id: `${request.id}_${agencyId}`,
+        clientId: clientIdMap[request.clientId],
+        siteId: siteIdMap[request.siteId]
+      }));
+    const jobRequestIdMap = mapIds(seed.jobRequests.filter(request => request.agencyId === baseAgency.id), jobRequests);
     const punches = seed.punches
       .filter(punch => punch.agencyId === baseAgency.id)
       .map(punch => ({
@@ -14854,6 +16614,17 @@
         clientId: clientIdMap[approval.clientId],
         siteId: siteIdMap[approval.siteId]
       }));
+    const candidateMatches = seed.candidateMatches
+      .filter(match => match.agencyId === baseAgency.id)
+      .map(match => ({
+        ...match,
+        agencyId,
+        id: `${match.id}_${agencyId}`,
+        jobRequestId: jobRequestIdMap[match.jobRequestId],
+        workerId: workerIdMap[match.workerId],
+        clientId: clientIdMap[match.clientId],
+        siteId: siteIdMap[match.siteId]
+      }));
     const payrollRuns = seed.payrollRuns
       .filter(run => run.agencyId === baseAgency.id)
       .map(run => ({ ...run, agencyId, id: `${run.id}_${agencyId}` }));
@@ -14885,6 +16656,8 @@
       sites,
       workers,
       assignments,
+      jobRequests,
+      candidateMatches,
       punches,
       punchRequests,
       timesheets,
@@ -14916,8 +16689,17 @@
       assignedClientId: clientId,
       assignedSiteId: siteId,
       pinCode: String(Math.floor(Math.random() * 9000) + 1000),
+      workerCode: `WK-${String(id).slice(-4).toUpperCase()}`,
       allowCrossSitePunching: false,
       userId,
+      skills: [],
+      certifications: [],
+      location: "",
+      preferredShift: "",
+      attendanceScore: 85,
+      reliabilityScore: 85,
+      previousSites: [],
+      availability: [],
       workerNoteType: "",
       notes: "",
       terminationReason: ""
@@ -14994,6 +16776,28 @@
       signedAt: "",
       approvalNote: "",
       managerSignature: null
+    };
+  }
+
+  function buildJobRequest(id, agencyId, clientId, siteId, role, requestType, workerCount, shift, payRate, location, requiredSkills = [], requiredCertifications = [], notes = "") {
+    return {
+      id,
+      agencyId,
+      clientId,
+      siteId,
+      role,
+      requestType,
+      workerCount,
+      shift,
+      payRate,
+      location,
+      requiredSkills,
+      requiredCertifications,
+      notes,
+      status: "open",
+      createdBy: "demo_agency_admin",
+      requestedByRole: "agencyAdmin",
+      startDate: addDays(new Date(), 2).toISOString()
     };
   }
 

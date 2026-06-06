@@ -27,19 +27,34 @@
   <link rel="stylesheet" href="style.css" />
   <script>
     (function () {
-      const params = new URLSearchParams(window.location.search);
-      const redirectedRoute = params.get("__route");
-      if (!redirectedRoute) {
-        return;
-      }
       const pathParts = window.location.pathname.split("/").filter(Boolean);
       const basePath = window.location.hostname.endsWith(".github.io") && pathParts.length
         ? `/${pathParts[0]}/`
         : "/";
-      params.delete("__route");
-      const query = params.toString();
-      const normalizedRoute = String(redirectedRoute || "").replace(/^\/+/, "");
-      const nextUrl = `${basePath}${normalizedRoute}${query ? `?${query}` : ""}`;
+      const params = new URLSearchParams(window.location.search);
+      const redirectedRoute = params.get("__route");
+      if (redirectedRoute) {
+        params.delete("__route");
+        const query = params.toString();
+        const normalizedRoute = String(redirectedRoute || "").replace(/^\/+/, "").replace(/\/+$/, "");
+        const routeFragment = normalizedRoute ? `#/${normalizedRoute}` : "#/";
+        const nextUrl = `${basePath}${routeFragment}${query ? `?${query}` : ""}`;
+        window.history.replaceState(null, "", nextUrl);
+        return;
+      }
+
+      if (window.location.hash) {
+        return;
+      }
+
+      const routePath = window.location.pathname.startsWith(basePath)
+        ? window.location.pathname.slice(basePath.length)
+        : window.location.pathname;
+      const normalizedPath = String(routePath || "").replace(/^\/+/, "").replace(/\/+$/, "");
+      if (!normalizedPath) {
+        return;
+      }
+      const nextUrl = `${basePath}#/${normalizedPath}${window.location.search || ""}`;
       window.history.replaceState(null, "", nextUrl);
     })();
   </script>

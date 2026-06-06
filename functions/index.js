@@ -51,6 +51,7 @@ const inviteCorsOrigins = [
   "http://localhost:5000",
   "http://localhost:5173"
 ];
+const DUPLICATE_PUNCH_WINDOW_MS = 2 * 60 * 1000;
 
 function createHttpError(status, message) {
   const error = new Error(message);
@@ -60,6 +61,22 @@ function createHttpError(status, message) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function startOfWeek(value = new Date()) {
+  const date = new Date(value);
+  const day = date.getDay();
+  const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+  date.setDate(diff);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function endOfWeek(value = new Date()) {
+  const date = startOfWeek(value);
+  date.setDate(date.getDate() + 6);
+  date.setHours(23, 59, 59, 999);
+  return date;
 }
 
 function paymentLinkForPlan(planId) {
@@ -758,6 +775,395 @@ async function syncSquareSubscriptionRecord(agencyId, squareSubscriptionId, requ
 function responseJson(res, status, body) {
   res.status(status).json(body);
 }
+
+function normalizeNameForLookup(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function normalizePinCode(value) {
+  return String(value || "").trim();
+}
+
+async function writeAuditLogEntry({ agencyId = "", action, entityType, entityId, oldValue = null, newValue = null, metadata = {}, role = "worker", userId = "", source = "portalyPublicPunch" }) {
+  const auditRef = admin.firestore().collection("auditLogs").doc();
+  await auditRef.set({
+    id: auditRef.id,
+    agencyId,
+    userId,
+    role,
+    action,
+    entityType,
+    entityId,
+    oldValue,
+    newValue,
+    metadata,
+    source,
+    timestamp: nowIso(),
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  });
+}
+
+async function getPublicPunchContextRecord({ agencyId, clientId, siteId }) {
+  const [agencySnap, clientSnap, siteSnap, directorySnap] = await Promise.all([
+    admin.firestore().collection("agencies").doc(agencyId).get(),
+    admin.firestore().collection("clients").doc(clientId).get(),
+    admin.firestore().collection("sites").doc(siteId).get(),
+    admin.firestore().collection("sitePunchDirectories").doc(siteId).get()
+  ]);
+
+  if (!agencySnap.exists) {
+    throw createHttpError(404, "Agency not found for this punch station.");
+  }
+  if (!clientSnap.exists || clientSnap.data().agencyId !== agencyId || clientSnap.data().status === "inactive") {
+    throw createHttpError(404, "Client not found for this punch station.");
+  }
+  if (!siteSnap.exists || siteSnap.data().agencyId !== agencyId || siteSnap.data().clientId !== clientId || siteSnap.data().status === "inactive") {
+    throw createHttpError(404, "Site not found for this punch station.");
+  }
+  if (directorySnap.exists) {
+    const directory = directorySnap.data() || {};
+    if (directory.qrEnabled === false || String(directory.status || "active").toLowerCase() === "inactive") {
+      throw createHttpError(403, "This punch station is not active.");
+    }
+  }
+
+  return {
+    agency: { id: agencySnap.id, ...agencySnap.data() },
+    client: { id: clientSnap.id, ...clientSnap.data() },
+    site: { id: siteSnap.id, ...siteSnap.data() }
+  };
+}
+
+async function resolvePublicWorker({ agencyId, siteId, workerId, workerName }) {
+  const workersSnapshot = await admin.firestore()
+    .collection("workers")
+    .where("agencyId", "==", agencyId)
+    .get();
+  const allWorkers = workersSnapshot.docs.map(docSnap => ({
+    id: docSnap.id,
+    ...docSnap.data()
+  }));
+  const assignmentsSnapshot = await admin.firestore()
+    .collection("assignments")
+    .where("agencyId", "==", agencyId)
+    .get();
+  const assignments = assignmentsSnapshot.docs.map(docSnap => ({
+    id: docSnap.id,
+    ...docSnap.data()
+  }));
+  const normalizedName = normalizeNameForLookup(workerName);
+
+  let worker = workerId
+    ? allWorkers.find(item => item.id === workerId) || null
+    : allWorkers.find(item => normalizeNameForLookup(`${item.firstName || ""} ${item.lastName || ""}`) === normalizedName) || null;
+
+  if (!worker) {
+    throw createHttpError(404, "Worker could not be found for this site.");
+  }
+  if (worker.status === "inactive") {
+    throw createHttpError(403, "This worker is inactive.");
+  }
+
+  const activeAssignment = assignments.find(assignment => assignment.workerId === worker.id && assignment.siteId === siteId && !["inactive", "ended"].includes(String(assignment.status || "").toLowerCase())) || null;
+  const allowedOnSite = worker.assignedSiteId === siteId || worker.allowCrossSitePunching === true || !!activeAssignment;
+  if (!allowedOnSite) {
+    throw createHttpError(403, "This worker is not assigned to the selected site.");
+  }
+
+  return {
+    worker,
+    assignment: activeAssignment
+  };
+}
+
+function validateWorkerPin(worker, pinCode) {
+  const normalizedPin = normalizePinCode(pinCode);
+  if (!/^\d{4}$/.test(normalizedPin)) {
+    throw createHttpError(400, "A valid 4-digit PIN is required.");
+  }
+  const workerPin = normalizePinCode(worker.pinCode || worker.pin || "");
+  if (!workerPin || workerPin !== normalizedPin) {
+    throw createHttpError(403, "The worker PIN did not match.");
+  }
+}
+
+async function getWorkerRecentPunches(workerId) {
+  const snapshot = await admin.firestore()
+    .collection("punches")
+    .where("workerId", "==", workerId)
+    .get();
+  return snapshot.docs
+    .map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))
+    .sort((left, right) => new Date(left.timestamp || 0) - new Date(right.timestamp || 0));
+}
+
+function validatePunchSequence(punches, action, timestamp) {
+  const recentPunches = (punches || []).filter(Boolean);
+  const lastPunch = recentPunches[recentPunches.length - 1] || null;
+  const duplicatePunch = recentPunches.find(punch => punch.action === action && Math.abs(new Date(timestamp) - new Date(punch.timestamp || 0)) <= DUPLICATE_PUNCH_WINDOW_MS);
+  if (duplicatePunch) {
+    throw createHttpError(409, "That punch looks like a duplicate.");
+  }
+
+  if (action === "startLunch" && (!lastPunch || lastPunch.action !== "clockIn" && lastPunch.action !== "endLunch")) {
+    throw createHttpError(409, "Cannot start lunch before clocking in.");
+  }
+  if (action === "endLunch" && (!lastPunch || lastPunch.action !== "startLunch")) {
+    throw createHttpError(409, "Cannot end lunch before lunch starts.");
+  }
+  if (action === "clockOut" && (!lastPunch || !["clockIn", "endLunch"].includes(lastPunch.action))) {
+    throw createHttpError(409, "Cannot clock out before clocking in.");
+  }
+  if (action === "clockIn" && lastPunch && ["clockIn", "endLunch"].includes(lastPunch.action)) {
+    throw createHttpError(409, "This worker is already clocked in.");
+  }
+}
+
+function filterWorkerWeekPunches(punches, { agencyId, clientId, siteId, anchor = new Date() }) {
+  const weekStart = startOfWeek(anchor);
+  const weekEnd = endOfWeek(anchor);
+  return {
+    weekStart,
+    weekEnd,
+    punches: (punches || [])
+      .filter(punch => !agencyId || punch.agencyId === agencyId)
+      .filter(punch => !clientId || (punch.clientId || punch.companyId || "") === clientId)
+      .filter(punch => !siteId || punch.siteId === siteId)
+      .filter(punch => {
+        const punchAt = new Date(punch.timestamp || "");
+        return !Number.isNaN(punchAt.getTime()) && punchAt >= weekStart && punchAt <= weekEnd;
+      })
+      .sort((left, right) => new Date(left.timestamp || 0) - new Date(right.timestamp || 0))
+  };
+}
+
+exports.createWorkerSitePunch = onRequest(
+  {
+    cors: inviteCorsOrigins
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const agencyId = String(req.body.agencyId || "").trim();
+      const clientId = String(req.body.clientId || req.body.companyId || "").trim();
+      const siteId = String(req.body.siteId || "").trim();
+      const workerId = String(req.body.workerId || "").trim();
+      const workerName = String(req.body.workerName || "").trim();
+      const pinCode = String(req.body.pinCode || "").trim();
+      const action = String(req.body.action || "").trim();
+      const timestamp = String(req.body.timestamp || nowIso()).trim();
+      const allowedActions = new Set(["clockIn", "startLunch", "endLunch", "clockOut"]);
+
+      if (!agencyId || !clientId || !siteId || !workerName || !action) {
+        throw createHttpError(400, "Agency, client, site, worker name, and punch action are required.");
+      }
+      if (!allowedActions.has(action)) {
+        throw createHttpError(400, "Invalid worker punch action.");
+      }
+
+      const context = await getPublicPunchContextRecord({ agencyId, clientId, siteId });
+      const { worker, assignment } = await resolvePublicWorker({ agencyId, siteId, workerId, workerName });
+      validateWorkerPin(worker, pinCode);
+      const recentPunches = await getWorkerRecentPunches(worker.id);
+      validatePunchSequence(recentPunches, action, timestamp);
+
+      const punchId = String(req.body.id || "").trim() || admin.firestore().collection("punches").doc().id;
+      const punchRecord = {
+        id: punchId,
+        agencyId,
+        companyId: clientId,
+        companyName: context.client.name || "",
+        clientId,
+        clientName: context.client.name || "",
+        siteId,
+        siteName: context.site.name || "",
+        workerId: worker.id,
+        workerName: `${worker.firstName || ""} ${worker.lastName || ""}`.trim() || workerName,
+        workerMatched: true,
+        assignmentId: assignment?.id || "",
+        action,
+        timestamp,
+        localDate: String(req.body.localDate || "").trim() || timestamp.slice(0, 10),
+        source: "publicPunchPage",
+        createdAt: String(req.body.createdAt || "").trim() || nowIso(),
+        updatedAt: String(req.body.createdAt || "").trim() || nowIso(),
+        createdBy: "worker-public",
+        createdByRole: "worker",
+        status: "active",
+        deviceInfo: String(req.body.deviceInfo || "").slice(0, 500)
+      };
+
+      await admin.firestore().collection("punches").doc(punchId).set(punchRecord, { merge: false });
+      await writeAuditLogEntry({
+        agencyId,
+        action: "punch_created",
+        entityType: "punches",
+        entityId: punchId,
+        newValue: punchRecord,
+        metadata: {
+          workerId: worker.id,
+          siteId,
+          source: "publicPunchPage"
+        }
+      });
+
+      responseJson(res, 200, {
+        ok: true,
+        punch: punchRecord
+      });
+    } catch (error) {
+      logger.error("createWorkerSitePunch failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to save the worker punch."
+      });
+    }
+  }
+);
+
+exports.createWorkerCorrectionRequest = onRequest(
+  {
+    cors: inviteCorsOrigins
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const agencyId = String(req.body.agencyId || "").trim();
+      const clientId = String(req.body.clientId || req.body.companyId || "").trim();
+      const siteId = String(req.body.siteId || "").trim();
+      const workerId = String(req.body.workerId || "").trim();
+      const workerName = String(req.body.workerName || "").trim();
+      const pinCode = String(req.body.pinCode || "").trim();
+      const requestedAction = String(req.body.requestedAction || "").trim();
+      const requestedTimestamp = String(req.body.requestedTimestamp || "").trim();
+      const reason = String(req.body.reason || req.body.note || "").trim();
+      const allowedActions = new Set(["clockIn", "startLunch", "endLunch", "clockOut"]);
+
+      if (!agencyId || !clientId || !siteId || !workerName || !requestedAction || !requestedTimestamp || !reason) {
+        throw createHttpError(400, "Agency, client, site, worker, requested punch, time, and reason are required.");
+      }
+      if (!allowedActions.has(requestedAction)) {
+        throw createHttpError(400, "Invalid correction request action.");
+      }
+
+      const context = await getPublicPunchContextRecord({ agencyId, clientId, siteId });
+      const { worker } = await resolvePublicWorker({ agencyId, siteId, workerId, workerName });
+      validateWorkerPin(worker, pinCode);
+
+      const requestId = String(req.body.id || "").trim() || admin.firestore().collection("correctionRequests").doc().id;
+      const requestRecord = {
+        id: requestId,
+        agencyId,
+        companyId: clientId,
+        companyName: context.client.name || "",
+        clientId,
+        clientName: context.client.name || "",
+        siteId,
+        siteName: context.site.name || "",
+        workerId: worker.id,
+        workerName: `${worker.firstName || ""} ${worker.lastName || ""}`.trim() || workerName,
+        workerMatched: true,
+        requestedAction,
+        requestedTimestamp,
+        requestedLocalDate: String(req.body.requestedLocalDate || "").trim() || requestedTimestamp.slice(0, 10),
+        reason,
+        note: String(req.body.note || "").trim(),
+        status: "pending",
+        source: "publicPunchPage",
+        createdAt: String(req.body.createdAt || "").trim() || nowIso(),
+        updatedAt: String(req.body.updatedAt || "").trim() || nowIso(),
+        deviceInfo: String(req.body.deviceInfo || "").slice(0, 500),
+        createdBy: "worker-public",
+        createdByRole: "worker"
+      };
+
+      await admin.firestore().collection("correctionRequests").doc(requestId).set(requestRecord, { merge: false });
+      await writeAuditLogEntry({
+        agencyId,
+        action: "correction_requested",
+        entityType: "correctionRequests",
+        entityId: requestId,
+        newValue: requestRecord,
+        metadata: {
+          workerId: worker.id,
+          siteId,
+          source: "publicPunchPage"
+        }
+      });
+
+      responseJson(res, 200, {
+        ok: true,
+        correctionRequest: requestRecord
+      });
+    } catch (error) {
+      logger.error("createWorkerCorrectionRequest failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to save the worker correction request."
+      });
+    }
+  }
+);
+
+exports.getWorkerPublicTimeSnapshot = onRequest(
+  {
+    cors: inviteCorsOrigins
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const agencyId = String(req.body.agencyId || "").trim();
+      const clientId = String(req.body.clientId || req.body.companyId || "").trim();
+      const siteId = String(req.body.siteId || "").trim();
+      const workerId = String(req.body.workerId || "").trim();
+      const workerName = String(req.body.workerName || "").trim();
+      const pinCode = String(req.body.pinCode || "").trim();
+
+      if (!agencyId || !clientId || !siteId || !workerName) {
+        throw createHttpError(400, "Agency, client, site, and worker name are required.");
+      }
+
+      await getPublicPunchContextRecord({ agencyId, clientId, siteId });
+      const { worker } = await resolvePublicWorker({ agencyId, siteId, workerId, workerName });
+      validateWorkerPin(worker, pinCode);
+
+      const recentPunches = await getWorkerRecentPunches(worker.id);
+      const weekSnapshot = filterWorkerWeekPunches(recentPunches, {
+        agencyId,
+        clientId,
+        siteId
+      });
+
+      responseJson(res, 200, {
+        ok: true,
+        workerId: worker.id,
+        workerName: `${worker.firstName || ""} ${worker.lastName || ""}`.trim() || workerName,
+        weekStart: weekSnapshot.weekStart.toISOString(),
+        weekEnd: weekSnapshot.weekEnd.toISOString(),
+        punches: weekSnapshot.punches
+      });
+    } catch (error) {
+      logger.error("getWorkerPublicTimeSnapshot failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to load the worker time snapshot."
+      });
+    }
+  }
+);
 
 exports.createClientManagerInvite = onRequest(
   {

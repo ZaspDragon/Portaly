@@ -8753,7 +8753,7 @@
           <div class="container hero-grid landing-hero-grid">
             <div class="hero-copy">
               <h2>QR Time Tracking for Staffing Agencies</h2>
-              <p>Workers clock in by QR code. Clients approve hours. Payroll exports in minutes.</p>
+              <p>Workers clock in by QR code. Clients approve hours online. Payroll exports in minutes.</p>
               <div class="hero-proof-row">
                 <span class="hero-proof-pill">QR worker clock-in</span>
                 <span class="hero-proof-pill">Client approvals</span>

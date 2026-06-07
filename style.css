@@ -1681,6 +1681,15 @@ body.nav-open .mobile-backdrop {
   color: var(--ink-soft);
 }
 
+.landing-hero-section .hero-copy h2 {
+  margin: 0 0 22px;
+}
+
+.landing-hero-section .hero-proof-row,
+.landing-hero-section .hero-actions {
+  margin-top: 28px;
+}
+
 .field-group input,
 .field-group select,
 .field-group textarea {

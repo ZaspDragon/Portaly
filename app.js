@@ -8752,34 +8752,17 @@
         <section class="section landing-hero-section" id="hero">
           <div class="container hero-grid landing-hero-grid">
             <div class="hero-copy">
-              <p class="eyebrow">Portaly is the business layer. QRTimeClock2 is the worker punch tool.</p>
-              <h2>QR Time Tracking for Staffing Agencies and Warehouse Clients</h2>
-              <p>Sell staffing time tracking today with a portal built for agencies, warehouse clients, client managers, and payroll teams that need clean weekly hours.</p>
-              <p class="landing-trust-line">Run clients, sites, workers, approvals, payroll exports, billing status, and audit history from one paid SaaS portal without forcing worker logins.</p>
+              <h2>QR Time Tracking for Staffing Agencies</h2>
+              <p>Workers clock in by QR code. Clients approve hours. Payroll exports in minutes.</p>
               <div class="hero-proof-row">
-                <span class="hero-proof-pill">Workers clock in by QR code</span>
-                <span class="hero-proof-pill">No worker email required</span>
-                <span class="hero-proof-pill">Client managers approve hours</span>
-                <span class="hero-proof-pill">Payroll-ready CSV export</span>
+                <span class="hero-proof-pill">QR worker clock-in</span>
+                <span class="hero-proof-pill">Client approvals</span>
+                <span class="hero-proof-pill">Payroll-ready CSV</span>
               </div>
               <div class="hero-actions">
                 <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
                 <button class="button button-secondary button-large" data-action="book-live-demo" type="button">Book Live Demo</button>
               </div>
-              <div class="hero-link-row">
-                <button class="marketing-link" data-action="scroll-marketing-section" data-section="pricing" type="button">View Pricing</button>
-                <button class="marketing-link" data-action="go-route" data-route="demo" type="button">Open Interactive Demo</button>
-                <button class="marketing-link" data-action="go-route" data-route="clock" type="button">Open Worker Clock</button>
-                <button class="marketing-link" data-action="go-route" data-route="login" type="button">Login</button>
-              </div>
-              ${renderDemoAccessForm({
-                eyebrow: "Send Me Demo Access",
-                title: "Email the demo login to yourself",
-                copy: "Get a working Portaly demo login in your inbox so you can test worker QR punching, client approvals, payroll export, and the agency dashboard right away.",
-                idSuffix: "landing",
-                cardClass: "hero-demo-access-card",
-                includeBookDemo: false
-              })}
             </div>
             <div class="hero-panel landing-dashboard-panel">
               <div class="landing-dashboard-shell">
@@ -8795,33 +8778,8 @@
                   ${renderDashboardPreviewCard("Active Workers", preview.metrics.activeWorkers, "Assigned and ready to work")}
                   ${renderDashboardPreviewCard("Clocked In Today", preview.metrics.clockedInToday, "Workers already captured today")}
                   ${renderDashboardPreviewCard("Pending Approvals", preview.metrics.pendingApprovals, "Waiting on client signoff")}
-                  ${renderDashboardPreviewCard("Open Assignments", preview.metrics.openAssignments, "Placements live across sites")}
                   ${renderDashboardPreviewCard("Hours This Week", formatHours(preview.metrics.hoursThisWeek), "Approved and in-progress time")}
                 </div>
-                <div class="landing-dashboard-feed">
-                  <div class="landing-feed-item">
-                    <div>
-                      <strong>Worker punch flow</strong>
-                      <p>${escapeHtml(preview.workerName)} at ${escapeHtml(preview.siteName)}</p>
-                    </div>
-                    <span class="status-badge ${escapeHtml(preview.statusTone)}">${escapeHtml(preview.statusLabel)}</span>
-                  </div>
-                  <div class="landing-feed-item">
-                    <div>
-                      <strong>Client approval queue</strong>
-                      <p>${escapeHtml(String(preview.metrics.pendingApprovals))} submitted timecards still need manager signoff.</p>
-                    </div>
-                    <span class="status-badge status-warning">Action needed</span>
-                  </div>
-                  <div class="landing-feed-item">
-                    <div>
-                      <strong>Payroll prep</strong>
-                      <p>Approved hours are ready to move from timekeeping into export.</p>
-                    </div>
-                    <span class="status-badge status-success">Payroll ready</span>
-                  </div>
-                </div>
-                <p class="helper-copy">Give owners, payroll teams, and client managers a live view before payroll turns into spreadsheet cleanup.</p>
               </div>
             </div>
           </div>

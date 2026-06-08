@@ -8452,14 +8452,12 @@
             </div>
           </div>
           <div class="marketing-links">
-            <button class="marketing-link" data-action="scroll-marketing-section" data-section="features" type="button">Solutions</button>
-            <button class="marketing-link" data-action="scroll-marketing-section" data-section="how-it-works" type="button">How It Works</button>
+            <button class="marketing-link" data-action="scroll-marketing-section" data-section="product" type="button">Product</button>
+            <button class="marketing-link" data-action="scroll-marketing-section" data-section="workflow" type="button">Workflow</button>
             <button class="marketing-link" data-action="scroll-marketing-section" data-section="pricing" type="button">Pricing</button>
-            <button class="marketing-link" data-action="go-route" data-route="clock" type="button">QR Punch Tool</button>
-            <button class="marketing-link" data-action="go-route" data-route="login" type="button">Login</button>
           </div>
           <div class="marketing-actions">
-            <button class="button button-secondary" data-action="book-live-demo" type="button">Book Live Demo</button>
+            <button class="button button-secondary" data-action="go-route" data-route="login" type="button">Open App</button>
             <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
           </div>
         </div>
@@ -8740,6 +8738,207 @@
   }
 
   function renderMarketingLanding(focusPricing) {
+    const preview = getMarketingPreviewData();
+    const store = state.demoStore || emptyStore();
+    const previewAgencyId = (store.agencies || [])[0]?.id || "";
+    const agencyRows = rows => (rows || []).filter(row => !previewAgencyId || !row.agencyId || row.agencyId === previewAgencyId);
+    const sites = agencyRows(store.sites).filter(site => site.status !== "inactive").slice(0, 3);
+    const clients = agencyRows(store.clients);
+    const assignments = agencyRows(store.assignments).filter(assignment => !["ended", "inactive"].includes(String(assignment.status || "").toLowerCase()));
+    const workers = agencyRows(store.workers).filter(worker => worker.status !== "inactive");
+    const siteRows = sites.map(site => ({
+      name: site.name || "Active site",
+      clientName: clients.find(client => client.id === site.clientId)?.name || "Staffing client",
+      workerCount: assignments.filter(assignment => assignment.siteId === site.id).length
+    }));
+    const exceptionLabels = ["Missing clock-out", "Missed lunch", "Pending correction"];
+    const exceptionRows = workers.slice(0, 3).map((worker, index) => ({
+      workerName: fullName(worker) || `Worker ${index + 1}`,
+      issue: exceptionLabels[index] || "Needs review"
+    }));
+    const modules = ["Workers", "Clients", "Sites", "Time Clock", "Approvals", "Payroll", "Reports"];
+    const workflow = [
+      ["Worker clocks in", "Scan the site QR, enter a PIN, and punch."],
+      ["Hours appear", "Attendance and exceptions update for the agency."],
+      ["Manager reviews", "Missed punches move through a tracked correction flow."],
+      ["Client approves", "Client managers sign off in their own portal."],
+      ["Payroll export", "Approved time leaves Portaly as payroll-ready CSV or Excel."]
+    ];
+    const included = ["Workers", "Clients", "Sites", "Time clock", "Approvals", "Payroll export", "Audit log", "Reports"];
+
+    return `
+      <main class="hero-shell landing-os">
+        <section class="section landing-os-hero" id="hero">
+          <div class="container landing-os-hero-grid">
+            <div class="hero-copy landing-os-copy">
+              <p class="eyebrow">Staffing Agency Workforce OS</p>
+              <h2>From worker clock-in to payroll export, in one place.</h2>
+              <p>Portaly gives staffing agencies one clear workflow for workers, client sites, time capture, approvals, and payroll prep.</p>
+              <div class="hero-proof-row">
+                <span class="hero-proof-pill">QR + PIN time clock</span>
+                <span class="hero-proof-pill">Client approvals</span>
+                <span class="hero-proof-pill">Payroll-ready exports</span>
+              </div>
+              <div class="hero-actions">
+                <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+                <button class="button button-secondary button-large" data-action="book-live-demo" type="button">Book Demo</button>
+                <button class="button button-ghost button-large" data-action="go-route" data-route="login" type="button">Open App</button>
+              </div>
+            </div>
+            <div class="landing-os-summary-card">
+              <p class="eyebrow">Built For The Weekly Staffing Cycle</p>
+              <h3>Know what happened today and what payroll needs next.</h3>
+              <div class="landing-os-summary-list">
+                <span>Live worker attendance</span>
+                <span>Site-level exceptions</span>
+                <span>Client approval status</span>
+                <span>Export-ready payroll hours</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section landing-os-product" id="product">
+          <div class="container">
+            <div class="section-header landing-os-section-header">
+              <div>
+                <p class="eyebrow">The Product</p>
+                <h2 class="section-title">Your staffing operation, visible in one dashboard.</h2>
+              </div>
+              <p class="section-copy">Owners see today’s labor picture without jumping between a roster tool, a time clock, approval emails, and payroll spreadsheets.</p>
+            </div>
+            <div class="landing-os-preview">
+              <aside class="landing-os-modules" aria-label="Portaly modules">
+                <div class="landing-os-preview-brand">
+                  <div class="brand-mark">${escapeHtml(getBrandInitials())}</div>
+                  <strong>${escapeHtml(getBrandName())}</strong>
+                </div>
+                ${modules.map((module, index) => `<span class="${index === 0 ? "is-active" : ""}">${escapeHtml(module)}</span>`).join("")}
+              </aside>
+              <div class="landing-os-dashboard">
+                <div class="landing-os-dashboard-head">
+                  <div>
+                    <p class="eyebrow">Today</p>
+                    <h3>${escapeHtml(preview.agencyName)}</h3>
+                  </div>
+                  <span class="status-badge status-success">Live operations</span>
+                </div>
+                <div class="landing-os-stat-grid">
+                  ${renderDashboardPreviewCard("Clocked In", preview.metrics.clockedInToday, "Workers with activity today")}
+                  ${renderDashboardPreviewCard("Missed Punches", Math.max(exceptionRows.length, 1), "Needs agency review")}
+                  ${renderDashboardPreviewCard("Pending Approvals", preview.metrics.pendingApprovals, "Waiting on clients")}
+                  ${renderDashboardPreviewCard("Payroll Hours", formatHours(preview.metrics.hoursThisWeek), "Current week")}
+                </div>
+                <div class="landing-os-dashboard-columns">
+                  <div class="landing-os-list-card">
+                    <div class="landing-os-list-head"><strong>Active sites</strong><span>${sites.length || 1} live</span></div>
+                    ${(siteRows.length ? siteRows : [{ name: preview.siteName, clientName: preview.clientName, workerCount: preview.metrics.clockedInToday }]).map(site => `
+                      <div class="landing-os-list-row">
+                        <div><strong>${escapeHtml(site.name)}</strong><span>${escapeHtml(site.clientName)}</span></div>
+                        <b>${escapeHtml(String(site.workerCount))} workers</b>
+                      </div>
+                    `).join("")}
+                  </div>
+                  <div class="landing-os-list-card">
+                    <div class="landing-os-list-head"><strong>Today's exceptions</strong><span>Review</span></div>
+                    ${(exceptionRows.length ? exceptionRows : [{ workerName: preview.workerName, issue: "Missing clock-out" }]).map(item => `
+                      <div class="landing-os-list-row">
+                        <div><strong>${escapeHtml(item.workerName)}</strong><span>${escapeHtml(item.issue)}</span></div>
+                        <span class="status-badge status-warning">Open</span>
+                      </div>
+                    `).join("")}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="workflow">
+          <div class="container">
+            <div class="section-header landing-os-section-header">
+              <div>
+                <p class="eyebrow">The 5-Step Loop</p>
+                <h2 class="section-title">From punch to payroll, without losing the thread.</h2>
+              </div>
+              <p class="section-copy">Every handoff has an owner, a status, and an audit trail.</p>
+            </div>
+            <div class="landing-os-loop">
+              ${workflow.map((step, index) => `
+                <article class="landing-os-loop-step">
+                  <span>${String(index + 1).padStart(2, "0")}</span>
+                  <h3>${escapeHtml(step[0])}</h3>
+                  <p>${escapeHtml(step[1])}</p>
+                </article>
+              `).join("")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section landing-os-replace">
+          <div class="container landing-os-replace-grid">
+            <div>
+              <p class="eyebrow">One Operating System</p>
+              <h2 class="section-title">Replace four disconnected tools with one.</h2>
+              <p class="section-copy">Portaly brings roster management, site time clocks, approval paperwork, and payroll spreadsheets into one staffing-specific workflow.</p>
+              <button class="button button-primary" data-action="go-route" data-route="login" type="button">Open The App</button>
+            </div>
+            <div class="landing-os-feature-list">
+              ${[
+                "Unlimited workers, clients, and sites",
+                "QR + PIN time clock on any device",
+                "Missed punch workflow with audit log",
+                "Client-side approval portal with signature",
+                "Payroll-ready CSV / Excel export"
+              ].map(item => `<div><span>Included</span><strong>${escapeHtml(item)}</strong></div>`).join("")}
+            </div>
+          </div>
+        </section>
+
+        <section class="section ${focusPricing ? "marketing-section-highlight" : ""}" id="pricing">
+          <div class="container landing-os-pricing-wrap">
+            <div class="section-header landing-os-section-header">
+              <div>
+                <p class="eyebrow">Simple Pricing</p>
+                <h2 class="section-title">Pay for active workers, not software complexity.</h2>
+              </div>
+              <p class="section-copy">One agency plan with no setup fees and the complete punch-to-payroll workflow included.</p>
+            </div>
+            <div class="landing-os-pricing-card">
+              <div>
+                <p class="eyebrow">Agency Plan</p>
+                <div class="landing-os-price"><strong>$4</strong><span>/ active worker / month</span></div>
+                <p>No setup fees. Add workers as your book of business grows.</p>
+                <div class="hero-actions">
+                  <button class="button button-primary button-large" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+                  <button class="button button-secondary button-large" data-action="book-live-demo" type="button">Book Demo</button>
+                </div>
+              </div>
+              <div class="landing-os-included-grid">
+                ${included.map(item => `<span>${escapeHtml(item)}</span>`).join("")}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section landing-os-final">
+          <div class="container">
+            <div class="support-card marketing-callout">
+              <p class="eyebrow">Ready To Run A Cleaner Week?</p>
+              <h3>Give workers, clients, and payroll one connected path.</h3>
+              <div class="page-actions">
+                <button class="button button-primary" data-action="go-route" data-route="trial" type="button">Start Free Trial</button>
+                <button class="button button-secondary" data-action="book-live-demo" type="button">Book Demo</button>
+                <button class="button button-ghost" data-action="go-route" data-route="login" type="button">Open App</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    `;
+  }
+
+  function renderLegacyMarketingLanding(focusPricing) {
     const preview = getMarketingPreviewData();
     const roi = calculateMarketingRoi();
     const planCards = ["starter", "agency", "growth", "enterprise"]

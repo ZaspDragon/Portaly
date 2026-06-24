@@ -44,7 +44,7 @@
     offlinePunchQueue: "portaly_offline_punch_queue_v1"
   };
 
-  const DEFAULT_BRAND = "#1f6fff";
+  const DEFAULT_BRAND = "#1a5ecc";
   const DEFAULT_SUPPORT_EMAIL = "support@portaly-demo.com";
   const DEFAULT_SUPPORT_PHONE = "(800) 555-0199";
   const BILLING_LOCK_STATUSES = new Set(["past_due", "unpaid", "expired_trial", "canceled"]);
@@ -16291,7 +16291,7 @@
         settings: buildAgencySettings({
           agencyName: "Harbor Staffing Group",
           logoInitials: "HS",
-          primaryColor: "#1f6fff",
+          primaryColor: "#1a5ecc",
           supportEmail: "ops@harborstaffing.com",
           supportPhone: "(214) 555-0188",
           payrollContact: "payroll@harborstaffing.com",

@@ -17,6 +17,7 @@
     "approvals",
     "payrollRuns",
     "subscriptions",
+    "billingMetrics",
     "auditLogs",
     "settings"
   ];
@@ -33,6 +34,7 @@
     "timesheets",
     "approvals",
     "payrollRuns",
+    "billingMetrics",
     "auditLogs"
   ];
 
@@ -64,6 +66,7 @@
     "approvals",
     "timesheets",
     "payrollRuns",
+    "billingMetrics",
     "auditLogs"
   ]);
   const DEFAULT_APP_URL = `${window.location.origin}${window.location.pathname}`;
@@ -102,46 +105,48 @@
       id: "starter",
       name: "Starter",
       label: "Starter",
-      price: 99,
+      price: 49,
+      baseMonthlyPrice: 49,
+      includedWorkers: 10,
+      additionalWorkerPrice: 4,
       clientLimit: 1,
-      workerLimit: 50,
+      workerLimit: null,
       siteLimit: 1,
       squarePaymentLink: BILLING_CONFIG.starterPaymentLink || "https://square.link/u/mfu6eun7",
-      features: ["1 agency", "1 client", "1 site", "50 workers", "QR clock-in", "Weekly CSV export"]
-    },
-    agency: {
-      id: "agency",
-      name: "Agency",
-      label: "Agency",
-      price: 249,
-      clientLimit: 5,
-      workerLimit: 250,
-      siteLimit: 15,
-      squarePaymentLink: BILLING_CONFIG.agencyPaymentLink || "https://square.link/u/ojz2a1Au",
-      features: ["5 clients", "15 sites", "250 workers", "Correction requests", "Client approvals", "Audit logs"]
+      features: ["$49/month base", "10 active workers included", "$4/month per additional active worker", "QR clock-in", "Weekly CSV export"]
     },
     growth: {
       id: "growth",
       name: "Growth",
       label: "Growth",
-      price: 499,
+      price: 249,
+      baseMonthlyPrice: 249,
+      includedWorkers: 50,
+      additionalWorkerPrice: 3,
       clientLimit: null,
-      workerLimit: 1000,
+      workerLimit: null,
       siteLimit: null,
       squarePaymentLink: BILLING_CONFIG.growthPaymentLink || "https://square.link/u/Iy99LyYg",
-      features: ["Unlimited clients", "Unlimited sites", "1,000 workers", "Payroll exports", "Priority support", "Advanced reports"]
+      features: ["$249/month base", "50 active workers included", "$3/month per additional active worker", "Payroll exports", "Priority support", "Advanced reports"]
     },
     enterprise: {
       id: "enterprise",
       name: "Enterprise",
       label: "Enterprise",
       price: null,
+      baseMonthlyPrice: null,
+      includedWorkers: null,
+      additionalWorkerPrice: null,
       clientLimit: null,
       workerLimit: null,
       siteLimit: null,
       squarePaymentLink: BILLING_CONFIG.enterprisePaymentLink || "https://square.link/u/96br6x5W",
-      features: ["Custom pricing", "Multiple branches", "Custom integrations", "Onboarding support"]
+      features: ["Custom pricing", "Unlimited active workers", "Square quantity data prepared", "Multiple branches", "Custom integrations", "Onboarding support"]
     }
+  };
+
+  const LEGACY_PLAN_ALIASES = {
+    agency: "growth"
   };
 
   const NAV_ITEMS = [
@@ -227,7 +232,7 @@
     loading: false,
     mobileNavOpen: false,
     route: "landing",
-    selectedPlan: "agency",
+    selectedPlan: "growth",
     selectedPayPeriod: "",
     roi: {
       workers: 48,
@@ -2088,6 +2093,10 @@
     return ["platformOwner", "agencyOwner"].includes(state.session.role);
   }
 
+  function canViewBilling() {
+    return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
+  }
+
   function canManageSettings() {
     return ["platformOwner", "agencyOwner", "agencyAdmin"].includes(state.session.role);
   }
@@ -2524,7 +2533,7 @@
           await copyPayrollCsv(true);
           break;
         case "select-plan":
-          state.selectedPlan = trigger.dataset.plan || "agency";
+          state.selectedPlan = normalizePlanId(trigger.dataset.plan || "growth");
           renderApp();
           break;
         case "start-checkout":
@@ -2553,6 +2562,9 @@
           break;
         case "refresh-subscription":
           await refreshSubscriptionStatus();
+          break;
+        case "refresh-billing-metrics":
+          await syncWorkerBillingMetrics();
           break;
         case "view-payment-history":
           openPaymentHistoryPlaceholder();
@@ -2957,7 +2969,7 @@
       throw new Error("Passwords do not match.");
     }
 
-    const selectedPlan = values.selectedPlan;
+    const selectedPlan = normalizePlanId(values.selectedPlan);
     const trialDays = Number((state.firebase.config && state.firebase.config.trialDays) || 14);
     const trialStart = new Date();
     const trialEnd = addDays(trialStart, trialDays);
@@ -3139,6 +3151,7 @@
     const agencyCreatedAt = existingAgency?.createdAt || nowIso;
     const updatedAt = nowIso;
     const agencyId = state.profileRepair?.agencyId || existingAgency?.id || createId("agency");
+    const selectedPlan = normalizePlanId(values.selectedPlan);
     const agencySettings = buildAgencySettings({
       agencyName: values.agencyName,
       logoInitials: initials(values.agencyName),
@@ -3172,7 +3185,7 @@
       name: values.agencyName,
       ownerUserId: uid,
       status: "trial",
-      planId: values.selectedPlan,
+      planId: selectedPlan,
       subscriptionStatus: "trialing",
       trialStart: trialStartIso,
       trialEnd: trialEndIso,
@@ -3201,7 +3214,7 @@
       billingProvider: "square",
       squareCustomerId: existingSubscription?.squareCustomerId || "",
       squareSubscriptionId: existingSubscription?.squareSubscriptionId || "",
-      planId: values.selectedPlan,
+      planId: selectedPlan,
       status: "trialing",
       currentPeriodStart: existingSubscription?.currentPeriodStart || "",
       currentPeriodEnd: existingSubscription?.currentPeriodEnd || "",
@@ -3217,7 +3230,7 @@
       console.log("[Portaly] Creating Firestore workspace docs", {
         agencyId,
         userId: uid,
-        selectedPlan: values.selectedPlan
+        selectedPlan
       });
       const batch = state.firebase.db.batch();
       batch.set(state.firebase.db.collection("agencies").doc(agencyId), agencyDoc);
@@ -3242,7 +3255,7 @@
     let sampleDataError = null;
     if (values.loadSampleData === "on") {
       try {
-        await loadSampleDataIntoCloud(agencyId, uid, values.agencyName, values.selectedPlan);
+        await loadSampleDataIntoCloud(agencyId, uid, values.agencyName, selectedPlan);
       } catch (error) {
         console.error(error);
         sampleDataError = error;
@@ -8286,7 +8299,7 @@
 
     const scoped = getScopedData();
     const agency = getCurrentAgency();
-    const plan = getPlanDefinition(agency?.planId || "agency");
+    const plan = getPlanDefinition(agency?.planId || "growth");
     const usage = getUsageStats(scoped, agency?.id);
 
     if (entityType === "worker" && !existingRecord && plan.workerLimit !== null && usage.activeWorkers >= plan.workerLimit) {
@@ -8941,7 +8954,7 @@
   function renderLegacyMarketingLanding(focusPricing) {
     const preview = getMarketingPreviewData();
     const roi = calculateMarketingRoi();
-    const planCards = ["starter", "agency", "growth", "enterprise"]
+    const planCards = ["starter", "growth", "enterprise"]
       .map(planId => PLAN_DEFINITIONS[planId])
       .filter(Boolean)
       .map(plan => renderPricingCard(plan, plan.id === "growth", "marketing"))
@@ -10156,9 +10169,8 @@
               <div class="field-group">
                 <label for="trial-plan">Selected plan</label>
                 <select id="trial-plan" name="selectedPlan">
-                  <option value="starter">Starter - $99/month</option>
-                  <option value="agency" selected>Agency - $249/month</option>
-                  <option value="growth">Growth - $499/month</option>
+                  <option value="starter">Starter - $49/month + active worker overage</option>
+                  <option value="growth" selected>Growth - $249/month + active worker overage</option>
                   <option value="enterprise">Enterprise - Custom</option>
                 </select>
               </div>
@@ -10198,7 +10210,7 @@
     const authUser = state.authUser || state.firebase.auth?.currentUser || null;
     const draft = state.profileRepair?.prefill || {};
     const accountEmail = authUser?.email || state.profileRepair?.email || "";
-    const selectedPlan = draft.selectedPlan || window.localStorage.getItem("portaly_selected_plan") || "agency";
+    const selectedPlan = normalizePlanId(draft.selectedPlan || window.localStorage.getItem("portaly_selected_plan") || "growth");
     return `
       <main class="auth-shell">
         <div class="container auth-grid onboarding-auth-grid">
@@ -10247,9 +10259,8 @@
               <div class="field-group">
                 <label for="complete-plan">Selected plan</label>
                 <select id="complete-plan" name="selectedPlan">
-                  <option value="starter" ${selectedPlan === "starter" ? "selected" : ""}>Starter - $99/month</option>
-                  <option value="agency" ${selectedPlan === "agency" ? "selected" : ""}>Agency - $249/month</option>
-                  <option value="growth" ${selectedPlan === "growth" ? "selected" : ""}>Growth - $499/month</option>
+                  <option value="starter" ${selectedPlan === "starter" ? "selected" : ""}>Starter - $49/month + active worker overage</option>
+                  <option value="growth" ${selectedPlan === "growth" ? "selected" : ""}>Growth - $249/month + active worker overage</option>
                   <option value="enterprise" ${selectedPlan === "enterprise" ? "selected" : ""}>Enterprise - Custom</option>
                 </select>
               </div>
@@ -10638,7 +10649,7 @@
     const metrics = buildAgencyDashboardMetrics(scoped);
     const attentionItems = buildAttentionItems(scoped).slice(0, 6);
     const usage = getUsageStats(scoped, state.session.agencyId);
-    const plan = getPlanDefinition(getCurrentAgency()?.planId || "agency");
+    const plan = getPlanDefinition(getCurrentAgency()?.planId || "growth");
     const showOnboarding = shouldShowEmptyWorkspaceOnboarding(scoped);
     const showRolloutChecklist = ["agencyOwner", "agencyAdmin"].includes(state.session.role);
     const showSampleDataActions = state.session.mode !== "cloud" && canDeleteSampleData();
@@ -12281,24 +12292,31 @@
   function renderBillingPage() {
     const agency = getCurrentAgency();
     const subscription = getCurrentSubscription();
-    const plan = getPlanDefinition(agency?.planId || state.selectedPlan || "agency");
+    const plan = getPlanDefinition(agency?.planId || state.selectedPlan || "growth");
     const settings = getCurrentSettings();
     const usage = getUsageStats(getScopedData(), agency?.id);
-    const nextBillingDate = subscription?.currentPeriodEnd || subscription?.trialEnd || agency?.trialEnd || addDays(new Date(), 14).toISOString();
     const status = subscription?.status || agency?.subscriptionStatus || "trialing";
     const canManage = canManageBilling();
+    const canUpdateMetrics = canViewBilling();
     const subscriptionConnected = !!subscription?.squareSubscriptionId || !!subscription?.stripeSubscriptionId;
     const billingContact = settings?.billingContact || settings?.supportEmail || agency?.billingContact || DEFAULT_SUPPORT_EMAIL;
     const hasLiveCheckoutLink = !!plan.squarePaymentLink;
-    const planOptions = Object.values(PLAN_DEFINITIONS).map(item => renderPricingCard(item, item.id === (agency?.planId || state.selectedPlan), "billing")).join("");
+    const selectedPlanId = normalizePlanId(agency?.planId || state.selectedPlan || "growth");
+    const planOptions = Object.values(PLAN_DEFINITIONS).map(item => renderPricingCard(item, item.id === selectedPlanId, "billing")).join("");
+    const billingMetrics = buildWorkerBillingMetrics(getScopedData(), agency, subscription, state.now);
+    const storedBillingMetric = getCurrentBillingMetric();
+    const estimatedCharge = billingMetrics.estimatedMonthlyCharge === null ? "Custom" : formatCurrency(billingMetrics.estimatedMonthlyCharge);
+    const storedMetricCopy = storedBillingMetric
+      ? `Last stored ${formatDateTime(storedBillingMetric.calculatedAt || storedBillingMetric.updatedAt || storedBillingMetric.createdAt)}`
+      : "Not stored yet";
 
     return `
       <section class="stack-lg">
         <div class="metrics-grid">
           ${renderMetricCard("Current Plan", plan.label, "Monthly plan tier", "PL")}
-          ${renderMetricCard("Trial Days Remaining", Math.max(getTrialDaysRemaining(), 0), "Days left before billing starts", "TD")}
-          ${renderMetricCard("Subscription Status", formatStatusLabel(status), "Billing and access status for this agency", "SS")}
-          ${renderMetricCard("Worker / Site Usage", `${usage.activeWorkers}${plan.workerLimit ? ` / ${plan.workerLimit}` : ""} workers`, `${usage.activeSites}${plan.siteLimit ? ` / ${plan.siteLimit}` : ""} sites`, "US")}
+          ${renderMetricCard("Active Workers", billingMetrics.activeWorkerCount, `${billingMetrics.includedWorkerCount} included this period`, "AW")}
+          ${renderMetricCard("Additional Workers", billingMetrics.additionalWorkerCount, "Billable workers above plan allowance", "AD")}
+          ${renderMetricCard("Estimated Charge", estimatedCharge, "Current billing-period estimate", "EC")}
         </div>
 
         ${["past_due", "unpaid", "expired_trial"].includes(status) ? `
@@ -12311,22 +12329,28 @@
         ` : ""}
 
         <div class="summary-card">
-          <p class="eyebrow">Agency Billing</p>
-          <h3>${escapeHtml(plan.label)} plan</h3>
+          <p class="eyebrow">Agency Billing Dashboard</p>
+          <h3>${escapeHtml(plan.label)} worker-based billing</h3>
           <div class="detail-grid" style="margin-top: 18px;">
             ${renderDetailBox("Current plan", plan.label)}
             ${renderDetailBox("Subscription status", formatStatusLabel(status))}
-            ${renderDetailBox("Trial days remaining", String(Math.max(getTrialDaysRemaining(), 0)))}
-            ${renderDetailBox("Next billing date", formatDate(nextBillingDate))}
+            ${renderDetailBox("Billing period", `${formatDate(billingMetrics.billingPeriodStart)} to ${formatDate(billingMetrics.billingPeriodEnd)}`)}
+            ${renderDetailBox("Active worker count", String(billingMetrics.activeWorkerCount))}
+            ${renderDetailBox("Included worker count", billingMetrics.includedWorkerCount === billingMetrics.activeWorkerCount && plan.includedWorkers === null ? "Custom" : String(billingMetrics.includedWorkerCount))}
+            ${renderDetailBox("Additional worker count", String(billingMetrics.additionalWorkerCount))}
+            ${renderDetailBox("Base monthly price", billingMetrics.baseMonthlyPrice === null ? "Custom" : formatCurrency(billingMetrics.baseMonthlyPrice))}
+            ${renderDetailBox("Additional worker rate", billingMetrics.additionalWorkerPrice === null ? "Custom" : `${formatCurrency(billingMetrics.additionalWorkerPrice)} / active worker`)}
+            ${renderDetailBox("Estimated monthly charge", estimatedCharge)}
+            ${renderDetailBox("Metrics storage", storedMetricCopy)}
             ${renderDetailBox("Billing contact", billingContact)}
             ${renderDetailBox("Provider status", subscriptionConnected ? "Connected" : "Square/Stripe-ready placeholder")}
           </div>
           <div class="stack-md" style="margin-top: 18px;">
             ${renderUsageRow("Active clients", usage.activeClients || getScopedData().clients.filter(client => client.status !== "inactive").length, plan.clientLimit)}
-            ${renderUsageRow("Active workers", usage.activeWorkers, plan.workerLimit)}
+            ${renderUsageRow("Active billing workers", billingMetrics.activeWorkerCount, plan.includedWorkers)}
             ${renderUsageRow("Active sites", usage.activeSites, plan.siteLimit)}
           </div>
-          <p class="helper-copy" style="margin-top: 18px;">Use a live checkout link when one is configured. If not, Portaly keeps upgrade controls honest and falls back to Contact Sales or Request Upgrade instead of pretending payments already work.</p>
+          <p class="helper-copy" style="margin-top: 18px;">Active workers are counted once per billing period when they have at least one punch, approved timesheet/approval, or assignment in that period. The saved metrics include Square-ready quantities for a future base subscription plus worker overage setup.</p>
           ${!subscriptionConnected ? `
             <div class="notice-card warning" style="margin-top: 18px;">
               <div>
@@ -12346,6 +12370,7 @@
           <div class="page-actions billing-action-grid" style="margin-top: 18px;">
             ${hasLiveCheckoutLink ? `<button class="button button-primary" data-action="start-checkout" data-plan="${escapeHtml(plan.id)}" type="button" ${!canManage ? "disabled" : ""}>Start Paid Subscription</button>` : `<button class="button button-primary" data-action="book-live-demo" type="button" ${!canManage ? "disabled" : ""}>Contact Sales</button>`}
             ${hasLiveCheckoutLink ? `<button class="button button-secondary" data-action="upgrade-plan" data-plan="growth" type="button" ${!canManage ? "disabled" : ""}>Request Upgrade</button>` : `<button class="button button-secondary" data-action="book-live-demo" type="button" ${!canManage ? "disabled" : ""}>Request Upgrade</button>`}
+            <button class="button button-secondary" data-action="refresh-billing-metrics" type="button" ${!canUpdateMetrics ? "disabled" : ""}>Update Billing Metrics</button>
             <button class="button button-ghost" data-action="manage-billing" type="button" ${!canManage ? "disabled" : ""}>Billing Support</button>
             <button class="button button-ghost" data-action="refresh-subscription" type="button">Refresh Status</button>
             ${subscriptionConnected ? `<button class="button button-danger" data-action="cancel-subscription" type="button" ${!canManage || ["canceled", "cancel_at_period_end"].includes(status) ? "disabled" : ""}>Cancel Subscription</button>` : ""}
@@ -14048,6 +14073,7 @@
       approvals: filterAgency(source.approvals),
       payrollRuns: filterAgency(source.payrollRuns),
       subscriptions: filterAgency(source.subscriptions),
+      billingMetrics: filterAgency(source.billingMetrics),
       auditLogs: filterAgency(source.auditLogs),
       settings: filterAgency(source.settings)
     };
@@ -14075,7 +14101,8 @@
         clients: scoped.clients.filter(client => client.id === getCurrentWorkerFrom(scoped)?.assignedClientId),
         sites: scoped.sites.filter(site => site.id === getCurrentWorkerFrom(scoped)?.assignedSiteId),
         assignments: [],
-        subscriptions: []
+        subscriptions: [],
+        billingMetrics: []
       };
     }
 
@@ -14099,6 +14126,7 @@
         assignments: [],
         payrollRuns: [],
         subscriptions: [],
+        billingMetrics: [],
         auditLogs: []
       };
     }
@@ -14366,6 +14394,173 @@
     return { activeClients, activeWorkers, activeSites };
   }
 
+  function parseValidDate(value) {
+    if (!value) {
+      return null;
+    }
+    const date = value instanceof Date ? new Date(value) : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function getCurrentBillingPeriod(subscription = getCurrentSubscription(), agency = getCurrentAgency(), anchor = state.now) {
+    const configuredStart = parseValidDate(subscription?.currentPeriodStart || agency?.currentPeriodStart);
+    const configuredEnd = parseValidDate(subscription?.currentPeriodEnd || subscription?.nextBillingDate || agency?.currentPeriodEnd || agency?.nextBillingDate);
+    if (configuredStart && configuredEnd && configuredEnd >= configuredStart) {
+      return {
+        start: configuredStart,
+        end: configuredEnd
+      };
+    }
+
+    const current = parseValidDate(anchor) || new Date();
+    const start = new Date(current.getFullYear(), current.getMonth(), 1);
+    const end = new Date(current.getFullYear(), current.getMonth() + 1, 0, 23, 59, 59, 999);
+    return { start, end };
+  }
+
+  function isDateInRange(value, start, end) {
+    const date = parseValidDate(value);
+    return !!date && date >= start && date <= end;
+  }
+
+  function dateRangeOverlaps(startValue, endValue, periodStart, periodEnd) {
+    const start = parseValidDate(startValue) || periodStart;
+    const end = parseValidDate(endValue) || periodEnd;
+    return start <= periodEnd && end >= periodStart;
+  }
+
+  function normalizePlanId(planId) {
+    const normalized = String(planId || "").trim().toLowerCase();
+    return LEGACY_PLAN_ALIASES[normalized] || normalized || "growth";
+  }
+
+  function getWorkerBillingPlan(planId) {
+    return PLAN_DEFINITIONS[normalizePlanId(planId)] || PLAN_DEFINITIONS.growth;
+  }
+
+  function buildWorkerBillingMetrics(scoped = getScopedData(), agency = getCurrentAgency(), subscription = getCurrentSubscription(), anchor = state.now) {
+    const agencyId = agency?.id || state.session.agencyId || "";
+    const plan = getWorkerBillingPlan(subscription?.planId || agency?.planId || state.selectedPlan);
+    const period = getCurrentBillingPeriod(subscription, agency, anchor);
+    const activeWorkerIds = new Set();
+    const activeReasons = {};
+    const agencyMatches = record => !agencyId || !record.agencyId || record.agencyId === agencyId;
+    const addWorkerActivity = (workerId, reason) => {
+      const normalizedWorkerId = String(workerId || "").trim();
+      if (!normalizedWorkerId) {
+        return;
+      }
+      activeWorkerIds.add(normalizedWorkerId);
+      activeReasons[normalizedWorkerId] = [...new Set([...(activeReasons[normalizedWorkerId] || []), reason])];
+    };
+
+    (scoped.punches || [])
+      .filter(agencyMatches)
+      .filter(punch => isDateInRange(punch.timestamp || punch.createdAt, period.start, period.end))
+      .forEach(punch => addWorkerActivity(punch.workerId, "punch"));
+
+    (scoped.timesheets || [])
+      .filter(agencyMatches)
+      .filter(timesheet => String(timesheet.status || "").toLowerCase() === "approved")
+      .filter(timesheet => {
+        if (timesheet.payPeriodStart || timesheet.payPeriodEnd) {
+          return dateRangeOverlaps(timesheet.payPeriodStart, timesheet.payPeriodEnd, period.start, period.end);
+        }
+        return isDateInRange(timesheet.approvedAt || timesheet.updatedAt || timesheet.createdAt, period.start, period.end);
+      })
+      .forEach(timesheet => addWorkerActivity(timesheet.workerId, "approved_timesheet"));
+
+    (scoped.approvals || [])
+      .filter(agencyMatches)
+      .filter(approval => String(approval.status || "").toLowerCase() === "approved")
+      .filter(approval => isDateInRange(approval.reviewedAt || approval.signedAt || approval.updatedAt || approval.createdAt || approval.submittedAt, period.start, period.end))
+      .forEach(approval => addWorkerActivity(approval.workerId, "approved_timesheet"));
+
+    (scoped.assignments || [])
+      .filter(agencyMatches)
+      .filter(assignment => {
+        const status = String(assignment.status || "").toLowerCase();
+        if (status === "inactive" && !assignment.endDate) {
+          return false;
+        }
+        return dateRangeOverlaps(assignment.startDate || assignment.createdAt, assignment.endDate, period.start, period.end);
+      })
+      .forEach(assignment => addWorkerActivity(assignment.workerId, "assignment"));
+
+    const activeWorkerCount = activeWorkerIds.size;
+    const includedWorkerCount = plan.includedWorkers === null ? activeWorkerCount : Number(plan.includedWorkers || 0);
+    const additionalWorkerCount = plan.includedWorkers === null ? 0 : Math.max(activeWorkerCount - includedWorkerCount, 0);
+    const baseMonthlyPrice = plan.baseMonthlyPrice === null ? null : Number(plan.baseMonthlyPrice || plan.price || 0);
+    const additionalWorkerPrice = plan.additionalWorkerPrice === null ? null : Number(plan.additionalWorkerPrice || 0);
+    const estimatedMonthlyCharge = baseMonthlyPrice === null ? null : baseMonthlyPrice + (additionalWorkerCount * additionalWorkerPrice);
+    const periodStart = period.start.toISOString();
+    const periodEnd = period.end.toISOString();
+
+    return {
+      id: `billingMetrics_${agencyId || "agency"}_${formatDateInput(period.start)}`,
+      agencyId,
+      planId: plan.id,
+      planName: plan.label,
+      billingProvider: "square",
+      billingPeriodStart: periodStart,
+      billingPeriodEnd: periodEnd,
+      activeWorkerCount,
+      includedWorkerCount,
+      additionalWorkerCount,
+      baseMonthlyPrice,
+      additionalWorkerPrice,
+      estimatedMonthlyCharge,
+      currency: "USD",
+      activeWorkerIds: Array.from(activeWorkerIds).sort(),
+      activeWorkerReasons: activeReasons,
+      calculationVersion: "worker-billing-v1",
+      squareReady: {
+        subscriptionId: subscription?.squareSubscriptionId || "",
+        planId: plan.id,
+        billingMode: "base_subscription_plus_active_worker_overage",
+        activeWorkerQuantity: activeWorkerCount,
+        includedWorkerQuantity: includedWorkerCount,
+        additionalWorkerQuantity: additionalWorkerCount,
+        meteredComponentKey: "active_worker_overage"
+      },
+      calculatedAt: new Date().toISOString()
+    };
+  }
+
+  function getCurrentBillingMetric() {
+    const scoped = getScopedData();
+    const agencyId = state.session.agencyId || state.session.agency?.id;
+    return (scoped.billingMetrics || [])
+      .filter(metric => !agencyId || metric.agencyId === agencyId)
+      .slice()
+      .sort((left, right) => compareDates(right.calculatedAt || right.updatedAt || right.createdAt, left.calculatedAt || left.updatedAt || left.createdAt))[0] || null;
+  }
+
+  async function syncWorkerBillingMetrics(options = {}) {
+    requirePermission(canViewBilling(), "Only agency owners, admins, or platform owners can update billing metrics.");
+    const agency = getCurrentAgency();
+    if (!agency) {
+      throw new Error("Agency record not found.");
+    }
+
+    const subscription = getCurrentSubscription();
+    const metrics = buildWorkerBillingMetrics(getScopedData(), agency, subscription, state.now);
+    const previousMetric = getCurrentBillingMetric();
+    await saveData("billingMetrics", metrics.id, metrics);
+
+    if (!options.silent) {
+      await appendAuditLog("billing_metrics_updated", "billingMetrics", metrics.id, previousMetric, metrics, {
+        reason: "worker_based_billing"
+      });
+    }
+
+    await refreshCurrentView();
+    if (!options.silent) {
+      pushToast("Billing metrics updated in Firestore.", "success");
+    }
+    return metrics;
+  }
+
   function getPayPeriods(timesheets) {
     const map = new Map();
     timesheets.forEach(timesheet => {
@@ -14388,7 +14583,7 @@
   }
 
   function getPlanDefinition(planId) {
-    return PLAN_DEFINITIONS[planId] || PLAN_DEFINITIONS.agency;
+    return getWorkerBillingPlan(planId);
   }
 
   function getTrialDaysRemaining() {
@@ -16282,7 +16477,7 @@
         id: "agency_harbor",
         name: "Harbor Staffing Group",
         ownerUserId: "demo_agency_owner",
-        planId: "agency",
+        planId: "growth",
         subscriptionStatus: "trialing",
         trialStart: addDays(now, -4).toISOString(),
         trialEnd: addDays(now, 10).toISOString(),
@@ -16559,7 +16754,7 @@
       {
         id: "subscription_harbor",
         agencyId: "agency_harbor",
-        planId: "agency",
+        planId: "growth",
         status: "trialing",
         currentPeriodStart: "",
         currentPeriodEnd: "",
@@ -16581,6 +16776,8 @@
         updatedAt: addDays(now, -2).toISOString()
       }
     ];
+
+    const billingMetrics = [];
 
     const auditLogs = [
       {
@@ -16620,6 +16817,7 @@
       approvals,
       clientInvites,
       payrollRuns,
+      billingMetrics,
       subscriptions,
       auditLogs,
       settings
@@ -16658,6 +16856,7 @@
       timesheets,
       approvals,
       payrollRuns,
+      billingMetrics,
       subscriptions,
       auditLogs,
       settings
@@ -16797,6 +16996,7 @@
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }];
+    const billingMetrics = [];
     const auditLogs = seed.auditLogs
       .filter(log => log.agencyId === baseAgency.id)
       .map(log => ({ ...log, agencyId, id: `${log.id}_${agencyId}` }));
@@ -16820,6 +17020,7 @@
       timesheets,
       approvals,
       payrollRuns,
+      billingMetrics,
       subscriptions,
       auditLogs,
       settings

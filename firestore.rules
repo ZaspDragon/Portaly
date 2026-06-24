@@ -874,6 +874,18 @@ service cloud.firestore {
       allow delete: if signedIn() && isPlatformOwner();
     }
 
+    match /billingMetrics/{billingMetricId} {
+      allow read: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyResource())
+      );
+      allow create, update: if signedIn() && (
+        isPlatformOwner()
+        || (isAgencyStaff() && sameAgencyRequest())
+      );
+      allow delete: if signedIn() && isPlatformOwner();
+    }
+
     match /settings/{settingsId} {
       allow read: if signedIn() && (
         isPlatformOwner()

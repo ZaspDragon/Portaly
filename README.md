@@ -188,12 +188,11 @@ Demo data stays separate from real agency data.
 
 ## Square billing
 
-Portaly uses Square payment links on the frontend today:
+Portaly uses worker-based billing with Square-ready payment links and metrics:
 
-- Starter: `https://square.link/u/mfu6eun7`
-- Agency: `https://square.link/u/ojz2a1Au`
-- Growth: `https://square.link/u/Iy99LyYg`
-- Enterprise: `https://square.link/u/96br6x5W`
+- Starter: `$49/month`, includes 10 active workers, then `$4/month` per additional active worker
+- Growth: `$249/month`, includes 50 active workers, then `$3/month` per additional active worker
+- Enterprise: custom pricing
 
 The frontend never stores:
 
@@ -208,11 +207,10 @@ The frontend never stores:
 - `provider`
 - `functionsBaseUrl`
 - `starterPaymentLink`
-- `agencyPaymentLink`
 - `growthPaymentLink`
 - `enterprisePaymentLink`
 
-If `functionsBaseUrl` is blank, Portaly shows professional placeholders for pause, resume, cancel, refresh, payment history, and payment method actions.
+If `functionsBaseUrl` is blank, Portaly stores worker billing metrics directly in Firestore from the Billing page and shows professional placeholders for pause, resume, cancel, refresh, payment history, and payment method actions.
 
 ## Firebase Functions v2
 
@@ -231,6 +229,7 @@ Current functions include:
 - `swapSquareSubscriptionPlan`
 - `getSquareSubscriptionStatus`
 - `syncSquareSubscriptionToFirestore`
+- `syncWorkerBillingMetrics`
 - `updateSquarePaymentMethod`
 - `squareWebhook`
 
@@ -286,12 +285,12 @@ Optional params you can customize later for Portaly email and Square behavior:
 - `SQUARE_API_BASE_URL`
 - `SQUARE_API_VERSION`
 - `SQUARE_PLAN_VARIATION_STARTER`
-- `SQUARE_PLAN_VARIATION_AGENCY`
 - `SQUARE_PLAN_VARIATION_GROWTH`
 - `SQUARE_PAYMENT_LINK_STARTER`
-- `SQUARE_PAYMENT_LINK_AGENCY`
 - `SQUARE_PAYMENT_LINK_GROWTH`
 - `SQUARE_PAYMENT_LINK_ENTERPRISE`
+
+Legacy `agency` plan IDs and Square variation IDs are treated as Growth for backwards compatibility.
 
 Defaults already included in `functions/index.js`:
 

@@ -37,9 +37,6 @@ const squarePlanVariationGrowth = defineString("SQUARE_PLAN_VARIATION_GROWTH", {
 const squarePaymentLinkStarter = defineString("SQUARE_PAYMENT_LINK_STARTER", {
   default: "https://square.link/u/mfu6eun7"
 });
-const squarePaymentLinkAgency = defineString("SQUARE_PAYMENT_LINK_AGENCY", {
-  default: "https://square.link/u/ojz2a1Au"
-});
 const squarePaymentLinkGrowth = defineString("SQUARE_PAYMENT_LINK_GROWTH", {
   default: "https://square.link/u/Iy99LyYg"
 });
@@ -52,6 +49,32 @@ const inviteCorsOrigins = [
   "http://localhost:5173"
 ];
 const DUPLICATE_PUNCH_WINDOW_MS = 2 * 60 * 1000;
+const LEGACY_PLAN_ALIASES = {
+  agency: "growth"
+};
+const WORKER_BILLING_PLANS = {
+  starter: {
+    id: "starter",
+    label: "Starter",
+    baseMonthlyPrice: 49,
+    includedWorkers: 10,
+    additionalWorkerPrice: 4
+  },
+  growth: {
+    id: "growth",
+    label: "Growth",
+    baseMonthlyPrice: 249,
+    includedWorkers: 50,
+    additionalWorkerPrice: 3
+  },
+  enterprise: {
+    id: "enterprise",
+    label: "Enterprise",
+    baseMonthlyPrice: null,
+    includedWorkers: null,
+    additionalWorkerPrice: null
+  }
+};
 
 function createHttpError(status, message) {
   const error = new Error(message);
@@ -80,22 +103,22 @@ function endOfWeek(value = new Date()) {
 }
 
 function paymentLinkForPlan(planId) {
+  const normalizedPlanId = normalizePlanId(planId);
   const links = {
     starter: squarePaymentLinkStarter.value(),
-    agency: squarePaymentLinkAgency.value(),
     growth: squarePaymentLinkGrowth.value(),
     enterprise: squarePaymentLinkEnterprise.value()
   };
-  return links[planId] || "";
+  return links[normalizedPlanId] || "";
 }
 
 function planVariationIdForPlan(planId) {
+  const normalizedPlanId = normalizePlanId(planId);
   const variations = {
     starter: squarePlanVariationStarter.value(),
-    agency: squarePlanVariationAgency.value(),
     growth: squarePlanVariationGrowth.value()
   };
-  return variations[planId] || "";
+  return variations[normalizedPlanId] || "";
 }
 
 function planIdFromVariation(variationId) {
@@ -176,6 +199,15 @@ function canManageBilling(profile) {
 
 function canViewBilling(profile) {
   return canManageBilling(profile) || profile.role === "agencyAdmin";
+}
+
+function normalizePlanId(planId) {
+  const normalized = String(planId || "").trim().toLowerCase();
+  return LEGACY_PLAN_ALIASES[normalized] || normalized || "growth";
+}
+
+function getWorkerBillingPlan(planId) {
+  return WORKER_BILLING_PLANS[normalizePlanId(planId)] || WORKER_BILLING_PLANS.growth;
 }
 
 function canInviteClientManagers(profile) {
@@ -710,6 +742,172 @@ async function upsertSubscriptionRecord(agencyId, data) {
   }, { merge: true });
 }
 
+function parseValidDate(value) {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDateKey(value) {
+  const date = parseValidDate(value) || new Date();
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("-");
+}
+
+function getCurrentBillingPeriod(subscription = {}, agency = {}, anchor = new Date()) {
+  const configuredStart = parseValidDate(subscription.currentPeriodStart || agency.currentPeriodStart);
+  const configuredEnd = parseValidDate(subscription.currentPeriodEnd || subscription.nextBillingDate || agency.currentPeriodEnd || agency.nextBillingDate);
+  if (configuredStart && configuredEnd && configuredEnd >= configuredStart) {
+    return {
+      start: configuredStart,
+      end: configuredEnd
+    };
+  }
+
+  const current = parseValidDate(anchor) || new Date();
+  const start = new Date(current.getFullYear(), current.getMonth(), 1);
+  const end = new Date(current.getFullYear(), current.getMonth() + 1, 0, 23, 59, 59, 999);
+  return { start, end };
+}
+
+function isDateInRange(value, start, end) {
+  const date = parseValidDate(value);
+  return !!date && date >= start && date <= end;
+}
+
+function dateRangeOverlaps(startValue, endValue, periodStart, periodEnd) {
+  const start = parseValidDate(startValue) || periodStart;
+  const end = parseValidDate(endValue) || periodEnd;
+  return start <= periodEnd && end >= periodStart;
+}
+
+async function getAgencyRows(collectionName, agencyId) {
+  const snapshot = await admin.firestore()
+    .collection(collectionName)
+    .where("agencyId", "==", agencyId)
+    .get();
+  return snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data()
+  }));
+}
+
+function buildWorkerBillingMetricsFromRows({ agency, subscription, punches, timesheets, approvals, assignments, anchor = new Date() }) {
+  const agencyId = agency.id;
+  const plan = getWorkerBillingPlan(subscription.planId || agency.planId);
+  const period = getCurrentBillingPeriod(subscription, agency, anchor);
+  const activeWorkerIds = new Set();
+  const activeReasons = {};
+  const addWorkerActivity = (workerId, reason) => {
+    const normalizedWorkerId = String(workerId || "").trim();
+    if (!normalizedWorkerId) {
+      return;
+    }
+    activeWorkerIds.add(normalizedWorkerId);
+    activeReasons[normalizedWorkerId] = [...new Set([...(activeReasons[normalizedWorkerId] || []), reason])];
+  };
+
+  (punches || [])
+    .filter(punch => isDateInRange(punch.timestamp || punch.createdAt, period.start, period.end))
+    .forEach(punch => addWorkerActivity(punch.workerId, "punch"));
+
+  (timesheets || [])
+    .filter(timesheet => String(timesheet.status || "").toLowerCase() === "approved")
+    .filter(timesheet => {
+      if (timesheet.payPeriodStart || timesheet.payPeriodEnd) {
+        return dateRangeOverlaps(timesheet.payPeriodStart, timesheet.payPeriodEnd, period.start, period.end);
+      }
+      return isDateInRange(timesheet.approvedAt || timesheet.updatedAt || timesheet.createdAt, period.start, period.end);
+    })
+    .forEach(timesheet => addWorkerActivity(timesheet.workerId, "approved_timesheet"));
+
+  (approvals || [])
+    .filter(approval => String(approval.status || "").toLowerCase() === "approved")
+    .filter(approval => isDateInRange(approval.reviewedAt || approval.signedAt || approval.updatedAt || approval.createdAt || approval.submittedAt, period.start, period.end))
+    .forEach(approval => addWorkerActivity(approval.workerId, "approved_timesheet"));
+
+  (assignments || [])
+    .filter(assignment => {
+      const status = String(assignment.status || "").toLowerCase();
+      if (status === "inactive" && !assignment.endDate) {
+        return false;
+      }
+      return dateRangeOverlaps(assignment.startDate || assignment.createdAt, assignment.endDate, period.start, period.end);
+    })
+    .forEach(assignment => addWorkerActivity(assignment.workerId, "assignment"));
+
+  const activeWorkerCount = activeWorkerIds.size;
+  const includedWorkerCount = plan.includedWorkers === null ? activeWorkerCount : Number(plan.includedWorkers || 0);
+  const additionalWorkerCount = plan.includedWorkers === null ? 0 : Math.max(activeWorkerCount - includedWorkerCount, 0);
+  const baseMonthlyPrice = plan.baseMonthlyPrice === null ? null : Number(plan.baseMonthlyPrice || 0);
+  const additionalWorkerPrice = plan.additionalWorkerPrice === null ? null : Number(plan.additionalWorkerPrice || 0);
+  const estimatedMonthlyCharge = baseMonthlyPrice === null ? null : baseMonthlyPrice + (additionalWorkerCount * additionalWorkerPrice);
+  const periodStart = period.start.toISOString();
+  const periodEnd = period.end.toISOString();
+
+  return {
+    id: `billingMetrics_${agencyId}_${formatDateKey(period.start)}`,
+    agencyId,
+    planId: plan.id,
+    planName: plan.label,
+    billingProvider: "square",
+    billingPeriodStart: periodStart,
+    billingPeriodEnd: periodEnd,
+    activeWorkerCount,
+    includedWorkerCount,
+    additionalWorkerCount,
+    baseMonthlyPrice,
+    additionalWorkerPrice,
+    estimatedMonthlyCharge,
+    currency: "USD",
+    activeWorkerIds: Array.from(activeWorkerIds).sort(),
+    activeWorkerReasons: activeReasons,
+    calculationVersion: "worker-billing-v1",
+    squareReady: {
+      subscriptionId: subscription.squareSubscriptionId || agency.squareSubscriptionId || "",
+      planId: plan.id,
+      billingMode: "base_subscription_plus_active_worker_overage",
+      activeWorkerQuantity: activeWorkerCount,
+      includedWorkerQuantity: includedWorkerCount,
+      additionalWorkerQuantity: additionalWorkerCount,
+      meteredComponentKey: "active_worker_overage"
+    },
+    calculatedAt: nowIso()
+  };
+}
+
+async function calculateAndStoreWorkerBillingMetrics(agencyId) {
+  const { agency } = await getAgencyRefAndData(agencyId);
+  const { subscription } = await getSubscriptionRefAndData(agencyId);
+  const [punches, timesheets, approvals, assignments] = await Promise.all([
+    getAgencyRows("punches", agencyId),
+    getAgencyRows("timesheets", agencyId),
+    getAgencyRows("approvals", agencyId),
+    getAgencyRows("assignments", agencyId)
+  ]);
+  const metrics = buildWorkerBillingMetricsFromRows({
+    agency,
+    subscription,
+    punches,
+    timesheets,
+    approvals,
+    assignments
+  });
+
+  await admin.firestore().collection("billingMetrics").doc(metrics.id).set({
+    ...metrics,
+    createdAt: metrics.calculatedAt,
+    updatedAt: metrics.calculatedAt
+  }, { merge: true });
+
+  return metrics;
+}
+
 async function squareRequest(path, method = "GET", body = null) {
   if (!squareAccessToken.value()) {
     throw createHttpError(503, "Square access token is not configured.");
@@ -739,7 +937,8 @@ async function syncSquareSubscriptionRecord(agencyId, squareSubscriptionId, requ
   const subscription = payload.subscription || {};
   const actions = payload.actions || [];
   const normalizedStatus = normalizeSquareStatus(subscription.status);
-  const planId = requestedPlanId || planIdFromVariation(subscription.plan_variation_id) || "";
+  const resolvedPlanId = requestedPlanId || planIdFromVariation(subscription.plan_variation_id) || "";
+  const planId = resolvedPlanId ? normalizePlanId(resolvedPlanId) : "";
   const cancelAtPeriodEnd = actions.some(action => String(action.type || "").toUpperCase() === "CANCEL");
 
   const update = {
@@ -1769,9 +1968,10 @@ exports.createSquareSubscriptionLink = onRequest(
         throw createHttpError(403, "Only agency owners can start checkout.");
       }
 
-      const planId = String(req.body.planId || "").trim();
+      const requestedPlanId = String(req.body.planId || "").trim();
+      const planId = normalizePlanId(requestedPlanId);
       const link = paymentLinkForPlan(planId);
-      if (!planId || !link) {
+      if (!requestedPlanId || !link) {
         throw createHttpError(400, "Square payment link missing for this plan.");
       }
 
@@ -1965,8 +2165,9 @@ exports.swapSquareSubscriptionPlan = onRequest(
       }
 
       const subscriptionId = String(req.body.subscriptionId || "").trim();
-      const newPlanId = String(req.body.newPlanId || "").trim();
-      if (!subscriptionId || !newPlanId) {
+      const requestedNewPlanId = String(req.body.newPlanId || "").trim();
+      const newPlanId = normalizePlanId(requestedNewPlanId);
+      if (!subscriptionId || !requestedNewPlanId) {
         throw createHttpError(400, "Subscription ID and new plan ID are required.");
       }
 
@@ -2074,6 +2275,37 @@ exports.syncSquareSubscriptionToFirestore = onRequest(
       logger.error("syncSquareSubscriptionToFirestore failed", error);
       responseJson(res, error.status || 500, {
         error: error.message || "Unable to refresh the Square subscription."
+      });
+    }
+  }
+);
+
+exports.syncWorkerBillingMetrics = onRequest(
+  {
+    cors: true
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        responseJson(res, 405, { error: "Use POST for this endpoint." });
+        return;
+      }
+
+      const auth = await authenticateRequest(req);
+      if (!canViewBilling(auth.profile)) {
+        throw createHttpError(403, "Only agency leadership can update billing metrics.");
+      }
+
+      const agencyId = resolveAgencyId(auth.profile, req.body.agencyId);
+      const metrics = await calculateAndStoreWorkerBillingMetrics(agencyId);
+      responseJson(res, 200, {
+        ok: true,
+        metrics
+      });
+    } catch (error) {
+      logger.error("syncWorkerBillingMetrics failed", error);
+      responseJson(res, error.status || 500, {
+        error: error.message || "Unable to update worker billing metrics."
       });
     }
   }

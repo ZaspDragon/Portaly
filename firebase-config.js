@@ -62,7 +62,7 @@ window.PORTALY_FIREBASE_CONFIG = {
   // UI Defaults
   ui: {
     defaultTheme: "light",
-    primaryColor: "#1f6fff",
+    primaryColor: "#1a5ecc",
     companyName: "QR Legends"
   }
 };

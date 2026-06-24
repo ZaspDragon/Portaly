@@ -1,6 +1,6 @@
 :root {
-  --brand: #1f6fff;
-  --brand-rgb: 31, 111, 255;
+  --brand: #1a5ecc;
+  --brand-rgb: 26, 94, 204;
   --brand-soft: rgba(var(--brand-rgb), 0.1);
   --brand-line: rgba(var(--brand-rgb), 0.2);
   --ink: #183654;

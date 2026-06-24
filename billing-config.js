@@ -3,6 +3,6 @@ window.PORTALY_BILLING_CONFIG = {
   functionsBaseUrl: "",
   starterPaymentLink: "https://square.link/u/oujLXZJi",
   agencyPaymentLink: "https://square.link/u/J3W2uQaN",
-  growthPaymentLink: "https://square.link/u/9QKb7z1C",
+  growthPaymentLink: "https://square.link/u/0PcWzZKi",
   enterprisePaymentLink: "https://square.link/u/fvpEWC6H"
 };
